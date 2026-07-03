@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
+import Image from "next/image";
 import {
   Bell,
   Bot,
@@ -97,7 +98,7 @@ const navItems: NavItem[] = [
   { href: "/pipelines", label: "Pipelines", icon: GitBranch },
   { href: "/broadcasts", label: "Broadcasts", icon: Radio },
   { href: "/automations", label: "Automations", icon: Zap },
-  { href: "/flows", label: "Flows", icon: Workflow, beta: true },
+  { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
 ];
 
@@ -185,13 +186,18 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             close button is hidden since the sidebar is always-visible. */}
         <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <MessageSquare className="h-4 w-4" />
-            </div>
-            <span className="text-sm font-semibold text-foreground">
-              CRM Template for WhatsApp
-            </span>
-          </Link>
+  <Image
+    src="/interscale-logo.png"
+    alt="Interscale Marketing"
+    width={32}
+    height={32}
+    className="h-8 w-8 rounded-lg"
+  />
+  <span className="text-sm font-semibold text-foreground">
+    <p>WhatsApp CRM</p>
+    <p>from Interscale Marketing</p>
+  </span>
+</Link>
           <button
             type="button"
             onClick={onClose}
