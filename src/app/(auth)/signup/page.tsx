@@ -95,19 +95,31 @@ function SignupPageInner() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <Card className="w-full max-w-md border-border bg-card">
-          <CardHeader className="items-center text-center">
-            <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-              <CheckCircle className="h-6 w-6 text-primary" />
-            </div>
-            <CardTitle className="text-xl text-foreground">
-              Check your email
-            </CardTitle>
-            <CardDescription className="text-muted-foreground">
-              We&apos;ve sent a confirmation link to{" "}
-              <span className="text-foreground">{email}</span>. Please check your
-              inbox and click the link to verify your account.
-            </CardDescription>
-          </CardHeader>
+       <CardHeader className="items-center text-center">
+  <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center">
+    {inviteToken ? (
+      <UsersRound className="h-6 w-6 text-primary" />
+    ) : (
+      <Image
+        src="/interscale-logo.png"
+        alt="Interscale Marketing"
+        width={48}
+        height={48}
+        className="rounded-xl"
+      />
+    )}
+  </div>
+
+  <CardTitle className="text-xl text-foreground">
+    {inviteToken ? "Create account & join" : "Create account"}
+  </CardTitle>
+
+  <CardDescription className="text-muted-foreground">
+    {inviteToken
+      ? "Verify your email, then accept the invitation to join your team."
+      : "Get started with Interscale Marketing"}
+  </CardDescription>
+</CardHeader>
           <CardContent>
             <Link
               href={
@@ -133,7 +145,7 @@ function SignupPageInner() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-12 w-12 items-center justify-center">
+          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center">
   {inviteToken ? (
     <UsersRound className="h-6 w-6 text-primary" />
   ) : (

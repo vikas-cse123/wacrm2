@@ -194,9 +194,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
     className="h-8 w-8 rounded-lg"
   />
   <span className="text-sm font-semibold text-foreground">
-    <p>WhatsApp CRM</p>
-    <p>from Interscale Marketing</p>
-  </span>
+  <p className="text-[15.6px] leading-tight">WhatsApp CRM</p>
+  <p className="text-[9.8px] leading-tight text-muted-foreground">from Interscale Marketing</p>
+</span>
 </Link>
           <button
             type="button"
