@@ -205,9 +205,9 @@ export default function FlowsPage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold text-foreground">Flows</h1>
-            <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+            {/* <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
               Beta
-            </span>
+            </span> */}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Build branching, button-driven WhatsApp conversations. Useful for

@@ -475,7 +475,7 @@ export function WhatsAppConfig() {
                   }
                 >
                   {isRegistered
-                    ? 'Registered — Meta will deliver events to wacrm'
+                    ? 'Registered — Meta will deliver events to interscale'
                     : 'Not registered — Meta will not deliver events'}
                 </AlertTitle>
               </div>
@@ -656,7 +656,7 @@ export function WhatsAppConfig() {
                   Meta Business Manager → WhatsApp Accounts → Phone
                   Numbers → Two-step verification
                 </strong>
-                , then paste it here so wacrm can subscribe the number —
+                , then paste it here so interscale can subscribe the number —
                 otherwise Meta routes inbound events to whichever app
                 last claimed it (the symptom that hits second numbers
                 under a shared WABA).{' '}
