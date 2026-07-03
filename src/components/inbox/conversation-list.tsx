@@ -442,6 +442,11 @@ function ConversationItem({
       })
     : "";
 
+  // `contact.tags` is already hydrated Tag[] by CONVERSATION_SELECT's
+  // `contact_tags(tags(*))` embed — no id lookup needed here, unlike
+  // the filter-bar chips which start from raw selectedTagIds.
+  const contactTags = contact?.tags ?? [];
+
   return (
     <button
       onClick={handleClick}
@@ -490,6 +495,26 @@ function ConversationItem({
             />
           </div>
         </div>
+
+        {/* Tag pill(s) — only rendered when the contact has at least one
+            tag. Matches the screenshot: a small rounded label sitting
+            below the last-message line. */}
+        {contactTags.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {contactTags.map((tag) => (
+              <span
+                key={tag.id}
+                className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium"
+                style={{
+                  backgroundColor: `${tag.color}26`, // ~15% tint of the tag color
+                  color: tag.color,
+                }}
+              >
+                {tag.name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </button>
   );

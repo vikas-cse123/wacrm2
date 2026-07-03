@@ -78,7 +78,7 @@ export default function ForgotPasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="items-center text-center">
-    <div className="mb-2 flex h-12 w-12 items-center justify-center">
+   <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center">
   <Image
     src="/interscale-logo.png"
     alt="Interscale Marketing"
