@@ -168,6 +168,45 @@ export async function GET(request: Request) {
   }
 }
 
+async function forwardRawToWebhooks(rawBody: string) {
+  try {
+    // Get all active webhook endpoints across all accounts
+    const { data: endpoints } = await supabaseAdmin()
+      .from('webhook_endpoints')
+      .select('id, url, secret')
+      .eq('is_active', true)
+
+    if (!endpoints || endpoints.length === 0) return
+
+    const { buildSignatureHeader } = await import('@/lib/webhooks/sign')
+    const { decrypt } = await import('@/lib/whatsapp/encryption')
+    const { isDeliverableUrl } = await import('@/lib/webhooks/ssrf')
+    const tsSeconds = Math.floor(Date.now() / 1000)
+
+    await Promise.allSettled(
+      endpoints.map(async (endpoint: { id: string; url: string; secret: string }) => {
+        try {
+          if (!(await isDeliverableUrl(endpoint.url))) return
+          const secret = decrypt(endpoint.secret)
+          await fetch(endpoint.url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Wacrm-Signature': buildSignatureHeader(rawBody, secret, tsSeconds),
+            },
+            body: rawBody, // exact bytes Meta sent, untouched
+            redirect: 'manual',
+            signal: AbortSignal.timeout(5000),
+          })
+        } catch (err) {
+          console.error('[webhook] forward failed for', endpoint.id, err)
+        }
+      })
+    )
+  } catch (err) {
+    console.error('[webhook] forwardRawToWebhooks failed:', err)
+  }
+}
 // POST - Receive messages
 export async function POST(request: Request) {
   // Read raw body first so we can HMAC-verify the exact bytes Meta
@@ -206,6 +245,7 @@ export async function POST(request: Request) {
   // maxDuration).
   after(async () => {
     try {
+      await forwardRawToWebhooks(rawBody)
       await processWebhook(body)
     } catch (error) {
       console.error('Error processing webhook:', error)
@@ -596,12 +636,12 @@ async function processMessage(
   // the reaction short-circuit below — so a conversation first opened by
   // a reaction still fires the event, and a subscriber always sees the
   // thread open before its first message.received.
-  if (convResult.created) {
-    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
-      conversation_id: conversation.id,
-      contact_id: contactRecord.id,
-    })
-  }
+  // if (convResult.created) {
+  //   await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
+  //     conversation_id: conversation.id,
+  //     contact_id: contactRecord.id,
+  //   })
+  // }
 
   // Reactions short-circuit here — they aren't messages. We never insert
   // into `messages`, never bump unread_count, never update last_message_text.
@@ -806,13 +846,13 @@ async function processMessage(
   // when the account has no matching endpoint and never throws.
   // (conversation.created is emitted earlier, right after the thread is
   // opened.)
-  await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
-    conversation_id: conversation.id,
-    contact_id: contactRecord.id,
-    whatsapp_message_id: message.id,
-    content_type: contentType,
-    text: contentText,
-  })
+  // await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+  //   conversation_id: conversation.id,
+  //   contact_id: contactRecord.id,
+  //   whatsapp_message_id: message.id,
+  //   content_type: contentType,
+  //   text: contentText,
+  // })
 }
 
 async function parseMessageContent(
