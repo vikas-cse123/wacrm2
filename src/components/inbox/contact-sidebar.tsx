@@ -33,6 +33,7 @@ import { format } from "date-fns";
 interface ContactSidebarProps {
   contact: Contact | null;
   onTagsChanged?: () => void;
+   className?: string;
 }
 
 // Same palette as the Settings > Tags manager, so a tag created here
@@ -48,7 +49,7 @@ const PRESET_COLORS = [
   "#ec4899",
 ];
 
-export function ContactSidebar({ contact, onTagsChanged }: ContactSidebarProps) {
+export function ContactSidebar({ contact, onTagsChanged,className }: ContactSidebarProps) {
   const { user, accountId } = useAuth();
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -271,9 +272,7 @@ export function ContactSidebar({ contact, onTagsChanged }: ContactSidebarProps) 
 
   if (!contact) {
     return (
-      <div className="flex h-full w-70 items-center justify-center border-l border-border bg-card">
-        <p className="text-sm text-muted-foreground">Select a conversation</p>
-      </div>
+  <div className={cn("flex h-full w-70 flex-col border-l border-border bg-card", className)}></div>
     );
   }
 

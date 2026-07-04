@@ -13,7 +13,7 @@ import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
 import { toast } from "sonner";
-import { WifiOff } from "lucide-react";
+import { WifiOff , X} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
@@ -617,14 +617,49 @@ export default function InboxPage() {
             agent hasn't collapsed it via the thread-header toggle (#258).
             On mobile it's always hidden (the `lg:block` below), so the
             toggle — which is itself desktop-only — never affects it. */}
-       {contactPanelOpen && (
-          <div className="hidden lg:block">
-            <ContactSidebar
-              contact={activeContact}
-              onTagsChanged={handleManualRefresh}
-            />
-          </div>
-        )}
+     {contactPanelOpen && (
+  <>
+    {/* Desktop: permanent side column */}
+    <div className="hidden lg:block">
+      <ContactSidebar
+        contact={activeContact}
+        onTagsChanged={handleManualRefresh}
+      />
+    </div>
+
+    {/* Mobile: slide-over drawer with backdrop. Only makes sense
+        when a conversation is open, which is implicitly true here
+        since the toggle button only renders inside an active
+        MessageThread. */}
+    <div className="fixed inset-0 z-50 flex lg:hidden">
+      <div
+        className="absolute inset-0 bg-black/50"
+        onClick={handleToggleContactPanel}
+        aria-hidden="true"
+      />
+      <div className="relative ml-auto flex h-full w-full max-w-xs flex-col bg-card shadow-xl sm:max-w-sm">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+          <h3 className="text-sm font-semibold text-foreground">
+            Contact details
+          </h3>
+          <button
+            type="button"
+            onClick={handleToggleContactPanel}
+            aria-label="Close contact panel"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <ContactSidebar
+          contact={activeContact}
+          onTagsChanged={handleManualRefresh}
+          className="w-full flex-1 border-l-0"
+        />
+      </div>
+    </div>
+  </>
+)}
       </div>
     </div>
   );

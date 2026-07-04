@@ -870,10 +870,10 @@ export function MessageThread({
               }
               aria-pressed={contactPanelOpen}
               title={contactPanelOpen ? "Hide contact" : "Show contact"}
-              className={cn(
-                "hidden h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground lg:inline-flex",
-                contactPanelOpen ? "text-primary" : "text-muted-foreground",
-              )}
+            className={cn(
+  "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground",
+  contactPanelOpen ? "text-primary" : "text-muted-foreground",
+)}
             >
               {contactPanelOpen ? (
                 <PanelRightClose className="h-4 w-4" />
