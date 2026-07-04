@@ -59,6 +59,12 @@ interface WhatsAppMessage {
   }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
+  /**
+   * Populated by Meta when `type` is 'unsupported' — explains why the
+   * message couldn't be relayed (view-once media, polls, disappearing
+   * messages, etc). Not present on normal messages.
+   */
+  errors?: Array<{ code: number; title: string; message?: string }>
 }
 
 interface WhatsAppWebhookEntry {
@@ -209,6 +215,11 @@ async function forwardRawToWebhooks(rawBody: string) {
 }
 // POST - Receive messages
 export async function POST(request: Request) {
+  // TEMP DEBUG — confirms whether Hostinger's Runtime Logs capture
+  // console.log (stdout) output from this route at all. Remove once
+  // logging visibility is confirmed.
+  console.log('[webhook] TEST LOG - request received at', new Date().toISOString())
+
   // Read raw body first so we can HMAC-verify the exact bytes Meta
   // signed. request.json() would re-encode and break the signature.
   const rawBody = await request.text()
@@ -245,7 +256,7 @@ export async function POST(request: Request) {
   // maxDuration).
   after(async () => {
     try {
-      // await forwardRawToWebhooks(rawBody)
+      await forwardRawToWebhooks(rawBody)
       await processWebhook(body)
     } catch (error) {
       console.error('Error processing webhook:', error)
@@ -653,6 +664,32 @@ async function processMessage(
     return
   }
 
+  // ------------------------------------------------------------------
+  // Silently drop Meta's "unsupported" placeholder messages.
+  //
+  // Meta sends `type: 'unsupported'` for things it can't relay: view-once
+  // media, disappearing photos/videos, polls, payment requests, some
+  // forwarded/Instagram-share formats. In practice this often arrives as
+  // a *separate* message alongside a perfectly normal image/video (e.g.
+  // a forwarded Instagram post sends the media as one message and a
+  // "shared to..." marker as a second, unsupported one). It carries no
+  // content we can show, so we log it for debugging and return before
+  // ever touching `messages` — no bubble, no unread bump, no automation
+  // dispatch. This intentionally runs before parseMessageContent so we
+  // don't even build the "[Unsupported message type: ...]" text.
+  // ------------------------------------------------------------------
+  if (message.type === 'unsupported') {
+    if (message.errors?.length) {
+      console.warn(
+        '[webhook] dropping unsupported message, errors:',
+        JSON.stringify(message.errors)
+      )
+    } else {
+      console.warn('[webhook] dropping unsupported message, id:', message.id)
+    }
+    return
+  }
+
   // Parse message content based on type
   const { contentText, mediaUrl, mediaType, interactiveReplyId } =
     await parseMessageContent(message, accessToken)
@@ -707,6 +744,56 @@ async function processMessage(
     .eq('conversation_id', conversation.id)
     .eq('sender_type', 'customer')
   const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0
+
+  // ------------------------------------------------------------------
+  // Dedup / upgrade-in-place check.
+  //
+  // Meta's webhook delivery is at-least-once — the same message.id can
+  // arrive more than once (e.g. a media message whose content wasn't
+  // fully processed yet gets redelivered once it is). Rather than insert
+  // a second bubble, check whether we already stored a row for this
+  // exact (conversation_id, message_id) pair:
+  //   - if the existing row is already "real" content and this delivery
+  //     is just a repeat, skip it.
+  //   - if the existing row somehow lacks content this delivery has
+  //     (or the type changed), upgrade the row in place instead of
+  //     inserting a duplicate.
+  // ------------------------------------------------------------------
+  const { data: existingMsg, error: existingMsgErr } = await supabaseAdmin()
+    .from('messages')
+    .select('id, content_type')
+    .eq('conversation_id', conversation.id)
+    .eq('message_id', message.id)
+    .maybeSingle()
+
+  if (existingMsgErr) {
+    console.error('Error checking for existing message:', existingMsgErr)
+  }
+
+  if (existingMsg) {
+    if (existingMsg.content_type === contentType && !mediaUrl) {
+      // Identical redelivery of an already-complete message — skip.
+      return
+    }
+
+    if (existingMsg.content_type !== contentType || mediaUrl) {
+      const { error: upgradeErr } = await supabaseAdmin()
+        .from('messages')
+        .update({
+          content_type: contentType,
+          content_text: contentText,
+          media_url: mediaUrl,
+        })
+        .eq('id', existingMsg.id)
+
+      if (upgradeErr) {
+        console.error('Error upgrading placeholder message:', upgradeErr)
+      }
+      return
+    }
+
+    return
+  }
 
   const { error: msgError } = await supabaseAdmin().from('messages').insert({
     conversation_id: conversation.id,
@@ -996,6 +1083,23 @@ async function parseMessageContent(
     }
 
     default:
+      // Meta uses type 'unsupported' when it received something the
+      // Cloud API can't relay (view-once media, disappearing photos/
+      // videos, polls, payment requests, some forwarded formats). The
+      // `errors` array on the message explains why — log it so this
+      // shows up as a real reason instead of a bare label.
+      //
+      // NOTE: 'unsupported' messages are now intercepted and dropped
+      // earlier, in processMessage(), before parseMessageContent is
+      // even called — so this branch only fires for a genuinely
+      // unrecognized WhatsApp type we haven't explicitly modeled above
+      // (future Meta additions, etc). Kept as a safe fallback.
+      if (message.errors?.length) {
+        console.warn(
+          '[webhook] unsupported message errors:',
+          JSON.stringify(message.errors)
+        )
+      }
       return {
         ...empty,
         contentText: `[Unsupported message type: ${message.type}]`,
