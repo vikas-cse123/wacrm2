@@ -30,14 +30,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { format } from "date-fns";
 
-// interface ContactSidebarProps {
-//   contact: Contact | null;
-// }
 interface ContactSidebarProps {
   contact: Contact | null;
   onTagsChanged?: () => void;
 }
-
 
 // Same palette as the Settings > Tags manager, so a tag created here
 // looks identical to one created there — no separate colour system.
@@ -351,11 +347,10 @@ export function ContactSidebar({ contact, onTagsChanged }: ContactSidebarProps) 
                   <Plus className="h-3 w-3" />
                   <ChevronDown className="h-3 w-3" />
                 </DropdownMenuTrigger>
-        <DropdownMenuContent
-  align="end"
-  className="w-64 border-border bg-popover p-2"
-  onCloseAutoFocus={(e) => e.preventDefault()}
->
+                <DropdownMenuContent
+                  align="end"
+                  className="w-64 border-border bg-popover p-2"
+                >
                   {/* Existing tags — click to toggle assign/unassign */}
                   <div className="max-h-48 space-y-0.5 overflow-y-auto">
                     {allTags.length === 0 ? (
@@ -395,19 +390,19 @@ export function ContactSidebar({ contact, onTagsChanged }: ContactSidebarProps) 
 
                   {/* Inline create — same shape as Settings > Tags */}
                   <div className="mt-2 space-y-2 border-t border-border pt-2">
-                <Input
-  placeholder="New tag name"
-  value={newTagName}
-  onChange={(e) => setNewTagName(e.target.value)}
-  onKeyDown={(e) => {
-    e.stopPropagation();
-    if (e.key === "Enter") handleCreateTag();
-  }}
-  onClick={(e) => e.stopPropagation()}
-  disabled={creatingTag}
-  maxLength={40}
-  className="h-8 text-xs"
-/>
+                    <Input
+                      placeholder="New tag name"
+                      value={newTagName}
+                      onChange={(e) => setNewTagName(e.target.value)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === "Enter") handleCreateTag();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      disabled={creatingTag}
+                      maxLength={40}
+                      className="h-8 text-xs"
+                    />
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex gap-1">
                         {PRESET_COLORS.map((color) => (
