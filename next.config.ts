@@ -98,6 +98,7 @@ const nextConfig: NextConfig = {
    * they apply to every response regardless of which cache rule
    * matched.
    */
+   allowedDevOrigins: ["192.168.1.12", "http://192.168.1.12:3001"],
   async headers() {
     return [
       {

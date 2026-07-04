@@ -245,7 +245,7 @@ export async function POST(request: Request) {
   // maxDuration).
   after(async () => {
     try {
-      await forwardRawToWebhooks(rawBody)
+      // await forwardRawToWebhooks(rawBody)
       await processWebhook(body)
     } catch (error) {
       console.error('Error processing webhook:', error)
@@ -340,7 +340,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // inserts that need it for NOT NULL FK compliance. Always
           // the admin who saved the WhatsApp config.
           config.user_id,
-          decryptedAccessToken
+          decryptedAccessToken,
+          body
         )
       }
     }
@@ -608,7 +609,8 @@ async function processMessage(
   // (contacts, conversations). Always the admin who saved the
   // WhatsApp config; the choice is arbitrary post-017 but stable.
   configOwnerUserId: string,
-  accessToken: string
+  accessToken: string,
+   rawMetaBody: { entry?: WhatsAppWebhookEntry[] }
 ) {
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
@@ -846,13 +848,14 @@ async function processMessage(
   // when the account has no matching endpoint and never throws.
   // (conversation.created is emitted earlier, right after the thread is
   // opened.)
-  // await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
-  //   conversation_id: conversation.id,
-  //   contact_id: contactRecord.id,
-  //   whatsapp_message_id: message.id,
-  //   content_type: contentType,
-  //   text: contentText,
-  // })
+await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+    conversation_id: conversation.id,
+    contact_id: contactRecord.id,
+    whatsapp_message_id: message.id,
+    content_type: contentType,
+    text: contentText,
+    raw_payload: rawMetaBody,
+  })
 }
 
 async function parseMessageContent(
