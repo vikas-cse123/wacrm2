@@ -626,11 +626,11 @@ export function MessageComposer({
       {/* Hint sits outside the flex row so its height doesn't push
           `items-end` buttons below the textarea. Indented to line up
           under the textarea left edge. */}
-      {!draft && !recording && (
+      {/* {!draft && !recording && (
         <p className="mt-1 pl-[5.5rem] text-[10px] text-muted-foreground">
           Tap the ✨ to draft a reply with AI — you can edit it before sending
         </p>
-      )}
+      )} */}
     </div>
   );
 }
