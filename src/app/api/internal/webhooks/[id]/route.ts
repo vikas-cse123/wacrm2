@@ -12,10 +12,9 @@ async function getAccountId(supabase: Awaited<ReturnType<typeof createClient>>) 
   if (!user) return null
 
   const { data } = await supabase
-    .from('account_members')
+    .from('profiles')
     .select('account_id')
     .eq('user_id', user.id)
-    .limit(1)
     .maybeSingle()
 
   return data?.account_id ?? null

@@ -18,10 +18,18 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
+
+
 export const metadata: Metadata = {
   title: {
-    default: "interscale",
-    template: "%s — interscale",
+    default: "Interscale Marketing",
+    template: "%s — interscale"
+    
+  },
+  icons: {
+    icon: "/interscale-logo.png",
+    shortcut: "/interscale-logo.png",
+    apple: "/interscale-logo.png",
   },
   description: "Self-hostable CRM template for WhatsApp.",
   robots: {

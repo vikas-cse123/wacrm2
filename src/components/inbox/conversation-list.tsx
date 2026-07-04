@@ -123,7 +123,7 @@ export function ConversationList({
 
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
-  useEffect(() => {
+useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
     (async () => {
@@ -133,7 +133,7 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [resyncToken]);
 
   // Company options are derived from the loaded conversations — there's no
   // separate companies table, and only companies with a live conversation
