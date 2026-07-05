@@ -23,8 +23,6 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
-
   // getUser() transparently refreshes an expired access token, which
   // ROTATES the refresh token and writes the new cookies onto
   // `supabaseResponse` via setAll() above. Any response we return in
@@ -40,6 +38,27 @@ export async function middleware(request: NextRequest) {
       response.cookies.set(cookie)
     })
     return response
+  }
+
+  // Refresh tokens are single-use. When several requests fire close
+  // together (a page nav plus its data fetches, or several tabs), more
+  // than one of them can read the SAME not-yet-rotated refresh token
+  // from cookies before any of them has written the new one back. The
+  // first request to reach Supabase wins and gets a new token pair; the
+  // others present an already-consumed refresh token and getUser()
+  // throws (AuthApiError: Invalid Refresh Token: Refresh Token Not
+  // Found). Left uncaught, that throw escapes the middleware mid-request
+  // and can leave the response in a malformed state. Treat a failed
+  // refresh as "not authenticated for this request" instead of letting
+  // it bubble — the request that actually won the race will refresh the
+  // session, and the next request from this same client will pick up
+  // the new cookies normally.
+  let user = null
+  try {
+    const { data } = await supabase.auth.getUser()
+    user = data.user
+  } catch {
+    user = null
   }
 
   // Auth pages - redirect to dashboard if already logged in.
