@@ -82,6 +82,7 @@ export function NodeConfigForm({
             label="Text sent to the customer"
             value={(cfg as { text?: string }).text ?? ""}
             onChange={(v) => onUpdateConfig({ text: v })}
+               rows={3}
           />
           <NextNodeRow
             value={(cfg as { next_node_key?: string }).next_node_key ?? ""}
