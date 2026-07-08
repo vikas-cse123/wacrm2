@@ -13,6 +13,7 @@ import {
   LayoutTemplate,
   ImageOff,
   CornerDownLeft,
+  X,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -53,10 +54,57 @@ function MediaUnavailable({ label }: { label: string }) {
   );
 }
 
+/**
+ * Full-screen lightbox overlay for viewing an expanded image.
+ * Closes on backdrop click, close-button click, or Escape key.
+ */
+function ImageLightbox({
+  src,
+  alt,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute right-4 top-4 rounded-full bg-black/40 p-2 text-white hover:bg-black/60"
+        aria-label="Close image"
+      >
+        <X className="h-5 w-5" />
+      </button>
+      <img
+        src={src}
+        alt={alt}
+        className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
 function MediaImage({ url, alt }: { url: string; alt: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const loadImage = useCallback(async () => {
     if (!url) return;
@@ -107,12 +155,18 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
-    <img
-      src={src ?? ""}
-      alt={alt}
-      className="max-h-64 max-w-60 rounded-lg object-cover"
-      onError={() => setError(true)}
-    />
+    <>
+      <img
+        src={src ?? ""}
+        alt={alt}
+        className="max-h-64 max-w-60 cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
+        onClick={() => setIsExpanded(true)}
+        onError={() => setError(true)}
+      />
+      {isExpanded && src && (
+        <ImageLightbox src={src} alt={alt} onClose={() => setIsExpanded(false)} />
+      )}
+    </>
   );
 }
 
