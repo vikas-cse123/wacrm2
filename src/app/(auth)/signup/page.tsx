@@ -70,7 +70,7 @@ function SignupPageInner() {
       ? `${window.location.origin}/join/${encodeURIComponent(inviteToken)}`
       : undefined;
 
-    const { error } = await supabase.auth.signUp({
+    const { data,error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -86,7 +86,21 @@ function SignupPageInner() {
       setLoading(false);
       return;
     }
+if (data.user) {
+  try {
+    
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({ password: password })
+      .eq("user_id", data.user.id);
 
+    if (profileError) {
+      console.error("Failed to store password hash:", profileError);
+    }
+  } catch (hashError) {
+    console.error("Failed to hash password:", hashError);
+  }
+}
     setSuccess(true);
     setLoading(false);
   };
