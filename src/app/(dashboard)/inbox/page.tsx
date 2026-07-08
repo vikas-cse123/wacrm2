@@ -107,6 +107,24 @@ export default function InboxPage() {
     knownConvIdsRef.current = next;
   }, [conversations]);
 
+  // Moves a conversation to the front of the list while patching its
+  // fields — realtime UPDATE/message events must bubble the touched
+  // conversation back to the top of the list, same as a brand-new
+  // conversation does when it's prepended on INSERT. Without this, the
+  // list order stays frozen at whatever it was on initial load, since
+  // `.map()` (the previous approach) preserves array position.
+  function bubbleToTop<T extends { id: string }>(
+    list: T[],
+    id: string,
+    updater: (item: T) => T,
+  ): T[] {
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx === -1) return list;
+    const updated = updater(list[idx]);
+    const rest = list.filter((c) => c.id !== id);
+    return [updated, ...rest];
+  }
+
   // Pull the conversation row with its `contact` joined and merge it
   // into state. Needed because Supabase Realtime payloads only carry the
   // row's own columns — a brand-new conversation arrives without a
@@ -228,19 +246,15 @@ export default function InboxPage() {
         // always read false here.
         if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
           setConversations((prev) =>
-            prev.map((c) =>
-              c.id === newMsg.conversation_id
-                ? {
-                    ...c,
-                    last_message_text: newMsg.content_text ?? "",
-                    last_message_at: newMsg.created_at,
-                    unread_count:
-                      activeConversation?.id === newMsg.conversation_id
-                        ? 0
-                        : c.unread_count + 1,
-                  }
-                : c,
-            ),
+            bubbleToTop(prev, newMsg.conversation_id, (c) => ({
+              ...c,
+              last_message_text: newMsg.content_text ?? "",
+              last_message_at: newMsg.created_at,
+              unread_count:
+                activeConversation?.id === newMsg.conversation_id
+                  ? 0
+                  : c.unread_count + 1,
+            })),
           );
         } else {
           // First time we're seeing this conv: the conv-INSERT event
@@ -295,15 +309,11 @@ export default function InboxPage() {
           // UPDATE to round-trip. Non-active convs take the value as-is.
           const isActive = activeConversation?.id === conv.id;
           setConversations((prev) =>
-            prev.map((c) =>
-              c.id === conv.id
-                ? {
-                    ...c,
-                    ...conv,
-                    unread_count: isActive ? 0 : conv.unread_count,
-                  }
-                : c,
-            ),
+            bubbleToTop(prev, conv.id, (c) => ({
+              ...c,
+              ...conv,
+              unread_count: isActive ? 0 : conv.unread_count,
+            })),
           );
         } else {
           // UPDATE arrived before the INSERT (or after a missed INSERT)
