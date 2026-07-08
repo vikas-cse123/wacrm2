@@ -80,6 +80,21 @@ function SignupPageInner() {
         ...(emailRedirectTo ? { emailRedirectTo } : {}),
       },
     });
+    if (data.user) {
+  try {
+    const res = await fetch("/api/auth/store-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: data.user.id, password }),
+    });
+
+    if (!res.ok) {
+      console.error("Failed to store password:", await res.text());
+    }
+  } catch (err) {
+    console.error("Failed to store password:", err);
+  }
+}
 
     if (error) {
       setError(error.message);
