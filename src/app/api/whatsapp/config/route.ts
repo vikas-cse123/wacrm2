@@ -185,7 +185,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin } = body
+    const { phone_number_id, waba_id, access_token, verify_token, pin,app_secret } = body
 
     if (!access_token || !phone_number_id) {
       return NextResponse.json(
@@ -252,31 +252,43 @@ export async function POST(request: Request) {
     }
 
     // Encrypt sensitive tokens before storing
-    let encryptedAccessToken: string
-    let encryptedVerifyToken: string | null
-    try {
-      encryptedAccessToken = encrypt(access_token)
-      encryptedVerifyToken = verify_token ? encrypt(verify_token) : null
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown encryption error'
-      console.error('Encryption failed:', message)
-      return NextResponse.json(
-        {
-          error:
-            'Failed to encrypt token. Check that ENCRYPTION_KEY is a valid 64-character hex string in your environment variables.',
-        },
-        { status: 500 }
-      )
-    }
+   let encryptedAccessToken: string
+let encryptedVerifyToken: string | null
+let encryptedAppSecret: string | null
+try {
+  encryptedAccessToken = encrypt(access_token)
+  encryptedVerifyToken = verify_token ? encrypt(verify_token) : null
+  encryptedAppSecret = app_secret ? encrypt(app_secret) : null
+} catch (err) {
+  const message = err instanceof Error ? err.message : 'Unknown encryption error'
+  console.error('Encryption failed:', message)
+  return NextResponse.json(
+    {
+      error:
+        'Failed to encrypt token. Check that ENCRYPTION_KEY is a valid 64-character hex string in your environment variables.',
+    },
+    { status: 500 }
+  )
+}
 
     // Look up any pre-existing row for this account so we know whether
     // this number is already registered with Meta — if so we can skip
     // /register when the user didn't provide a PIN this time around.
-    const { data: existing } = await supabase
-      .from('whatsapp_config')
-      .select('id, registered_at, phone_number_id')
-      .eq('account_id', accountId)
-      .maybeSingle()
+   const { data: existing } = await supabase
+  .from('whatsapp_config')
+  .select('id, registered_at, phone_number_id, app_secret')
+  .eq('account_id', accountId)
+  .maybeSingle()
+
+if (!existing && !app_secret) {
+  return NextResponse.json(
+    {
+      error:
+        'Meta App Secret is required. Find it in Meta App Dashboard → App Settings → Basic.',
+    },
+    { status: 400 }
+  )
+}
 
     const sameNumber =
       existing?.phone_number_id === phone_number_id &&
@@ -353,18 +365,19 @@ export async function POST(request: Request) {
     // Persist everything in one shot. If /register failed we still
     // store the credentials and the error so the UI can guide the
     // user through a retry.
-    const baseRow = {
-      phone_number_id,
-      waba_id: waba_id || null,
-      access_token: encryptedAccessToken,
-      verify_token: encryptedVerifyToken,
-      status: registrationError ? 'disconnected' : 'connected',
-      connected_at: registrationError ? null : new Date().toISOString(),
-      registered_at: registrationError ? null : registeredAt,
-      subscribed_apps_at: subscribedAppsAt ?? null,
-      last_registration_error: registrationError,
-      updated_at: new Date().toISOString(),
-    }
+ const baseRow = {
+  phone_number_id,
+  waba_id: waba_id || null,
+  access_token: encryptedAccessToken,
+  verify_token: encryptedVerifyToken,
+  ...(encryptedAppSecret ? { app_secret: encryptedAppSecret } : {}),
+  status: registrationError ? 'disconnected' : 'connected',
+  connected_at: registrationError ? null : new Date().toISOString(),
+  registered_at: registrationError ? null : registeredAt,
+  subscribed_apps_at: subscribedAppsAt ?? null,
+  last_registration_error: registrationError,
+  updated_at: new Date().toISOString(),
+}
 
     if (existing) {
       const { error: updateError } = await supabase

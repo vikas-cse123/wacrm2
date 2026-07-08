@@ -33,6 +33,44 @@ function supabaseAdmin() {
   return _adminClient
 }
 
+/**
+ * Resolve which App Secret should validate this webhook's signature,
+ * based on the phone_number_id in the incoming payload. Falls back to
+ * the global META_APP_SECRET env var when the matching row has no
+ * app_secret set (legacy / single-tenant accounts).
+ */
+async function resolveWebhookSecret(
+  phoneNumberId: string | undefined,
+): Promise<string | null> {
+  if (phoneNumberId) {
+    const { data, error } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .select('app_secret')
+      .eq('phone_number_id', phoneNumberId)
+      .maybeSingle()
+
+    if (error) {
+      console.error(
+        '[webhook] failed to look up app_secret for phone_number_id:',
+        phoneNumberId,
+        error,
+      )
+    } else if (data?.app_secret) {
+      try {
+        return decrypt(data.app_secret)
+      } catch (err) {
+        console.error(
+          '[webhook] app_secret decryption failed for phone_number_id:',
+          phoneNumberId,
+          err,
+        )
+      }
+    }
+  }
+
+  return process.env.META_APP_SECRET ?? null
+}
+
 interface WhatsAppMessage {
   id: string
   from: string
@@ -214,25 +252,66 @@ async function forwardRawToWebhooks(rawBody: string) {
   }
 }
 // POST - Receive messages
+// export async function POST(request: Request) {
+//   // TEMP DEBUG — confirms whether Hostinger's Runtime Logs capture
+//   // console.log (stdout) output from this route at all. Remove once
+//   // logging visibility is confirmed.
+//   console.log('[webhook] TEST LOG - request received at', new Date().toISOString())
+
+//   // Read raw body first so we can HMAC-verify the exact bytes Meta
+//   // signed. request.json() would re-encode and break the signature.
+//   const rawBody = await request.text()
+//   const signature = request.headers.get('x-hub-signature-256')
+
+//   if (!verifyMetaWebhookSignature(rawBody, signature)) {
+//     // 401 (not 200) — we want Meta's delivery dashboard to show failures
+//     // loudly if a misconfiguration causes signatures to stop matching,
+//     // rather than silently eating events.
+//     console.warn('[webhook] rejected request with invalid signature')
+//     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+//   }
+
+//   let body: { entry?: WhatsAppWebhookEntry[] }
+//   try {
+//     body = JSON.parse(rawBody)
+//   } catch {
+//     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+//   }
+
+//   // Process AFTER the response so we ack Meta within their ~20s timeout
+//   // (a slow ack triggers Meta retries + duplicate inserts), while still
+//   // guaranteeing the work runs to completion.
+//   //
+//   // This MUST use `after()` rather than a detached `processWebhook(body)`
+//   // promise: on serverless platforms (we run on Vercel) the function can
+//   // be frozen or terminated the moment the response is sent, so a floating
+//   // promise's DB writes are not guaranteed to finish. That dropped a
+//   // non-deterministic *subset* of inbound messages — contacts/conversations
+//   // were created but the message insert never landed, leaving conversations
+//   // that show in the inbox with an empty thread, and no logs to explain it
+//   // (see issue #301). `after()` hands the callback to the runtime, which
+//   // keeps the function alive until it resolves (within the route's
+//   // maxDuration).
+//   after(async () => {
+//     try {
+//       await forwardRawToWebhooks(rawBody)
+//       await processWebhook(body)
+//     } catch (error) {
+//       console.error('Error processing webhook:', error)
+//     }
+//   })
+
+//   return NextResponse.json({ status: 'received' }, { status: 200 })
+// }
 export async function POST(request: Request) {
-  // TEMP DEBUG — confirms whether Hostinger's Runtime Logs capture
-  // console.log (stdout) output from this route at all. Remove once
-  // logging visibility is confirmed.
   console.log('[webhook] TEST LOG - request received at', new Date().toISOString())
 
-  // Read raw body first so we can HMAC-verify the exact bytes Meta
-  // signed. request.json() would re-encode and break the signature.
   const rawBody = await request.text()
   const signature = request.headers.get('x-hub-signature-256')
 
-  if (!verifyMetaWebhookSignature(rawBody, signature)) {
-    // 401 (not 200) — we want Meta's delivery dashboard to show failures
-    // loudly if a misconfiguration causes signatures to stop matching,
-    // rather than silently eating events.
-    console.warn('[webhook] rejected request with invalid signature')
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-  }
-
+  // Parse early (read-only) so we can resolve the right App Secret
+  // before verifying. Does not affect verification — that still runs
+  // against the untouched rawBody bytes below.
   let body: { entry?: WhatsAppWebhookEntry[] }
   try {
     body = JSON.parse(rawBody)
@@ -240,20 +319,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  // Process AFTER the response so we ack Meta within their ~20s timeout
-  // (a slow ack triggers Meta retries + duplicate inserts), while still
-  // guaranteeing the work runs to completion.
-  //
-  // This MUST use `after()` rather than a detached `processWebhook(body)`
-  // promise: on serverless platforms (we run on Vercel) the function can
-  // be frozen or terminated the moment the response is sent, so a floating
-  // promise's DB writes are not guaranteed to finish. That dropped a
-  // non-deterministic *subset* of inbound messages — contacts/conversations
-  // were created but the message insert never landed, leaving conversations
-  // that show in the inbox with an empty thread, and no logs to explain it
-  // (see issue #301). `after()` hands the callback to the runtime, which
-  // keeps the function alive until it resolves (within the route's
-  // maxDuration).
+  const phoneNumberId =
+    body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id
+
+  const secret = await resolveWebhookSecret(phoneNumberId)
+
+  if (!verifyMetaWebhookSignature(rawBody, signature, secret)) {
+    console.warn(
+      '[webhook] rejected request with invalid signature',
+      phoneNumberId ? `(phone_number_id: ${phoneNumberId})` : '(no phone_number_id in payload)',
+    )
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+  }
+
   after(async () => {
     try {
       await forwardRawToWebhooks(rawBody)
@@ -265,7 +343,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }
-
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
   if (!body.entry) return
 

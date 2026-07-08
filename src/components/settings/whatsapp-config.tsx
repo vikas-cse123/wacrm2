@@ -67,6 +67,10 @@ export function WhatsAppConfig() {
   const [verifyToken, setVerifyToken] = useState('');
   const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
+  const [appSecret, setAppSecret] = useState('');
+  const [appSecretEdited, setAppSecretEdited] = useState(false);
+  const [showAppSecret, setShowAppSecret] = useState(false);
+
 
   // True once /register has succeeded on Meta's side (timestamp set
   // in the row). When false, the saved config is metadata-only and
@@ -116,6 +120,8 @@ export function WhatsAppConfig() {
         setPhoneNumberId(data.phone_number_id || '');
         setWabaId(data.waba_id || '');
         setAccessToken(MASKED_TOKEN);
+        setAppSecret(MASKED_TOKEN);
+        setAppSecretEdited(false);
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
@@ -127,6 +133,8 @@ export function WhatsAppConfig() {
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        setAppSecret('');
+setAppSecretEdited(false);
       }
       // Clear any stale probe result when reloading the row.
       setRegistrationProbe(null);
@@ -189,7 +197,10 @@ export function WhatsAppConfig() {
       toast.error('Access Token is required for initial setup');
       return;
     }
-
+if (!config && (!appSecret.trim() || !appSecretEdited)) {
+  toast.error('Meta App Secret is required for initial setup');
+  return;
+}
     try {
       setSaving(true);
 
@@ -218,7 +229,9 @@ export function WhatsAppConfig() {
         setSaving(false);
         return;
       }
-
+if (appSecretEdited && appSecret !== MASKED_TOKEN && appSecret.trim()) {
+  payload.app_secret = appSecret.trim();
+}
       const res = await fetch('/api/whatsapp/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -356,6 +369,8 @@ export function WhatsAppConfig() {
       setConnectionStatus('disconnected');
       setResetReason(null);
       setStatusMessage('');
+      setAppSecret('');
+setAppSecretEdited(false);
     } catch (err) {
       console.error('Reset error:', err);
       toast.error('Failed to reset configuration');
@@ -619,6 +634,43 @@ export function WhatsAppConfig() {
                 </p>
               )}
             </div>
+            <div className="space-y-2">
+  <Label className="text-muted-foreground">Meta App Secret</Label>
+  <div className="relative">
+    <Input
+      type={showAppSecret ? 'text' : 'password'}
+      placeholder="Enter your Meta App Secret"
+      value={appSecret}
+      onChange={(e) => {
+        setAppSecret(e.target.value);
+        setAppSecretEdited(true);
+      }}
+      onFocus={() => {
+        if (appSecret === MASKED_TOKEN) {
+          setAppSecret('');
+          setAppSecretEdited(true);
+        }
+      }}
+      className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10"
+    />
+    <button
+      type="button"
+      onClick={() => setShowAppSecret(!showAppSecret)}
+      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {showAppSecret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+    </button>
+  </div>
+  {config && !appSecretEdited && (
+    <p className="text-xs text-muted-foreground">
+      Secret is hidden for security. Re-enter it to update configuration.
+    </p>
+  )}
+  <p className="text-xs text-muted-foreground">
+    Found in Meta App Dashboard → App Settings → Basic. Required to validate
+    that inbound webhook events genuinely came from Meta for this number.
+  </p>
+</div>
 
             <div className="space-y-2">
               <Label className="text-muted-foreground">Webhook Verify Token</Label>
