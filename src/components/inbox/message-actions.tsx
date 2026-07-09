@@ -47,21 +47,79 @@ export function MessageActions({
     setTouchOpen(true);
   };
 
-  const handleCopy = async () => {
-    const text = message.content_text ?? "";
-    if (!text) {
-      toast.error("Nothing to copy");
-      return;
-    }
+  // const handleCopy = async () => {
+  //   const text = message.content_text ?? "";
+  //   if (!text) {
+  //     toast.error("Nothing to copy");
+  //     return;
+  //   }
+  //   try {
+  //     await navigator.clipboard.writeText(text);
+  //     toast.success("Copied");
+  //   } catch {
+  //     toast.error("Copy failed");
+  //   }
+  //   setTouchOpen(false);
+  // };
+
+  // AFTER
+const handleCopy = async () => {
+  // Image messages: fetch the image and copy the actual pixel data
+  if (message.content_type === "image" && message.media_url) {
     try {
-      await navigator.clipboard.writeText(text);
-      toast.success("Copied");
+      const response = await fetch(message.media_url);
+      const blob = await response.blob();
+
+      // Chrome/Edge clipboard only reliably accepts image/png —
+      // convert on the fly if the source is a jpeg/webp etc.
+      const pngBlob =
+        blob.type === "image/png" ? blob : await convertToPng(blob);
+
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": pngBlob }),
+      ]);
+      toast.success("Image copied");
     } catch {
       toast.error("Copy failed");
     }
     setTouchOpen(false);
-  };
+    return;
+  }
 
+  // Text messages (unchanged)
+  const text = message.content_text ?? "";
+  if (!text) {
+    toast.error("Nothing to copy");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success("Copied");
+  } catch {
+    toast.error("Copy failed");
+  }
+  setTouchOpen(false);
+};
+
+function convertToPng(blob: Blob): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("Canvas context unavailable"));
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) resolve(pngBlob);
+        else reject(new Error("PNG conversion failed"));
+      }, "image/png");
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(blob);
+  });
+}
   const handlePickEmoji = (emoji: string) => {
     onReact(emoji);
     setPickerOpen(false);
