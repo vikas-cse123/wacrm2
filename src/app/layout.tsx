@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     shortcut: "/interscale-logo.png",
     apple: "/interscale-logo.png",
   },
-  description: "Self-hostable CRM template for WhatsApp.",
+  description: "Interscale Marketing WhatsApp CRM",
   robots: {
     index: false,
     follow: false,
