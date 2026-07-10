@@ -40,6 +40,8 @@ import {
   engineSendText,
 } from "./meta-send";
 import { decideFallback, resolveFallbackPolicy } from "./fallback";
+import { dispatchNodeWebhook } from "./webhook-dispatch";
+
 import {
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
@@ -572,6 +574,7 @@ async function advanceFromNodeKey(
     await logEvent(db, run.id, "node_entered", node.node_key, {
       node_type: node.node_type,
     });
+    dispatchNodeWebhook(run, node);
 
     if (node.node_type === "start") {
       currentKey = (node.config as unknown as StartNodeConfig).next_node_key;

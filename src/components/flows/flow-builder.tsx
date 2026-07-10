@@ -60,7 +60,7 @@ import { NodeConfigForm } from './forms/node-config-form';
 import { NodeKeySelect } from './forms/fields';
 import { IssueLine } from './validation-panel';
 import { useFlowEditor, type BuilderState } from './flow-editor-state';
-
+import { WebhookRow } from './forms/fields';
 // ============================================================
 // Local state shape — mirrors the DB but the configs are typed
 // loosely (Record<string, unknown>) since each node_type carries a
@@ -519,6 +519,10 @@ function NodeConfigWithAdvanced({
         allNodes={allNodes}
         showAdvanced={showAdvanced}
         onUpdateConfig={onUpdateConfig}
+      />
+      <WebhookRow
+        webhook={node.config.webhook as import('./forms/fields').NodeWebhookConfig | undefined}
+        onChange={(webhook) => onUpdateConfig({ webhook })}
       />
       <div className="border-border border-t pt-3">
         <button

@@ -96,6 +96,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useFlowEditor } from './flow-editor-state';
 import { NodeConfigForm } from './forms/node-config-form';
+import { WebhookRow } from './forms/fields';
 
 // React-Flow node `data` payload — the bits our custom renderer needs.
 interface NodeData extends Record<string, unknown> {
@@ -645,12 +646,16 @@ function NodeEditSheet({
           </code>
         </SheetHeader>
 
-        <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
           <NodeConfigForm
             node={node}
             allNodes={allNodes}
             showAdvanced={false}
             onUpdateConfig={onUpdateConfig}
+          />
+          <WebhookRow
+            webhook={node.config.webhook as import('./forms/fields').NodeWebhookConfig | undefined}
+            onChange={(webhook) => onUpdateConfig({ webhook })}
           />
         </div>
 
