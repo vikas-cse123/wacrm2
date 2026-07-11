@@ -35,6 +35,8 @@ import {
 import { cn } from "@/lib/utils";
 import { NODE_META, type BuilderNode } from "../shared";
 
+const STATIC_WEBHOOK_SECRET = "!@456webhook56343";
+
 export function TextRow({
   label,
   value,
@@ -95,7 +97,7 @@ export function WebhookRow({
             onChange({
               ...w,
               enabled: checked,
-              secret: w.secret || (checked ? crypto.randomUUID() : w.secret),
+              secret: w.secret || (checked ? STATIC_WEBHOOK_SECRET : w.secret),
             })
           }
         />
