@@ -7,6 +7,12 @@
  * /excel page and when a run counts as "complete". No UI, no database
  * changes — add or remove an entry here and redeploy.
  *
+ * Empty list (the default) = show EVERY flow in the account and every
+ * run that has ended (completed / handed off / timed out / etc). Add
+ * entries to narrow to specific flows AND to set custom completion
+ * nodes (e.g. count a run complete the moment it reaches a chosen node,
+ * even while it's still running).
+ *
  * How to fill an entry:
  *   • flowId — open the flow in the builder; the id is the UUID in the
  *     URL: /flows/<flowId>. Only runs of these flows appear on /excel.

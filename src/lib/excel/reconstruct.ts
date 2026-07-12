@@ -115,7 +115,10 @@ export function isRunComplete(
         e.event_type === "node_entered",
     );
   }
-  return run.status === "completed";
+  // Default (no custom node): any run that is no longer running counts —
+  // completed, handed_off, timed_out, failed, paused_by_agent. This
+  // surfaces all previously-ended runs, not just the 'completed' ones.
+  return run.status !== "active";
 }
 
 /**
@@ -140,7 +143,14 @@ export function completionTime(
       .sort();
     return entered[0] ?? run.ended_at ?? null;
   }
-  return run.ended_at ?? null;
+  // Prefer the recorded end time; fall back to the last event, then the
+  // start, so ended runs that never stamped ended_at still show a time.
+  if (run.ended_at) return run.ended_at;
+  const lastEvent = events
+    .map((e) => e.created_at)
+    .sort()
+    .at(-1);
+  return lastEvent ?? run.started_at ?? null;
 }
 
 export interface QAEntry {
