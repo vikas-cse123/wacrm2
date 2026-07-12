@@ -18,6 +18,7 @@ import {
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
+import { LinkifiedText } from "./linkified-text";
 
 interface MessageBubbleProps {
   message: Message;
@@ -170,13 +171,17 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   );
 }
 
-function MessageContent({ message }: { message: Message }) {
+function MessageContent({
+  message,
+  onPrimary,
+}: {
+  message: Message;
+  onPrimary: boolean;
+}) {
   switch (message.content_type) {
     case "text":
       return (
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text}
-        </p>
+        <LinkifiedText text={message.content_text ?? ""} onPrimary={onPrimary} />
       );
 
     case "image":
@@ -188,9 +193,11 @@ function MessageContent({ message }: { message: Message }) {
             <MediaUnavailable label="Image" />
           )}
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
+            <LinkifiedText
+              text={message.content_text}
+              onPrimary={onPrimary}
+              className="mt-1"
+            />
           )}
         </div>
       );
@@ -208,9 +215,11 @@ function MessageContent({ message }: { message: Message }) {
             <MediaUnavailable label="Video" />
           )}
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
+            <LinkifiedText
+              text={message.content_text}
+              onPrimary={onPrimary}
+              className="mt-1"
+            />
           )}
         </div>
       );
@@ -252,9 +261,11 @@ function MessageContent({ message }: { message: Message }) {
             Template
           </span>
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
+            <LinkifiedText
+              text={message.content_text}
+              onPrimary={onPrimary}
+              className="mt-1"
+            />
           )}
         </div>
       );
@@ -288,9 +299,10 @@ function MessageContent({ message }: { message: Message }) {
 
     default:
       return (
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || "[Unsupported message type]"}
-        </p>
+        <LinkifiedText
+          text={message.content_text || "[Unsupported message type]"}
+          onPrimary={onPrimary}
+        />
       );
   }
 }
@@ -329,7 +341,7 @@ export function MessageBubble({
             onPrimary={isAgent}
           />
         )}
-        <MessageContent message={message} />
+        <MessageContent message={message} onPrimary={isAgent} />
         <div
           className={cn(
             "mt-1 flex items-center gap-1",
