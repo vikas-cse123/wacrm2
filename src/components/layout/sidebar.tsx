@@ -19,6 +19,7 @@ import {
   Radio,
   Settings,
   Shield,
+  Table,
   User,
   UserCog,
   Users,
@@ -100,6 +101,7 @@ const navItems: NavItem[] = [
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
+  { href: "/excel", label: "Excel", icon: Table },
 ];
 
 const bottomNavItems = [
@@ -121,7 +123,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   // reverted by removing the `isOwner` checks below.
   const isOwner = accountRole === "owner";
   const visibleNavItems = navItems.filter((item) => {
-    if (!isOwner && (item.href === "/flows" || item.href === "/agents")) {
+    if (
+      !isOwner &&
+      (item.href === "/flows" ||
+        item.href === "/agents" ||
+        item.href === "/excel")
+    ) {
       return false;
     }
     return true;
