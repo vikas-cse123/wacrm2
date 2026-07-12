@@ -49,6 +49,44 @@ export function isQuestionNode(nodeType: string): boolean {
   return QUESTION_NODE_TYPES.has(nodeType);
 }
 
+/**
+ * Normalizes question text for fuzzy matching: lowercase, strip emoji /
+ * markdown / punctuation, collapse whitespace. So "👋 *May I know your
+ * Full Name?*" and "may i know your full name" compare equal.
+ */
+export function normalizeQuestion(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Finds the node_key of the question node whose prompt best matches the
+ * given text (exact-normalized first, then substring either direction).
+ * Returns null when nothing matches.
+ */
+export function findNodeKeyByQuestion(
+  nodes: Iterable<FlowNodeLite>,
+  text: string,
+): string | null {
+  const target = normalizeQuestion(text);
+  if (!target) return null;
+  let substringHit: string | null = null;
+  for (const node of nodes) {
+    if (!isQuestionNode(node.node_type)) continue;
+    const q = questionText(node);
+    if (!q) continue;
+    const nq = normalizeQuestion(q);
+    if (nq === target) return node.node_key; // exact wins immediately
+    if (!substringHit && (nq.includes(target) || target.includes(nq))) {
+      substringHit = node.node_key;
+    }
+  }
+  return substringHit;
+}
+
 /** The prompt text for a question node, or null if it isn't one. */
 export function questionText(node: FlowNodeLite): string | null {
   const cfg = node.config ?? {};

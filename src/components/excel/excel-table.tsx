@@ -41,20 +41,22 @@ function toCsv(columns: ExcelColumn[], rows: ExcelRow[]): string {
 }
 
 export function ExcelTable({ data }: { data: ExcelData }) {
-  const { columns, rows } = data;
+  const { columns, rows, flows } = data;
   const [query, setQuery] = useState("");
+  const [flowFilter, setFlowFilter] = useState<string>("all");
 
   const filteredRows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      columns.some((c) =>
+    return rows.filter((r) => {
+      if (flowFilter !== "all" && r.flow !== flowFilter) return false;
+      if (!q) return true;
+      return columns.some((c) =>
         formatCell(c, r.cells[c.key] ?? "")
           .toLowerCase()
           .includes(q),
-      ),
-    );
-  }, [rows, columns, query]);
+      );
+    });
+  }, [rows, columns, query, flowFilter]);
 
   const handleExport = () => {
     const csv = toCsv(columns, filteredRows);
@@ -69,16 +71,33 @@ export function ExcelTable({ data }: { data: ExcelData }) {
 
   return (
     <div className="space-y-3">
-      {/* Toolbar — search + export. Sorting/column filters slot in here. */}
+      {/* Toolbar — flow selector + search + export. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="relative max-w-xs flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all columns…"
-            className="pl-8"
-          />
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          {flows.length > 1 && (
+            <select
+              value={flowFilter}
+              onChange={(e) => setFlowFilter(e.target.value)}
+              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label="Filter by flow"
+            >
+              <option value="all">All flows</option>
+              {flows.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className="relative max-w-xs flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search all columns…"
+              className="pl-8"
+            />
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
