@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { ThemedToaster } from "@/components/themed-toaster";
+import { ServiceWorkerRegister } from "@/components/pwa/service-worker-register";
 import {
   DEFAULT_MODE,
   DEFAULT_THEME,
@@ -32,6 +33,13 @@ export const metadata: Metadata = {
     apple: "/interscale-logo.png",
   },
   description: "Interscale Marketing WhatsApp CRM",
+  // Lets iOS treat the installed shortcut as a standalone app (required
+  // for Web Push on iOS 16.4+). Next links the manifest.ts automatically.
+  appleWebApp: {
+    capable: true,
+    title: "Interscale",
+    statusBarStyle: "black-translucent",
+  },
   robots: {
     index: false,
     follow: false,
@@ -111,6 +119,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <ThemedToaster />
+          <ServiceWorkerRegister />
         </ThemeProvider>
       </body>
     </html>
