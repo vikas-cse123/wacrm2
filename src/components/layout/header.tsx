@@ -45,7 +45,9 @@ interface HeaderProps {
 
 export function Header({ onOpenSidebar }: HeaderProps) {
   const pathname = usePathname();
-  const { profile, signOut } = useAuth();
+  const { profile, accountRole, signOut } = useAuth();
+  // UI-only: Settings link is owner-only, matching the sidebar gating.
+  const isOwner = accountRole === "owner";
   const title = getPageTitle(pathname);
 
   const initial =
@@ -118,17 +120,19 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             <User className="size-4" />
             Profile
           </DropdownMenuItem>
-          <DropdownMenuItem
-            render={
-              <Link
-                href="/settings?tab=whatsapp"
-                className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
-              />
-            }
-          >
-            <SettingsIcon className="size-4" />
-            Settings
-          </DropdownMenuItem>
+          {isOwner && (
+            <DropdownMenuItem
+              render={
+                <Link
+                  href="/settings?tab=whatsapp"
+                  className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+                />
+              }
+            >
+              <SettingsIcon className="size-4" />
+              Settings
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator className="bg-border" />
           <DropdownMenuItem
             onClick={signOut}
