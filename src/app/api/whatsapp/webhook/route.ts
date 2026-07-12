@@ -9,6 +9,7 @@ import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { sendPushToAccount, buildPreview } from '@/lib/push/send'
 import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
@@ -907,6 +908,23 @@ async function processMessage(
   if (convError) {
     console.error('Error updating conversation:', convError)
   }
+
+  // Web Push fan-out — notify account members who enabled notifications
+  // on a device. Fire-and-forget: a slow/failing push service must not
+  // block the webhook's 200 OK to Meta (which would trigger retries and
+  // duplicate inserts). The sender no-ops when VAPID keys are absent.
+  const pushDisplayName =
+    (contactRecord.name && contactRecord.name.trim()) ||
+    (contactName && contactName.trim()) ||
+    senderPhone
+  void sendPushToAccount(accountId, {
+    title: `New message from ${pushDisplayName}`,
+    body: buildPreview(contentText) || `[${message.type}]`,
+    url: `/inbox?c=${conversation.id}`,
+    // One notification per conversation — a burst of messages collapses
+    // into a single, refreshed notification instead of a stack.
+    tag: `conversation-${conversation.id}`,
+  })
 
   // If this contact was a recent broadcast recipient, flag the reply
   // so the broadcast's `replied_count` advances (via the aggregate
