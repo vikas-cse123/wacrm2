@@ -913,11 +913,11 @@ async function processMessage(
   // on a device. Fire-and-forget: a slow/failing push service must not
   // block the webhook's 200 OK to Meta (which would trigger retries and
   // duplicate inserts). The sender no-ops when VAPID keys are absent.
-  // Always show the sender's phone number in the title (never the saved
-  // name). senderPhone is digits-only, so prefix a '+'.
-  const senderPhoneDisplay = senderPhone ? `+${senderPhone}` : 'unknown number'
+  // Title is just the sender's phone number — no "New message from"
+  // prefix. senderPhone is digits-only, so prefix a '+'.
+  const senderPhoneDisplay = senderPhone ? `+${senderPhone}` : 'Unknown number'
   void sendPushToAccount(accountId, {
-    title: `New message from ${senderPhoneDisplay}`,
+    title: senderPhoneDisplay,
     body: buildPreview(contentText) || `[${message.type}]`,
     url: `/inbox?c=${conversation.id}`,
     // One notification per conversation — a burst of messages collapses
