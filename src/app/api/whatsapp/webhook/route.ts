@@ -1281,16 +1281,24 @@ async function findOrCreateContact(
   // user_id is the NOT NULL FK audit column (no inbound message
   // has a single "user who created" it — we attribute to the
   // WhatsApp config owner as a stable default).
+  //
+  // The source_* columns are only included when a referral is actually
+  // present. This keeps the common (no-referral) insert byte-identical
+  // to before, so it can't fail if the 035 migration hasn't been applied
+  // yet — only genuine ad/link clicks touch the new columns.
+  const insertData: Record<string, unknown> = {
+    account_id: accountId,
+    user_id: configOwnerUserId,
+    phone,
+    name: name || phone,
+  }
+  if (source?.url) {
+    insertData.source_url = source.url
+    if (source.type) insertData.source_type = source.type
+  }
   const { data: newContact, error: createError } = await supabaseAdmin()
     .from('contacts')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      phone,
-      name: name || phone,
-      source_url: source?.url ?? null,
-      source_type: source?.url ? source?.type ?? null : null,
-    })
+    .insert(insertData)
     .select()
     .single()
 
