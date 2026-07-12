@@ -99,6 +99,20 @@ interface WhatsAppMessage {
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
   /**
+   * Present on the first message when the customer arrived via a
+   * click-to-WhatsApp ad or a website "Chat on WhatsApp" button.
+   * `source_url` is the ad/site the click came from; `source_type` is
+   * 'ad' or 'post'. We persist these onto the contact (first-touch).
+   */
+  referral?: {
+    source_url?: string
+    source_type?: string
+    source_id?: string
+    headline?: string
+    body?: string
+    ctwa_clid?: string
+  }
+  /**
    * Populated by Meta when `type` is 'unsupported' — explains why the
    * message couldn't be relayed (view-once media, polls, disappearing
    * messages, etc). Not present on normal messages.
@@ -704,12 +718,18 @@ async function processMessage(
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
 
+  // Click-to-WhatsApp referral, if this inbound came from an ad/link.
+  const referralSource = message.referral?.source_url
+    ? { url: message.referral.source_url, type: message.referral.source_type }
+    : undefined
+
   // Find or create contact
   const contactOutcome = await findOrCreateContact(
     accountId,
     configOwnerUserId,
     senderPhone,
-    contactName
+    contactName,
+    referralSource
   )
   if (!contactOutcome) return
   const contactRecord = contactOutcome.contact
@@ -1215,7 +1235,9 @@ async function findOrCreateContact(
   accountId: string,
   configOwnerUserId: string,
   phone: string,
-  name: string
+  name: string,
+  // Click-to-WhatsApp referral origin, when this inbound carried one.
+  source?: { url?: string; type?: string }
 ): Promise<ContactOutcome | null> {
   // Find an existing contact for this account by phone. The shared
   // helper pre-filters in SQL by the last-8-digit suffix (so we don't
@@ -1230,14 +1252,29 @@ async function findOrCreateContact(
   )
 
   if (existingContact) {
-    // Update name if it changed
+    // Build a patch for whatever changed. Name updates as before.
+    const patch: Record<string, unknown> = {}
     if (name && name !== existingContact.name) {
+      patch.name = name
+    }
+    // First-touch attribution: only stamp the referral source if the
+    // contact doesn't already have one, so the original ad/link that
+    // brought them in is preserved across later messages.
+    if (source?.url && !existingContact.source_url) {
+      patch.source_url = source.url
+      if (source.type) patch.source_type = source.type
+    }
+    if (Object.keys(patch).length > 0) {
+      patch.updated_at = new Date().toISOString()
       await supabaseAdmin()
         .from('contacts')
-        .update({ name, updated_at: new Date().toISOString() })
+        .update(patch)
         .eq('id', existingContact.id)
     }
-    return { contact: existingContact, wasCreated: false }
+    return {
+      contact: { ...existingContact, ...patch },
+      wasCreated: false,
+    }
   }
 
   // Create new contact. account_id is the tenancy column;
@@ -1251,6 +1288,8 @@ async function findOrCreateContact(
       user_id: configOwnerUserId,
       phone,
       name: name || phone,
+      source_url: source?.url ?? null,
+      source_type: source?.url ? source?.type ?? null : null,
     })
     .select()
     .single()

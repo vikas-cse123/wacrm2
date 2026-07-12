@@ -98,6 +98,11 @@ export interface Contact {
   email?: string;
   company?: string;
   avatar_url?: string;
+  /** Click-to-WhatsApp referral origin (migration 035). Captured from
+   *  the inbound webhook's `referral` object on the first ad/link click.
+   *  `source_url` is the ad/website URL; `source_type` is 'ad' | 'post'. */
+  source_url?: string;
+  source_type?: string;
   created_at: string;
   updated_at: string;
   /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the
