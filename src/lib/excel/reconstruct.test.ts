@@ -113,9 +113,13 @@ describe("isRunComplete", () => {
     expect(isRunComplete(other, [], tracked)).toBe(false);
   });
 
-  it("falls back to status='completed' when no completion node configured", () => {
+  it("counts any ended run when no completion node configured", () => {
     const noNode: TrackedFlow = { flowId: "flow-1" };
+    // Any non-active (ended) status qualifies.
     expect(isRunComplete({ ...baseRun, status: "completed" }, [], noNode)).toBe(true);
+    expect(isRunComplete({ ...baseRun, status: "handed_off" }, [], noNode)).toBe(true);
+    expect(isRunComplete({ ...baseRun, status: "timed_out" }, [], noNode)).toBe(true);
+    // Still running → not yet complete.
     expect(isRunComplete({ ...baseRun, status: "active" }, [], noNode)).toBe(false);
   });
 });

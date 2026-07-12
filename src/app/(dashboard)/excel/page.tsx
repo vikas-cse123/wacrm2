@@ -16,7 +16,7 @@ export default async function ExcelPage() {
   if (!ctx || ctx.role !== "owner") redirect("/dashboard");
 
   const data = await buildExcelData(ctx.accountId);
-  const noFlowsConfigured = TRACKED_FLOWS.length === 0;
+  const showingAllFlows = TRACKED_FLOWS.length === 0;
 
   return (
     <div className="space-y-4">
@@ -30,17 +30,19 @@ export default async function ExcelPage() {
         </p>
       </div>
 
-      {noFlowsConfigured ? (
-        <div className="rounded-xl border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
-          No flows are being tracked yet. Add one in{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+      {showingAllFlows && (
+        <div className="rounded-lg border border-dashed border-border bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
+          Showing <strong>all flows</strong> and every ended run. To narrow to
+          specific flows — or to count a run complete the moment it reaches a
+          chosen node (e.g. the &ldquo;How many nights…&rdquo; node) — edit{" "}
+          <code className="rounded bg-muted px-1 py-0.5">
             src/lib/excel/tracked-flows.ts
-          </code>{" "}
-          (set the flow id and, optionally, a completion node), then redeploy.
+          </code>
+          .
         </div>
-      ) : (
-        <ExcelTable data={data} />
       )}
+
+      <ExcelTable data={data} />
     </div>
   );
 }

@@ -76,19 +76,19 @@ interface RunRow {
 }
 
 export async function buildExcelData(accountId: string): Promise<ExcelData> {
-  if (TRACKED_FLOW_IDS.length === 0) {
-    return { columns: [...META_COLUMNS], rows: [] };
-  }
-
   const db = supabaseAdmin();
 
-  // 1) Flows in THIS account that are tracked. Intersecting on account_id
-  //    scopes the whole page to the caller's tenant.
-  const { data: flowRows, error: flowErr } = await db
-    .from("flows")
-    .select("id, name")
-    .eq("account_id", accountId)
-    .in("id", TRACKED_FLOW_IDS);
+  // When no flows are configured, default to showing EVERY flow in the
+  // account (with default "run has ended" completion). Configuring
+  // TRACKED_FLOWS narrows to those flows and enables custom completion
+  // nodes. Either way the query is scoped to the caller's account.
+  const trackAll = TRACKED_FLOW_IDS.length === 0;
+
+  // 1) Flows in THIS account (optionally narrowed to the tracked ids).
+  //    Filtering on account_id scopes the whole page to the caller's tenant.
+  let flowQuery = db.from("flows").select("id, name").eq("account_id", accountId);
+  if (!trackAll) flowQuery = flowQuery.in("id", TRACKED_FLOW_IDS);
+  const { data: flowRows, error: flowErr } = await flowQuery;
   if (flowErr) throw new Error(`[excel] flows query failed: ${flowErr.message}`);
 
   const flows = flowRows ?? [];
@@ -160,8 +160,9 @@ export async function buildExcelData(accountId: string): Promise<ExcelData> {
   const rows: ExcelRow[] = [];
 
   for (const run of runs) {
-    const tracked = getTrackedFlow(run.flow_id);
-    if (!tracked) continue;
+    // Explicit config when present; otherwise a default entry (no custom
+    // completion node) so track-all mode still works.
+    const tracked = getTrackedFlow(run.flow_id) ?? { flowId: run.flow_id };
 
     const events = eventsByRun.get(run.id) ?? [];
     const runLite: FlowRunLite = {
