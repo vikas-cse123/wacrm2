@@ -2,11 +2,13 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/flows/admin-client";
 import {
-  TRACKED_FLOW_IDS,
-  getTrackedFlow,
+  HAS_TRACKED_FLOWS,
+  matchTrackedFlow,
+  type TrackedFlow,
 } from "./tracked-flows";
 import {
   completionTime,
+  findNodeKeyByQuestion,
   isRunComplete,
   reconstructRunQA,
   type FlowNodeLite,
@@ -16,9 +18,8 @@ import {
 
 /**
  * Server-side assembly of the /excel table. Uses the service-role client
- * and scopes every query to the caller's `accountId` (the page is
- * owner-gated), so there's no cross-account leakage even though the
- * tracked-flow config is global.
+ * and scopes every query to the caller's `accountId` (the page and the
+ * token export both resolve one), so there's no cross-account leakage.
  *
  * Reuses existing flow data end-to-end — no schema changes.
  */
@@ -34,16 +35,20 @@ export interface ExcelColumn {
 
 export interface ExcelRow {
   id: string;
+  /** Flow name — lets the client filter/select by flow. */
+  flow: string;
   cells: Record<string, string>;
 }
 
 export interface ExcelData {
   columns: ExcelColumn[];
   rows: ExcelRow[];
+  /** Distinct flow names present, for a flow selector. */
+  flows: string[];
 }
 
-// Fixed metadata columns shown before the dynamic per-question columns.
-const META_COLUMNS: ExcelColumn[] = [
+// Exploratory (no config) meta columns.
+const FULL_META: ExcelColumn[] = [
   { key: "name", label: "Name", kind: "meta" },
   { key: "phone", label: "Phone", kind: "meta" },
   { key: "flow", label: "Flow", kind: "meta" },
@@ -52,16 +57,21 @@ const META_COLUMNS: ExcelColumn[] = [
   { key: "started_at", label: "Started at", kind: "meta", format: "datetime" },
 ];
 
-/** Split a list into fixed-size chunks (keeps `.in()` filters URL-safe). */
+// Curated (config present) meta columns: a contact key + a timestamp —
+// the minimum a downstream CRM needs to match a record and dedupe.
+const CURATED_META: ExcelColumn[] = [
+  { key: "phone", label: "Phone", kind: "meta" },
+  { key: "completed_at", label: "Completed at", kind: "meta", format: "datetime" },
+];
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
 
-/** Stable column key for a flow's question node. */
-function questionColumnKey(flowId: string, nodeKey: string): string {
-  return `q:${flowId}:${nodeKey}`;
+function questionColumnKey(flowId: string, suffix: string): string {
+  return `q:${flowId}:${suffix}`;
 }
 
 interface RunRow {
@@ -75,35 +85,62 @@ interface RunRow {
   contact: { name: string | null; phone: string | null } | null;
 }
 
+/** One resolved question column: a config label bound to a node_key. */
+interface ResolvedColumn {
+  key: string;
+  label: string;
+  nodeKey: string | null;
+}
+
+interface ResolvedFlow {
+  flowId: string;
+  name: string;
+  /** Config with completionNodeKey resolved from completeWhenReached. */
+  tracked: TrackedFlow;
+  nodesByKey: Map<string, FlowNodeLite>;
+  /** Fixed curated columns, or null to auto-derive per run. */
+  columns: ResolvedColumn[] | null;
+}
+
 export async function buildExcelData(accountId: string): Promise<ExcelData> {
   const db = supabaseAdmin();
 
-  // When no flows are configured, default to showing EVERY flow in the
-  // account (with default "run has ended" completion). Configuring
-  // TRACKED_FLOWS narrows to those flows and enables custom completion
-  // nodes. Either way the query is scoped to the caller's account.
-  const trackAll = TRACKED_FLOW_IDS.length === 0;
-
-  // 1) Flows in THIS account (optionally narrowed to the tracked ids).
-  //    Filtering on account_id scopes the whole page to the caller's tenant.
-  let flowQuery = db.from("flows").select("id, name").eq("account_id", accountId);
-  if (!trackAll) flowQuery = flowQuery.in("id", TRACKED_FLOW_IDS);
-  const { data: flowRows, error: flowErr } = await flowQuery;
+  // 1) All flows in the account (small set). We match to the config in JS
+  //    so a flow can be named OR id'd.
+  const { data: flowRows, error: flowErr } = await db
+    .from("flows")
+    .select("id, name")
+    .eq("account_id", accountId);
   if (flowErr) throw new Error(`[excel] flows query failed: ${flowErr.message}`);
 
-  const flows = flowRows ?? [];
-  if (flows.length === 0) return { columns: [...META_COLUMNS], rows: [] };
+  const allFlows = (flowRows ?? []) as { id: string; name: string | null }[];
 
-  const flowNameById = new Map<string, string>(
-    flows.map((f) => [f.id as string, (f.name as string) ?? ""]),
-  );
-  const validFlowIds = flows.map((f) => f.id as string);
+  // Which flows to include + their config. Empty config → every flow with
+  // a default (ended-run) completion.
+  const included: { id: string; name: string; tracked: TrackedFlow }[] = [];
+  for (const f of allFlows) {
+    const tracked = matchTrackedFlow(f);
+    if (HAS_TRACKED_FLOWS) {
+      if (tracked) included.push({ id: f.id, name: f.name ?? "", tracked });
+    } else {
+      included.push({ id: f.id, name: f.name ?? "", tracked: { flowId: f.id } });
+    }
+  }
 
-  // 2) Nodes for those flows → Map<flowId, Map<nodeKey, node>>.
+  const curatedMeta = HAS_TRACKED_FLOWS;
+  const metaColumns = curatedMeta ? CURATED_META : FULL_META;
+
+  if (included.length === 0) {
+    return { columns: [...metaColumns], rows: [], flows: [] };
+  }
+
+  const includedIds = included.map((f) => f.id);
+
+  // 2) Nodes for the included flows → Map<flowId, Map<nodeKey, node>>.
   const { data: nodeRows, error: nodeErr } = await db
     .from("flow_nodes")
     .select("flow_id, node_key, node_type, config")
-    .in("flow_id", validFlowIds);
+    .in("flow_id", includedIds);
   if (nodeErr) throw new Error(`[excel] nodes query failed: ${nodeErr.message}`);
 
   const nodesByFlow = new Map<string, Map<string, FlowNodeLite>>();
@@ -117,26 +154,58 @@ export async function buildExcelData(accountId: string): Promise<ExcelData> {
     });
   }
 
-  // 3) Runs for those flows (account-scoped) with the contact embedded.
+  // 3) Resolve, per flow: the completion node_key and (if configured) the
+  //    fixed column list — both from the question texts in the config.
+  const resolvedByFlow = new Map<string, ResolvedFlow>();
+  for (const f of included) {
+    const nodesByKey = nodesByFlow.get(f.id) ?? new Map<string, FlowNodeLite>();
+    const nodeList = [...nodesByKey.values()];
+
+    let completionNodeKey = f.tracked.completionNodeKey;
+    if (!completionNodeKey && f.tracked.completeWhenReached) {
+      completionNodeKey =
+        findNodeKeyByQuestion(nodeList, f.tracked.completeWhenReached) ?? undefined;
+    }
+
+    let columns: ResolvedColumn[] | null = null;
+    if (f.tracked.columns && f.tracked.columns.length > 0) {
+      columns = f.tracked.columns.map((label, i) => {
+        const nodeKey = findNodeKeyByQuestion(nodeList, label);
+        return {
+          key: questionColumnKey(f.id, nodeKey ?? `col${i}`),
+          label,
+          nodeKey,
+        };
+      });
+    }
+
+    resolvedByFlow.set(f.id, {
+      flowId: f.id,
+      name: f.name,
+      tracked: { ...f.tracked, completionNodeKey },
+      nodesByKey,
+      columns,
+    });
+  }
+
+  // 4) Runs for the included flows (account-scoped) + embedded contact.
   const { data: runData, error: runErr } = await db
     .from("flow_runs")
     .select(
       "id, flow_id, status, vars, started_at, ended_at, current_node_key, contact:contacts(name, phone)",
     )
     .eq("account_id", accountId)
-    .in("flow_id", validFlowIds)
+    .in("flow_id", includedIds)
     .order("started_at", { ascending: false });
   if (runErr) throw new Error(`[excel] runs query failed: ${runErr.message}`);
 
   const runs = (runData ?? []) as unknown as RunRow[];
-  if (runs.length === 0) {
-    return { columns: [...META_COLUMNS], rows: [] };
-  }
 
-  // 4) Events for those runs, grouped by run id (chunked `.in()`).
+  // 5) Events for those runs, grouped by run id (chunked `.in()`).
   const runIds = runs.map((r) => r.id);
   const eventsByRun = new Map<string, FlowRunEventLite[]>();
   for (const ids of chunk(runIds, 200)) {
+    if (ids.length === 0) continue;
     const { data: evData, error: evErr } = await db
       .from("flow_run_events")
       .select("flow_run_id, event_type, node_key, payload, created_at")
@@ -154,15 +223,25 @@ export async function buildExcelData(accountId: string): Promise<ExcelData> {
     }
   }
 
-  // 5) Filter to completed runs and build rows + dynamic question columns.
+  // 6) Fixed question columns for curated flows (always present, in order).
   const questionColumns: ExcelColumn[] = [];
-  const questionColumnSeen = new Set<string>();
+  const autoColumnSeen = new Set<string>();
+  for (const f of included) {
+    const resolved = resolvedByFlow.get(f.id)!;
+    if (resolved.columns) {
+      for (const c of resolved.columns) {
+        questionColumns.push({ key: c.key, label: c.label, kind: "question" });
+      }
+    }
+  }
+
+  // 7) Build rows: keep only runs that satisfy completion.
   const rows: ExcelRow[] = [];
+  const flowNames = new Set<string>();
 
   for (const run of runs) {
-    // Explicit config when present; otherwise a default entry (no custom
-    // completion node) so track-all mode still works.
-    const tracked = getTrackedFlow(run.flow_id) ?? { flowId: run.flow_id };
+    const resolved = resolvedByFlow.get(run.flow_id);
+    if (!resolved) continue;
 
     const events = eventsByRun.get(run.id) ?? [];
     const runLite: FlowRunLite = {
@@ -175,35 +254,48 @@ export async function buildExcelData(accountId: string): Promise<ExcelData> {
       current_node_key: run.current_node_key,
     };
 
-    if (!isRunComplete(runLite, events, tracked)) continue;
+    if (!isRunComplete(runLite, events, resolved.tracked)) continue;
 
-    const nodesByKey = nodesByFlow.get(run.flow_id) ?? new Map();
-    const qa = reconstructRunQA(runLite, nodesByKey, events);
+    const qa = reconstructRunQA(runLite, resolved.nodesByKey, events);
+    const flowLabel = resolved.tracked.label || resolved.name;
+    flowNames.add(flowLabel);
 
     const cells: Record<string, string> = {
       name: run.contact?.name ?? "",
       phone: run.contact?.phone ?? "",
-      flow: tracked.label ?? flowNameById.get(run.flow_id) ?? "",
+      flow: flowLabel,
       status: run.status,
-      completed_at: completionTime(runLite, events, tracked) ?? "",
+      completed_at: completionTime(runLite, events, resolved.tracked) ?? "",
       started_at: run.started_at ?? "",
     };
 
-    for (const nodeKey of qa.order) {
-      const colKey = questionColumnKey(run.flow_id, nodeKey);
-      if (!questionColumnSeen.has(colKey)) {
-        questionColumnSeen.add(colKey);
-        questionColumns.push({
-          key: colKey,
-          label: qa.byNode[nodeKey].question,
-          kind: "question",
-        });
+    if (resolved.columns) {
+      // Curated: fill exactly the configured columns.
+      for (const c of resolved.columns) {
+        cells[c.key] = (c.nodeKey && qa.byNode[c.nodeKey]?.answer) || "";
       }
-      cells[colKey] = qa.byNode[nodeKey].answer ?? "";
+    } else {
+      // Auto: one column per answered question, first-seen order.
+      for (const nodeKey of qa.order) {
+        const colKey = questionColumnKey(run.flow_id, nodeKey);
+        if (!autoColumnSeen.has(colKey)) {
+          autoColumnSeen.add(colKey);
+          questionColumns.push({
+            key: colKey,
+            label: qa.byNode[nodeKey].question,
+            kind: "question",
+          });
+        }
+        cells[colKey] = qa.byNode[nodeKey].answer ?? "";
+      }
     }
 
-    rows.push({ id: run.id, cells });
+    rows.push({ id: run.id, flow: flowLabel, cells });
   }
 
-  return { columns: [...META_COLUMNS, ...questionColumns], rows };
+  return {
+    columns: [...metaColumns, ...questionColumns],
+    rows,
+    flows: [...flowNames].sort(),
+  };
 }

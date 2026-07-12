@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buttonTitleForReplyId,
   completionTime,
+  findNodeKeyByQuestion,
   isRunComplete,
+  normalizeQuestion,
   questionText,
   reconstructRunQA,
   type FlowNodeLite,
@@ -150,6 +152,33 @@ describe("completionTime", () => {
         { flowId: "flow-1" },
       ),
     ).toBe("2026-07-13T11:00:00.000Z");
+  });
+});
+
+describe("normalizeQuestion", () => {
+  it("strips emoji / markdown / punctuation and lowercases", () => {
+    expect(normalizeQuestion("👋 *May I know your Full Name?*")).toBe(
+      "may i know your full name",
+    );
+  });
+});
+
+describe("findNodeKeyByQuestion", () => {
+  const nodes = [collectNameNode, nightsNode, listNode];
+
+  it("matches on normalized text despite emoji/markdown differences", () => {
+    expect(
+      findNodeKeyByQuestion(nodes, "  how many NIGHTS are you planning to stay? "),
+    ).toBe("send_buttons_6");
+  });
+
+  it("matches the name question fuzzily (substring)", () => {
+    // "What's your name?" → "what s your name" contains "your name".
+    expect(findNodeKeyByQuestion(nodes, "Your name")).toBe("collect_name");
+  });
+
+  it("returns null when nothing matches", () => {
+    expect(findNodeKeyByQuestion(nodes, "totally unrelated question")).toBeNull();
   });
 });
 
