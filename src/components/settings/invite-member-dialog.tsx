@@ -288,9 +288,10 @@ export function InviteMemberDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="admin">Admin</SelectItem>
+                    {/* UI-only: Admin and Viewer temporarily hidden so
+                        invites can only be Agent. Backend still accepts
+                        all roles — re-add these items to restore them. */}
                     <SelectItem value="agent">Agent</SelectItem>
-                    <SelectItem value="viewer">Viewer</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
