@@ -6,7 +6,6 @@ interface AssignmentConfig {
   default_mode: "round_robin" | "equal_load" | null;
   online_only: boolean;
   reassign_offline: boolean;
-  round_robin_cursor: string | null;
 }
 
 interface AssignmentRule {
@@ -98,21 +97,25 @@ async function filterOnlineAgents(
   return (data ?? []).map((r: { user_id: string }) => r.user_id);
 }
 
-async function getOnlineMembers(
+async function getOnlineAgents(
   db: SupabaseClient,
   accountId: string,
 ): Promise<string[]> {
+  const assignable = await getAssignableMembers(db, accountId);
+  if (assignable.length === 0) return [];
+
   const cutoff = new Date(Date.now() - OFFLINE_AFTER_MS).toISOString();
   const { data } = await db
     .from("member_presence")
     .select("user_id")
     .eq("account_id", accountId)
+    .in("user_id", assignable)
     .gte("last_seen_at", cutoff);
 
   return (data ?? []).map((r: { user_id: string }) => r.user_id);
 }
 
-async function getAllMembers(
+async function getAssignableMembers(
   db: SupabaseClient,
   accountId: string,
 ): Promise<string[]> {
@@ -120,7 +123,7 @@ async function getAllMembers(
     .from("profiles")
     .select("user_id")
     .eq("account_id", accountId)
-    .in("account_role", ["owner", "admin", "agent"]);
+    .in("account_role", ["admin", "agent"]);
 
   return (data ?? []).map((r: { user_id: string }) => r.user_id);
 }
@@ -130,13 +133,13 @@ async function applyDefaultMode(
   config: AssignmentConfig,
 ): Promise<string | null> {
   const candidates = config.online_only
-    ? await getOnlineMembers(db, config.account_id)
-    : await getAllMembers(db, config.account_id);
+    ? await getOnlineAgents(db, config.account_id)
+    : await getAssignableMembers(db, config.account_id);
 
   if (candidates.length === 0) return null;
 
   if (config.default_mode === "round_robin") {
-    return roundRobin(db, config, candidates);
+    return roundRobin(db, config.account_id, candidates);
   }
 
   if (config.default_mode === "equal_load") {
@@ -148,27 +151,19 @@ async function applyDefaultMode(
 
 async function roundRobin(
   db: SupabaseClient,
-  config: AssignmentConfig,
+  accountId: string,
   candidates: string[],
 ): Promise<string> {
   const sorted = [...candidates].sort();
-  let nextIndex = 0;
 
-  if (config.round_robin_cursor) {
-    const cursorIdx = sorted.indexOf(config.round_robin_cursor);
-    if (cursorIdx !== -1) {
-      nextIndex = (cursorIdx + 1) % sorted.length;
-    }
-  }
+  const { count } = await db
+    .from("conversations")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId)
+    .not("assigned_agent_id", "is", null);
 
-  const chosen = sorted[nextIndex];
-
-  await db
-    .from("chat_assignment_config")
-    .update({ round_robin_cursor: chosen })
-    .eq("account_id", config.account_id);
-
-  return chosen;
+  const index = (count ?? 0) % sorted.length;
+  return sorted[index];
 }
 
 async function equalLoad(
@@ -176,7 +171,7 @@ async function equalLoad(
   accountId: string,
   candidates: string[],
 ): Promise<string> {
-  const { data: counts } = await db
+  const { data: convs } = await db
     .from("conversations")
     .select("assigned_agent_id")
     .eq("account_id", accountId)
@@ -185,7 +180,7 @@ async function equalLoad(
 
   const loadMap = new Map<string, number>();
   for (const c of candidates) loadMap.set(c, 0);
-  for (const row of counts ?? []) {
+  for (const row of convs ?? []) {
     if (row.assigned_agent_id) {
       loadMap.set(
         row.assigned_agent_id,

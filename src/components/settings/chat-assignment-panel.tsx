@@ -56,7 +56,7 @@ interface AssignmentRule {
 interface Member {
   user_id: string;
   full_name: string | null;
-  account_role: string;
+  role: string;
 }
 
 const MODE_INFO = {
@@ -132,9 +132,8 @@ export function ChatAssignmentPanel() {
       setMembers(
         (membersData.members ?? []).filter(
           (m: Member) =>
-            m.account_role === "owner" ||
-            m.account_role === "admin" ||
-            m.account_role === "agent",
+            m.role === "admin" ||
+            m.role === "agent",
         ),
       );
     } catch {
@@ -592,7 +591,7 @@ export function ChatAssignmentPanel() {
                           {m.full_name || "Unnamed"}
                         </span>
                         <Badge variant="secondary" className="ml-auto text-[10px]">
-                          {m.account_role}
+                          {m.role}
                         </Badge>
                       </button>
                     );
