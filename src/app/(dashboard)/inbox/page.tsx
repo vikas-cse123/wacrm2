@@ -83,7 +83,16 @@ export default function InboxPage() {
   }, []);
 
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [isDesktop, setIsDesktop] = useState(false);
   const isDraggingRef = useRef(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    setIsDesktop(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
   useEffect(() => {
     try {
@@ -629,6 +638,7 @@ export default function InboxPage() {
             "flex h-full flex-1 lg:flex-none",
             hasActiveConv ? "hidden lg:flex" : "flex",
           )}
+          style={isDesktop ? { width: sidebarWidth, minWidth: SIDEBAR_MIN, maxWidth: SIDEBAR_MAX } : undefined}
         >
           <ConversationList
             activeConversationId={activeConversation?.id ?? null}
@@ -636,7 +646,6 @@ export default function InboxPage() {
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}
-            width={sidebarWidth}
           />
         </div>
 
