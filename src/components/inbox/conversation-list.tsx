@@ -476,7 +476,7 @@ function ConversationItem({
           <span className="truncate text-sm font-medium text-foreground">
             {displayName}
           </span>
-          <span className="shrink-0 text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
+          <span className="shrink-0 pr-2 text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <p className="truncate text-xs text-muted-foreground">
