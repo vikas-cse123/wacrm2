@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -19,6 +19,11 @@ import { cn } from "@/lib/utils";
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "interscale:inbox:contact-panel-open";
+
+const SIDEBAR_WIDTH_KEY = "interscale:inbox:sidebar-width";
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 600;
+const SIDEBAR_DEFAULT = 320;
 
 export default function InboxPage() {
   const router = useRouter();
@@ -76,6 +81,50 @@ export default function InboxPage() {
       return next;
     });
   }, []);
+
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const isDraggingRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+      if (stored) {
+        const w = parseInt(stored, 10);
+        if (w >= SIDEBAR_MIN && w <= SIDEBAR_MAX) setSidebarWidth(w);
+      }
+    } catch {}
+  }, []);
+
+  const handleResizePointerDown = useCallback((e: ReactPointerEvent) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMove = (ev: globalThis.PointerEvent) => {
+      const delta = ev.clientX - startX;
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + delta));
+      setSidebarWidth(next);
+    };
+
+    const onUp = () => {
+      isDraggingRef.current = false;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      setSidebarWidth((w) => {
+        try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w)); } catch {}
+        return w;
+      });
+    };
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }, [sidebarWidth]);
 
   // Fire the deep-link auto-select exactly once per URL — subsequent
   // list refreshes (realtime, manual refetch) must not snap the user
@@ -587,7 +636,16 @@ export default function InboxPage() {
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}
+            width={sidebarWidth}
           />
+        </div>
+
+        {/* Resize handle between conversation list and message thread */}
+        <div
+          onPointerDown={handleResizePointerDown}
+          className="hidden lg:flex h-full w-1 cursor-col-resize items-center justify-center hover:bg-primary/20 active:bg-primary/30 transition-colors"
+        >
+          <div className="h-8 w-0.5 rounded-full bg-border" />
         </div>
 
         {/* Center panel: Message thread.
