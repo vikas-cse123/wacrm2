@@ -19,6 +19,7 @@ import {
   X,
   Loader2,
   ChevronDown,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -324,6 +325,38 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
               <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
                 <Mail className="h-4 w-4 text-muted-foreground" />
                 <span className="truncate">{contact.email}</span>
+              </div>
+            )}
+
+            {/* Click-to-WhatsApp source URL — where this lead came from.
+                Opens in a new tab. Only shown when the contact has one. */}
+            {contact.source_url && (
+              <a
+                href={contact.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={contact.source_url}
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-primary transition-colors hover:bg-muted"
+              >
+                <ExternalLink className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  <span className="text-muted-foreground">Ad URL: </span>
+                  {contact.source_url.replace(/^https?:\/\//, "").replace(/^www\./, "")}
+                </span>
+              </a>
+            )}
+
+            {/* Click-to-WhatsApp click id (ctwa_clid) — one line, same
+                format. Not a link; copyable text only. */}
+            {contact.ctwa_clid && (
+              <div
+                title={contact.ctwa_clid}
+                className="rounded-lg px-3 py-2 text-sm text-muted-foreground"
+              >
+                <span className="truncate">
+                  <span className="text-muted-foreground">ctwa_clid: </span>
+                  {contact.ctwa_clid}
+                </span>
               </div>
             )}
           </div>

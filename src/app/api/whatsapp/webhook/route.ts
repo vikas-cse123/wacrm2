@@ -720,7 +720,11 @@ async function processMessage(
 
   // Click-to-WhatsApp referral, if this inbound came from an ad/link.
   const referralSource = message.referral?.source_url
-    ? { url: message.referral.source_url, type: message.referral.source_type }
+    ? {
+        url: message.referral.source_url,
+        type: message.referral.source_type,
+        clid: message.referral.ctwa_clid,
+      }
     : undefined
 
   // Find or create contact
@@ -1237,7 +1241,7 @@ async function findOrCreateContact(
   phone: string,
   name: string,
   // Click-to-WhatsApp referral origin, when this inbound carried one.
-  source?: { url?: string; type?: string }
+  source?: { url?: string; type?: string; clid?: string }
 ): Promise<ContactOutcome | null> {
   // Find an existing contact for this account by phone. The shared
   // helper pre-filters in SQL by the last-8-digit suffix (so we don't
@@ -1263,6 +1267,11 @@ async function findOrCreateContact(
     if (source?.url && !existingContact.source_url) {
       patch.source_url = source.url
       if (source.type) patch.source_type = source.type
+    }
+    // First-touch for the click id too (independent of source_url so a
+    // referral carrying only a clid is still captured once).
+    if (source?.clid && !existingContact.ctwa_clid) {
+      patch.ctwa_clid = source.clid
     }
     if (Object.keys(patch).length > 0) {
       patch.updated_at = new Date().toISOString()
@@ -1295,6 +1304,9 @@ async function findOrCreateContact(
   if (source?.url) {
     insertData.source_url = source.url
     if (source.type) insertData.source_type = source.type
+  }
+  if (source?.clid) {
+    insertData.ctwa_clid = source.clid
   }
   const { data: newContact, error: createError } = await supabaseAdmin()
     .from('contacts')
