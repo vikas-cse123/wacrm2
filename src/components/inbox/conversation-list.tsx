@@ -33,7 +33,6 @@ interface ConversationListProps {
    * or the tab was throttled. Optional so existing callers keep working.
    */
   resyncToken?: number;
-  width?: number;
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
@@ -58,7 +57,6 @@ export function ConversationList({
   conversations,
   onConversationsLoaded,
   resyncToken = 0,
-  width,
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
@@ -221,8 +219,7 @@ useEffect(() => {
     // the single pane showing; fixed 320px on desktop where it shares the
     // row with the thread + contact sidebar.
     <div
-      className="flex h-full w-full flex-col border-r border-border bg-card lg:[width:var(--sidebar-w)] lg:[min-width:var(--sidebar-w)] lg:[max-width:var(--sidebar-w)]"
-      style={width ? { ['--sidebar-w' as string]: `${width}px` } : undefined}
+      className="flex h-full w-full flex-col border-r border-border bg-card"
     >
       {/* Search + Filter */}
       <div className="space-y-2 border-b border-border p-3">
