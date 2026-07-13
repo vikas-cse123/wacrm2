@@ -187,8 +187,9 @@ export function MessageComposer({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    // Max 4 lines (~96px)
-    el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+    // Max ~6 lines on mobile, ~4 on desktop
+    const maxH = window.innerWidth < 640 ? 144 : 96;
+    el.style.height = `${Math.min(el.scrollHeight, maxH)}px`;
   }, []);
 
   const handleSend = useCallback(async () => {
@@ -517,109 +518,112 @@ export function MessageComposer({
           </Button>
         </div>
       ) : (
-        <div className="flex items-end gap-2">
-          {/* Attach menu — photo / video / document / voice. */}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              disabled={inputsDisabled || busy}
-              title={
-                readOnly
-                  ? "Read-only — your role can't send messages"
-                  : inputsDisabled
-                    ? undefined
-                    : "Attach media"
-              }
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          {/* Action buttons row — on mobile sits above the input */}
+          <div className="flex items-center gap-1 sm:contents">
+            {/* Attach menu — photo / video / document / voice. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={inputsDisabled || busy}
+                title={
+                  readOnly
+                    ? "Read-only — your role can't send messages"
+                    : inputsDisabled
+                      ? undefined
+                      : "Attach media"
+                }
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Paperclip className="h-4 w-4" />
+                )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="border-border bg-popover">
+                <DropdownMenuItem onClick={() => imageInputRef.current?.click()}>
+                  <ImageIcon className="mr-2 h-4 w-4" />
+                  Photo
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
+                  <Video className="mr-2 h-4 w-4" />
+                  Video
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => documentInputRef.current?.click()}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Document
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void startRecording()}>
+                  <Mic className="mr-2 h-4 w-4" />
+                  Voice note
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <GatedButton
+              variant="ghost"
+              size="sm"
+              canAct={!readOnly}
+              gateReason="send messages"
+              title={readOnly ? undefined : "Send template"}
+              className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+              onClick={onOpenTemplates}
             >
-              {busy ? (
+              <LayoutTemplate className="h-4 w-4" />
+            </GatedButton>
+
+            <GatedButton
+              variant="ghost"
+              size="sm"
+              canAct={!readOnly}
+              gateReason="send messages"
+              disabled={drafting}
+              title={readOnly ? undefined : "Draft a reply with AI"}
+              className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary"
+              onClick={handleDraft}
+            >
+              {drafting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Paperclip className="h-4 w-4" />
+                <Sparkles className="h-4 w-4" />
               )}
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="border-border bg-popover">
-              <DropdownMenuItem onClick={() => imageInputRef.current?.click()}>
-                <ImageIcon className="mr-2 h-4 w-4" />
-                Photo
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
-                <Video className="mr-2 h-4 w-4" />
-                Video
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => documentInputRef.current?.click()}>
-                <FileText className="mr-2 h-4 w-4" />
-                Document
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void startRecording()}>
-                <Mic className="mr-2 h-4 w-4" />
-                Voice note
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </GatedButton>
+          </div>
 
-          <GatedButton
-            variant="ghost"
-            size="sm"
-            canAct={!readOnly}
-            gateReason="send messages"
-            title={readOnly ? undefined : "Send template"}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-            onClick={onOpenTemplates}
-          >
-            <LayoutTemplate className="h-4 w-4" />
-          </GatedButton>
+          {/* Input + send row */}
+          <div className="flex min-w-0 flex-1 items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                readOnly
+                  ? "Read-only — viewers can browse but not reply"
+                  : sessionExpired
+                    ? "Session expired - use a template"
+                    : "Type a message..."
+              }
+              disabled={sessionExpired || readOnly}
+              rows={1}
+              title={readOnly ? "Read-only — your role can't send messages" : undefined}
+              className={cn(
+                "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-base sm:text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
+                (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
+              )}
+            />
 
-          <GatedButton
-            variant="ghost"
-            size="sm"
-            canAct={!readOnly}
-            gateReason="send messages"
-            disabled={drafting}
-            title={readOnly ? undefined : "Draft a reply with AI"}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary"
-            onClick={handleDraft}
-          >
-            {drafting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-          </GatedButton>
-
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              readOnly
-                ? "Read-only — viewers can browse but not reply"
-                : sessionExpired
-                  ? "Session expired - use a template"
-                  : "Type a message... (Shift+Enter for new line)"
-            }
-            disabled={sessionExpired || readOnly}
-            rows={1}
-            // Textarea keeps its own inline title — the GatedButton
-            // wrapping pattern doesn't apply to non-button inputs.
-            // The placeholder text also surfaces the read-only state.
-            title={readOnly ? "Read-only — your role can't send messages" : undefined}
-            className={cn(
-              "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
-            )}
-          />
-
-          <GatedButton
-            size="sm"
-            canAct={!readOnly}
-            gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || sending}
-            onClick={handleSend}
-            className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
-          >
-            <Send className="h-4 w-4" />
-          </GatedButton>
+            <GatedButton
+              size="sm"
+              canAct={!readOnly}
+              gateReason="send messages"
+              disabled={!text.trim() || sessionExpired || sending}
+              onClick={handleSend}
+              className="h-10 w-10 sm:h-9 sm:w-9 shrink-0 rounded-full sm:rounded-md bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
+            >
+              <Send className="h-4 w-4" />
+            </GatedButton>
+          </div>
         </div>
       )}
 
