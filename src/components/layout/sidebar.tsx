@@ -285,10 +285,8 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             })}
           </ul>
 
-          {/* Settings is owner-only (UI gating). */}
-          {isOwner && (
-            <>
-              <div className="my-4 border-t border-border" />
+          {/* Settings — visible to all roles. */}
+          <div className="my-4 border-t border-border" />
 
               <ul className="flex flex-col gap-1">
                 {bottomNavItems.map((item) => {
@@ -311,8 +309,6 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                   );
                 })}
               </ul>
-            </>
-          )}
         </nav>
 
         {/* User section */}

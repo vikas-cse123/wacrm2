@@ -32,8 +32,10 @@ interface WhatsAppStatus {
 
 export function SettingsOverview({
   onSelect,
+  visibleSections,
 }: {
   onSelect: (section: SettingsSection) => void;
+  visibleSections?: ReadonlySet<SettingsSection>;
 }) {
   const { user, profile, accountId, accountRole, defaultCurrency, canManageMembers } =
     useAuth();
@@ -249,7 +251,7 @@ export function SettingsOverview({
 
       {/* Status tiles */}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {tiles.map(({ section, loading, subtitle }) => {
+        {tiles.filter(t => !visibleSections || visibleSections.has(t.section)).map(({ section, loading, subtitle }) => {
           const meta = SECTION_META[section];
           const Icon = meta.icon;
           return (
