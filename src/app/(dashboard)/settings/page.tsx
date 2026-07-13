@@ -37,6 +37,7 @@ export default function SettingsPage() {
     const set = new Set<SettingsSection>();
     for (const s of SETTINGS_SECTIONS) {
       const group = SECTION_META[s].group;
+      if (s === 'security' && !isAdmin) continue;
       if (group === 'top' || group === 'account' || isAdmin) set.add(s);
     }
     return set;
