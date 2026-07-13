@@ -21,11 +21,30 @@ interface ContactTraits {
   [key: string]: string | null | undefined;
 }
 
+interface ResolveOpts {
+  /**
+   * The agent currently assigned to this conversation, if any. When set,
+   * the engine only returns a *new* agent if `reassign_offline` is on and
+   * that agent has gone offline — otherwise it returns null (keep as-is).
+   */
+  currentAgentId?: string | null;
+}
+
+/**
+ * Decide which agent an inbound conversation should belong to.
+ *
+ * Returns the chosen agent's user_id, or null when nothing should change
+ * (no config, no eligible agent, or an already-assigned conversation that
+ * doesn't qualify for reassignment).
+ */
 export async function resolveAssignment(
   db: SupabaseClient,
   accountId: string,
   contactTraits: ContactTraits,
+  opts: ResolveOpts = {},
 ): Promise<string | null> {
+  const currentAgentId = opts.currentAgentId ?? null;
+
   const { data: config } = await db
     .from("chat_assignment_config")
     .select("*")
@@ -34,6 +53,22 @@ export async function resolveAssignment(
 
   if (!config || !config.default_mode) return null;
 
+  // Already assigned. Leave it alone unless reassign-on-offline is enabled
+  // and the current owner has actually gone offline.
+  if (currentAgentId) {
+    if (!config.reassign_offline) return null;
+    if (await isAgentOnline(db, accountId, currentAgentId)) return null;
+    // else fall through and pick a replacement (an online agent).
+  }
+
+  // When reassigning we always want an online replacement (moving off an
+  // offline agent onto an offline one would be pointless).
+  const requireOnline = config.online_only || currentAgentId !== null;
+
+  const assignable = await getAssignableMembers(db, accountId);
+  const assignableSet = new Set(assignable);
+
+  // Custom rules take priority over the default mode.
   const { data: rules } = await db
     .from("chat_assignment_rules")
     .select("*")
@@ -43,19 +78,35 @@ export async function resolveAssignment(
 
   if (rules && rules.length > 0) {
     for (const rule of rules as AssignmentRule[]) {
-      if (matchesRule(rule, contactTraits)) {
-        const eligible = await filterOnlineAgents(
-          db,
-          accountId,
-          rule.agent_ids,
-          config.online_only,
-        );
-        if (eligible.length > 0) return eligible[0];
-      }
+      if (!matchesRule(rule, contactTraits)) continue;
+
+      // Only agents who are still valid members, and never the agent we're
+      // reassigning away from.
+      let pool = rule.agent_ids.filter(
+        (id) => assignableSet.has(id) && id !== currentAgentId,
+      );
+      if (requireOnline) pool = await filterOnline(db, accountId, pool);
+
+      // Balance the rule's chats across its agents instead of always
+      // picking the first one.
+      if (pool.length > 0) return equalLoad(db, accountId, pool);
     }
   }
 
-  return applyDefaultMode(db, config as AssignmentConfig);
+  // Default mode.
+  let candidates = requireOnline
+    ? await filterOnline(db, accountId, assignable)
+    : assignable;
+  if (currentAgentId) candidates = candidates.filter((id) => id !== currentAgentId);
+  if (candidates.length === 0) return null;
+
+  if (config.default_mode === "round_robin") {
+    return roundRobin(db, accountId, candidates);
+  }
+  if (config.default_mode === "equal_load") {
+    return equalLoad(db, accountId, candidates);
+  }
+  return null;
 }
 
 function matchesRule(rule: AssignmentRule, traits: ContactTraits): boolean {
@@ -78,43 +129,7 @@ function matchesRule(rule: AssignmentRule, traits: ContactTraits): boolean {
   });
 }
 
-async function filterOnlineAgents(
-  db: SupabaseClient,
-  accountId: string,
-  agentIds: string[],
-  onlineOnly: boolean,
-): Promise<string[]> {
-  if (!onlineOnly || agentIds.length === 0) return agentIds;
-
-  const cutoff = new Date(Date.now() - OFFLINE_AFTER_MS).toISOString();
-  const { data } = await db
-    .from("member_presence")
-    .select("user_id")
-    .eq("account_id", accountId)
-    .in("user_id", agentIds)
-    .gte("last_seen_at", cutoff);
-
-  return (data ?? []).map((r: { user_id: string }) => r.user_id);
-}
-
-async function getOnlineAgents(
-  db: SupabaseClient,
-  accountId: string,
-): Promise<string[]> {
-  const assignable = await getAssignableMembers(db, accountId);
-  if (assignable.length === 0) return [];
-
-  const cutoff = new Date(Date.now() - OFFLINE_AFTER_MS).toISOString();
-  const { data } = await db
-    .from("member_presence")
-    .select("user_id")
-    .eq("account_id", accountId)
-    .in("user_id", assignable)
-    .gte("last_seen_at", cutoff);
-
-  return (data ?? []).map((r: { user_id: string }) => r.user_id);
-}
-
+/** Members who can be assigned chats — admins and agents (never owner/viewer). */
 async function getAssignableMembers(
   db: SupabaseClient,
   accountId: string,
@@ -128,25 +143,41 @@ async function getAssignableMembers(
   return (data ?? []).map((r: { user_id: string }) => r.user_id);
 }
 
-async function applyDefaultMode(
+/** Narrow a set of user ids to just those currently online (recent heartbeat). */
+async function filterOnline(
   db: SupabaseClient,
-  config: AssignmentConfig,
-): Promise<string | null> {
-  const candidates = config.online_only
-    ? await getOnlineAgents(db, config.account_id)
-    : await getAssignableMembers(db, config.account_id);
+  accountId: string,
+  userIds: string[],
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
 
-  if (candidates.length === 0) return null;
+  const cutoff = new Date(Date.now() - OFFLINE_AFTER_MS).toISOString();
+  const { data } = await db
+    .from("member_presence")
+    .select("user_id")
+    .eq("account_id", accountId)
+    .in("user_id", userIds)
+    .gte("last_seen_at", cutoff);
 
-  if (config.default_mode === "round_robin") {
-    return roundRobin(db, config.account_id, candidates);
-  }
+  return (data ?? []).map((r: { user_id: string }) => r.user_id);
+}
 
-  if (config.default_mode === "equal_load") {
-    return equalLoad(db, config.account_id, candidates);
-  }
+/** True when the member has heartbeated within the offline window. */
+async function isAgentOnline(
+  db: SupabaseClient,
+  accountId: string,
+  userId: string,
+): Promise<boolean> {
+  const cutoff = new Date(Date.now() - OFFLINE_AFTER_MS).toISOString();
+  const { data } = await db
+    .from("member_presence")
+    .select("user_id")
+    .eq("account_id", accountId)
+    .eq("user_id", userId)
+    .gte("last_seen_at", cutoff)
+    .maybeSingle();
 
-  return null;
+  return !!data;
 }
 
 async function roundRobin(
