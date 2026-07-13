@@ -338,9 +338,9 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
                 title={contact.source_url}
                 className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-primary transition-colors hover:bg-muted"
               >
-                <ExternalLink className="h-4 w-4 shrink-0" />
                 <span className="truncate">
                   <span className="text-muted-foreground">Ad URL: </span>
+                  <ExternalLink className="inline h-3.5 w-3.5 align-text-bottom" />{" "}
                   {contact.source_url.replace(/^https?:\/\//, "").replace(/^www\./, "")}
                 </span>
               </a>
