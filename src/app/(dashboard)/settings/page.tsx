@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
+import { canEditSettings } from '@/lib/auth/roles';
 import { SettingsRail } from '@/components/settings/settings-rail';
 import { SettingsOverview } from '@/components/settings/settings-overview';
 import { ProfileForm } from '@/components/settings/profile-form';
@@ -20,20 +21,33 @@ import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import { WebhookSettings } from '@/components/settings/webhook-settings';
 import {
   resolveSection,
+  SECTION_META,
+  SETTINGS_SECTIONS,
   type SettingsSection,
 } from '@/components/settings/settings-sections';
 
 export default function SettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { defaultCurrency } = useAuth();
+  const { defaultCurrency, accountRole } = useAuth();
   const { mode } = useTheme();
+  const isAdmin = accountRole ? canEditSettings(accountRole) : false;
+
+  const visibleSections = useMemo(() => {
+    const set = new Set<SettingsSection>();
+    for (const s of SETTINGS_SECTIONS) {
+      const group = SECTION_META[s].group;
+      if (group === 'top' || group === 'account' || isAdmin) set.add(s);
+    }
+    return set;
+  }, [isAdmin]);
 
   // The URL (`?tab=`) is the single source of truth for the active
   // section — deep-linkable, and it keeps the existing links in the
   // app sidebar/header working. Legacy tab values (tags, custom-fields)
   // resolve onto their new home; unknown/empty → the Overview landing.
-  const section = resolveSection(searchParams.get('tab'));
+  const resolved = resolveSection(searchParams.get('tab'));
+  const section = visibleSections.has(resolved) ? resolved : 'overview';
 
   const go = (next: SettingsSection) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -53,7 +67,7 @@ export default function SettingsPage() {
   );
 
   const panel: Record<SettingsSection, ReactNode> = {
-    overview: <SettingsOverview onSelect={go} />,
+    overview: <SettingsOverview onSelect={go} visibleSections={visibleSections} />,
     profile: <ProfileForm />,
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
@@ -80,7 +94,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[236px_minmax(0,1fr)] lg:items-start">
-        <SettingsRail active={section} onSelect={go} hints={hints} />
+        <SettingsRail active={section} onSelect={go} hints={hints} visibleSections={visibleSections} />
         <div className="min-w-0">{panel[section]}</div>
       </div>
     </div>
