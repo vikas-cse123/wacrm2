@@ -748,28 +748,30 @@ async function processMessage(
   if (!convResult) return
   const conversation = convResult.conversation
 
-  // Auto-assign if conversation has no agent assigned yet
-  if (!conversation.assigned_agent_id) {
-    try {
-      const traits: Record<string, string | null> = {
-        name: contactRecord.name ?? null,
-        phone: contactRecord.phone ?? null,
-        city: contactRecord.city ?? null,
-        country: contactRecord.country ?? null,
-        source: contactRecord.source_url ?? null,
-        ad_name: contactRecord.source_type ?? null,
-      }
-      const agentId = await resolveAssignment(supabaseAdmin(), accountId, traits)
-      if (agentId) {
-        await supabaseAdmin()
-          .from('conversations')
-          .update({ assigned_agent_id: agentId })
-          .eq('id', conversation.id)
-        conversation.assigned_agent_id = agentId
-      }
-    } catch (err) {
-      console.error('[webhook] auto-assignment failed:', err)
+  // Auto-assign. For an unassigned conversation this picks an agent; for
+  // one that's already assigned the engine only returns a new agent when
+  // reassign-on-offline is enabled and the current owner has gone offline.
+  try {
+    const traits: Record<string, string | null> = {
+      name: contactRecord.name ?? null,
+      phone: contactRecord.phone ?? null,
+      city: contactRecord.city ?? null,
+      country: contactRecord.country ?? null,
+      source: contactRecord.source_url ?? null,
+      ad_name: contactRecord.source_type ?? null,
     }
+    const agentId = await resolveAssignment(supabaseAdmin(), accountId, traits, {
+      currentAgentId: conversation.assigned_agent_id ?? null,
+    })
+    if (agentId && agentId !== conversation.assigned_agent_id) {
+      await supabaseAdmin()
+        .from('conversations')
+        .update({ assigned_agent_id: agentId })
+        .eq('id', conversation.id)
+      conversation.assigned_agent_id = agentId
+    }
+  } catch (err) {
+    console.error('[webhook] auto-assignment failed:', err)
   }
 
   // Emit conversation.created as soon as the thread is opened — BEFORE
