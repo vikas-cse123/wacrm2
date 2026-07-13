@@ -171,11 +171,14 @@ async function equalLoad(
   accountId: string,
   candidates: string[],
 ): Promise<string> {
+  // "Load" = every conversation currently on an agent's plate, i.e. any
+  // status except 'closed'. Counting only 'open' hid pending chats and
+  // made agents look under-loaded, skewing the balance.
   const { data: convs } = await db
     .from("conversations")
     .select("assigned_agent_id")
     .eq("account_id", accountId)
-    .eq("status", "open")
+    .neq("status", "closed")
     .in("assigned_agent_id", candidates);
 
   const loadMap = new Map<string, number>();
@@ -189,9 +192,13 @@ async function equalLoad(
     }
   }
 
-  let minAgent = candidates[0];
+  // Sort candidates so ties resolve deterministically (lowest id first),
+  // matching round-robin's stable ordering.
+  const sorted = [...candidates].sort();
+  let minAgent = sorted[0];
   let minCount = Infinity;
-  for (const [agent, count] of loadMap) {
+  for (const agent of sorted) {
+    const count = loadMap.get(agent) ?? 0;
     if (count < minCount) {
       minCount = count;
       minAgent = agent;
