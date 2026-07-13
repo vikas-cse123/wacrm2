@@ -9,7 +9,7 @@ import {
 } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X, ExternalLink } from "lucide-react";
+import { Search, ChevronDown, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,12 +40,6 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
   pending: "bg-amber-500",
   closed: "bg-muted-foreground",
 };
-
-/** Compact display form of a source URL — drops the scheme and any
- *  leading "www." so the truncated pill reads as cleanly as possible. */
-function formatSourceUrl(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/^www\./, "");
-}
 
 type InboxFilter = ConversationStatus | "all" | "unread";
 
@@ -453,19 +447,6 @@ function ConversationItem({
   // the filter-bar chips which start from raw selectedTagIds.
   const contactTags = contact?.tags ?? [];
 
-  // Click-to-WhatsApp source URL (where this lead came from). Rendered as
-  // a clickable line; the click opens the URL in a new tab and is stopped
-  // from also selecting the conversation. Nested in the row <button>, so
-  // it's a <span> (not an <a>) to keep the markup valid.
-  const sourceUrl = contact?.source_url;
-  const openSourceUrl = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (sourceUrl) window.open(sourceUrl, "_blank", "noopener,noreferrer");
-    },
-    [sourceUrl],
-  );
-
   return (
     <button
       onClick={handleClick}
@@ -514,21 +495,6 @@ function ConversationItem({
             />
           </div>
         </div>
-
-        {/* Click-to-WhatsApp source URL — where this lead came from.
-            Only shown when the contact has one. */}
-        {sourceUrl && (
-          <div className="mt-1 flex min-w-0">
-            <span
-              onClick={openSourceUrl}
-              title={sourceUrl}
-              className="inline-flex min-w-0 max-w-full items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/20"
-            >
-              <ExternalLink className="h-3 w-3 shrink-0" />
-              <span className="truncate">{formatSourceUrl(sourceUrl)}</span>
-            </span>
-          </div>
-        )}
 
         {/* Tag pill(s) — only rendered when the contact has at least one
             tag. Matches the screenshot: a small rounded label sitting
