@@ -37,9 +37,19 @@ export interface ResolvedFlowSheetColumns {
   /** Var key promoted to the leading Name slot, or null if there isn't one. */
   nameKey: string | null;
   nameHeader: string | null;
-  /** Trailing answer columns, in stable append order. */
+  /**
+   * ALL trailing answer columns, in stable append order. Used for
+   * positioning/alignment with the live sheet (so indices are stable).
+   * Some may be inactive (sheet_include: false turned off after they were added).
+   */
   keys: string[];
   headers: string[];
+  /**
+   * Only the ACTIVE columns (sheet_include !== false). Use this when
+   * building row values — synced to `keys` by position for alignment,
+   * but only `activeKeys` actually get non-empty values written.
+   */
+  activeKeys: Set<string>;
 }
 
 /**
@@ -101,6 +111,10 @@ export async function resolveFlowSheetColumns(
   const newCols = restCandidates.filter((c) => !storedKeySet.has(c.key));
   const freshHeaderByKey = new Map(restCandidates.map((c) => [c.key, c.header]));
 
+  // activeKeys: which columns should receive new data (sheet_include !== false).
+  // Built from freshHeaderByKey because deriveFlowColumns skips sheet_include: false.
+  const activeKeys = new Set(freshHeaderByKey.keys());
+
   const mergedHeaders = storedKeys.map((k, i) => freshHeaderByKey.get(k) ?? storedHeaders[i]);
   const renamedIndices: number[] = [];
   storedKeys.forEach((k, i) => {
@@ -135,6 +149,7 @@ export async function resolveFlowSheetColumns(
       nameHeader,
       keys: storedKeys,
       headers: storedHeaders,
+      activeKeys,
     };
   }
 
@@ -186,5 +201,6 @@ export async function resolveFlowSheetColumns(
     nameHeader: effectiveNameHeader,
     keys: mergedKeys,
     headers: mergedHeaders,
+    activeKeys,
   };
 }

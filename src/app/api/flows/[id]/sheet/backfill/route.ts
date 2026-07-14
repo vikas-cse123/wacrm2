@@ -48,7 +48,7 @@ export async function POST(
         { status: 400 },
       );
     }
-    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders } = resolved;
+    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
     // All completed runs for this flow, oldest first.
     const { data: runs } = await ctx.supabase
@@ -101,7 +101,8 @@ export async function POST(
       return [
         ...nameValueCell,
         ...standardValues,
-        ...answerColumns.map((k) => stringifyVar(vars[k])),
+        // Only write to active columns; leave inactive ones (sheet_include: false) empty.
+        ...answerColumns.map((k) => activeKeys.has(k) ? stringifyVar(vars[k]) : ""),
       ];
     });
 
