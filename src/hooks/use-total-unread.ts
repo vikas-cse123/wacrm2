@@ -23,12 +23,19 @@ export function useTotalUnread(): number {
     const supabase = createClient();
     let cancelled = false;
 
-    // Initial load. RLS scopes this to the signed-in user automatically —
-    // no explicit user_id filter needed here.
     (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) return;
+
+      // Initial load — RLS scopes this to the signed-in user, but we also
+      // explicitly filter here for clarity.
       const { data, error } = await supabase
         .from("conversations")
-        .select("id, unread_count");
+        .select("id, unread_count")
+        .eq("user_id", userId);
       if (cancelled || error || !data) return;
 
       const map = new Map<string, number>();
@@ -40,33 +47,43 @@ export function useTotalUnread(): number {
       }
       countsRef.current = map;
       setTotal(sum);
-    })();
 
-    const channel = supabase
-      .channel("total-unread-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          const map = countsRef.current;
-          if (payload.eventType === "DELETE") {
-            const oldRow = payload.old as Partial<Conversation>;
-            if (oldRow.id) map.delete(oldRow.id);
-          } else {
-            const row = payload.new as Conversation;
-            map.set(row.id, row.unread_count ?? 0);
-          }
-          // Recompute — cheap, conversations per user stay small.
-          let sum = 0;
-          for (const n of map.values()) if (n > 0) sum += 1;
-          setTotal(sum);
-        },
-      )
-      .subscribe();
+      // Subscribe to changes for this specific user's conversations only.
+      const channel = supabase
+        .channel(`total-unread-realtime-${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "conversations",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (cancelled) return;
+            const map = countsRef.current;
+            if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as Partial<Conversation>;
+              if (oldRow.id) map.delete(oldRow.id);
+            } else {
+              const row = payload.new as Conversation;
+              map.set(row.id, row.unread_count ?? 0);
+            }
+            // Recompute — cheap, conversations per user stay small.
+            let sum = 0;
+            for (const n of map.values()) if (n > 0) sum += 1;
+            setTotal(sum);
+          },
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    })();
 
     return () => {
       cancelled = true;
-      supabase.removeChannel(channel);
     };
   }, []);
 

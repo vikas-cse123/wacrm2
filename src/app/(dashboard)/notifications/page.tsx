@@ -27,12 +27,17 @@ export default function NotificationsPage() {
   const [markingAll, setMarkingAll] = useState(false);
 
   const load = useCallback(async () => {
-    if (!accountId) return;
     const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+
     const { data, error: fetchErr } = await supabase
       .from("notifications")
       .select("*")
-      .eq("account_id", accountId)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(100);
     if (fetchErr) {
@@ -40,7 +45,7 @@ export default function NotificationsPage() {
       return;
     }
     setNotifications((data ?? []) as Notification[]);
-  }, [accountId]);
+  }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -51,37 +56,57 @@ export default function NotificationsPage() {
   // "mark all read" fired from another tab/device stays in sync here.
   useEffect(() => {
     const supabase = createClient();
-    const channel = supabase
-      .channel("notifications-page")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            const row = payload.new as Notification;
-            setNotifications((prev) => {
-              if (!prev) return [row];
-              if (prev.some((n) => n.id === row.id)) return prev;
-              return [row, ...prev];
-            });
-          } else if (payload.eventType === "UPDATE") {
-            const row = payload.new as Notification;
-            setNotifications((prev) =>
-              prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ??
-              prev,
-            );
-          } else if (payload.eventType === "DELETE") {
-            const oldRow = payload.old as Partial<Notification>;
-            setNotifications(
-              (prev) => prev?.filter((n) => n.id !== oldRow.id) ?? prev,
-            );
-          }
-        },
-      )
-      .subscribe();
+    let cancelled = false;
+
+    (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId || cancelled) return;
+
+      const channel = supabase
+        .channel(`notifications-page-${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "notifications",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (cancelled) return;
+            if (payload.eventType === "INSERT") {
+              const row = payload.new as Notification;
+              setNotifications((prev) => {
+                if (!prev) return [row];
+                if (prev.some((n) => n.id === row.id)) return prev;
+                return [row, ...prev];
+              });
+            } else if (payload.eventType === "UPDATE") {
+              const row = payload.new as Notification;
+              setNotifications((prev) =>
+                prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ??
+                prev,
+              );
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as Partial<Notification>;
+              setNotifications(
+                (prev) => prev?.filter((n) => n.id !== oldRow.id) ?? prev,
+              );
+            }
+          },
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    })();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
     };
   }, []);
 
