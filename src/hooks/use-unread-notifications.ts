@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
 import type { Notification } from "@/types";
 
 /**
@@ -14,64 +15,58 @@ import type { Notification } from "@/types";
  */
 export function useUnreadNotifications(): number {
   const [count, setCount] = useState(0);
+  const { user } = useAuth();
 
   useEffect(() => {
+    if (!user?.id) return;
+
     const supabase = createClient();
     let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const userId = user.id;
 
-    const init = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-      if (!userId || cancelled) return;
+    // Initial load — head:true skips fetching rows, we only need the count
+    supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .is("read_at", null)
+      .then(({ count: unreadCount, error }) => {
+        if (!cancelled && !error) {
+          setCount(unreadCount ?? 0);
+        }
+      });
 
-      // head:true skips fetching rows — we only need the `count`
-      // supabase-js returns alongside the (empty) response body.
-      const { count: unreadCount, error } = await supabase
-        .from("notifications")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", userId)
-        .is("read_at", null);
-      if (cancelled || error) return;
-      setCount(unreadCount ?? 0);
-
-      // Subscribe to changes for this specific user only
-      channel = supabase
-        .channel(`notifications-unread-count-${userId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "notifications",
-            filter: `user_id=eq.${userId}`,
-          },
-          (payload) => {
-            if (cancelled) return;
-            if (payload.eventType === "INSERT") {
-              const row = payload.new as Notification;
-              if (!row.read_at) setCount((n) => n + 1);
-            } else if (payload.eventType === "UPDATE") {
-              const newRow = payload.new as Notification;
-              if (newRow.read_at) setCount((n) => Math.max(0, n - 1));
-            } else if (payload.eventType === "DELETE") {
-              const oldRow = payload.old as Partial<Notification>;
-              if (!oldRow.read_at) setCount((n) => Math.max(0, n - 1));
-            }
-          },
-        )
-        .subscribe();
-    };
-
-    init();
+    // Subscribe to changes for this specific user only
+    const channel = supabase
+      .channel(`notifications-unread-count-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          if (cancelled) return;
+          if (payload.eventType === "INSERT") {
+            const row = payload.new as Notification;
+            if (!row.read_at) setCount((n) => n + 1);
+          } else if (payload.eventType === "UPDATE") {
+            const newRow = payload.new as Notification;
+            if (newRow.read_at) setCount((n) => Math.max(0, n - 1));
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as Partial<Notification>;
+            if (!oldRow.read_at) setCount((n) => Math.max(0, n - 1));
+          }
+        },
+      )
+      .subscribe();
 
     return () => {
       cancelled = true;
-      if (channel) supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user?.id]);
 
   return count;
 }
