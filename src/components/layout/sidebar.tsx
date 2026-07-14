@@ -18,6 +18,7 @@ import {
   MessageSquare,
   Radio,
   Settings,
+  Sheet,
   Shield,
   User,
   UserCog,
@@ -26,6 +27,7 @@ import {
   Workflow,
   X,
   Zap,
+  UserX,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -100,6 +102,8 @@ const navItems: NavItem[] = [
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
+  { href: "/google-sheets", label: "Google Sheets", icon: Sheet },
+  { href: "/dropped-off-users", label: "Dropped Off Users", icon: UserX },
 ];
 
 const bottomNavItems = [
@@ -123,7 +127,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const visibleNavItems = navItems.filter((item) => {
     if (
       !isOwner &&
-      (item.href === "/flows" || item.href === "/agents")
+      (item.href === "/flows" || item.href === "/agents" || item.href === "/google-sheets" || item.href === "/dropped-off-users")
     ) {
       return false;
     }
