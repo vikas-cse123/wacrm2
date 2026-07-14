@@ -110,6 +110,33 @@ export function validateFlowForActivation(
     seen.add(n.node_key);
   }
 
+  // Duplicate var_key across collect_input nodes — each capture
+  // overwrites flow_runs.vars[var_key], so two questions sharing a key
+  // silently lose all but the last answer. Also breaks Google Sheets
+  // sync: only one column is derived per key, so the earlier questions
+  // never get a column at all. Warning (not error) since some flows
+  // intentionally reuse a key to let a later question override an
+  // earlier one — but it's surprising enough to flag by default.
+  const varKeyNodes = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (n.node_type !== "collect_input") continue;
+    const key = (n.config as { var_key?: string }).var_key;
+    if (!key) continue;
+    varKeyNodes.set(key, [...(varKeyNodes.get(key) ?? []), n.node_key]);
+  }
+  for (const [key, nodeKeys] of varKeyNodes) {
+    if (nodeKeys.length < 2) continue;
+    for (const nodeKey of nodeKeys) {
+      issues.push({
+        severity: "warning",
+        scope: "node",
+        node_key: nodeKey,
+        field: "var_key",
+        message: `Variable key "${key}" is reused by ${nodeKeys.length} Collect input nodes (${nodeKeys.join(", ")}) — each answer overwrites the last, and only one Google Sheet column is created for all of them. Give each question its own key.`,
+      });
+    }
+  }
+
   // Per-node rules (Meta limits + dead-end + edge resolution).
   for (const n of nodes) {
     issues.push(...validateNode(n, keys));

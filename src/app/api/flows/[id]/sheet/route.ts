@@ -125,6 +125,22 @@ async function linkSheet(
   meta: { spreadsheetId: string; url: string; title: string; tab: string },
 ) {
   const { keys, headers } = await answerColumnsForFlow(ctx.supabase, flowId);
+
+  // Re-linking the SAME spreadsheet (e.g. just to pick up a renamed
+  // column or a newly-included question) must not re-trigger the header
+  // write — the header row is already there. Only a genuinely different
+  // spreadsheet_id (or first-ever link) should reset header_written, so
+  // the next sync writes a fresh header into the new sheet.
+  const { data: existing } = await ctx.supabase
+    .from("flow_sheet_configs")
+    .select("spreadsheet_id, header_written")
+    .eq("flow_id", flowId)
+    .maybeSingle();
+  const headerWritten =
+    existing?.spreadsheet_id === meta.spreadsheetId
+      ? (existing?.header_written ?? false)
+      : false;
+
   const { data, error } = await ctx.supabase
     .from("flow_sheet_configs")
     .upsert(
@@ -137,7 +153,7 @@ async function linkSheet(
         sheet_tab: meta.tab,
         answer_columns: keys,
         answer_headers: headers,
-        header_written: false,
+        header_written: headerWritten,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "flow_id" },
