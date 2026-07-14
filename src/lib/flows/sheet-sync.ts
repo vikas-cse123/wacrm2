@@ -4,9 +4,13 @@
 // newly marked "include in sheet") after the sheet was linked shows up
 // on the very next completed run, with no manual relink required.
 //
-// Only ever APPENDS new trailing columns — existing column positions
-// are never reordered or removed, so already-written rows stay aligned
-// under whatever header they were written against.
+// Two kinds of healing:
+//   - New columns are APPENDED at the end — existing column positions
+//     are never reordered or removed, so already-written rows stay
+//     aligned under whatever header they were written against.
+//   - An EXISTING column's header text is rewritten in place (single
+//     cell) when the node's custom column name changes — position and
+//     data are untouched, only the label.
 // ============================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -93,15 +97,36 @@ export async function resolveFlowSheetColumns(
     }
   }
 
-  // Append-only merge for the trailing columns.
+  // Append new trailing columns; detect renames on ones already stored.
   const newCols = restCandidates.filter((c) => !storedKeySet.has(c.key));
+  const freshHeaderByKey = new Map(restCandidates.map((c) => [c.key, c.header]));
+
+  const mergedHeaders = storedKeys.map((k, i) => freshHeaderByKey.get(k) ?? storedHeaders[i]);
+  const renamedIndices: number[] = [];
+  storedKeys.forEach((k, i) => {
+    const fresh = freshHeaderByKey.get(k);
+    if (fresh && fresh !== storedHeaders[i]) renamedIndices.push(i);
+  });
+
   const mergedKeys = [...storedKeys, ...newCols.map((c) => c.key)];
-  const mergedHeaders = [...storedHeaders, ...newCols.map((c) => c.header)];
+  mergedHeaders.push(...newCols.map((c) => c.header));
 
   const nameSlotChanged =
     nameKey !== (sheet.name_column_key ?? null) ||
     nameHeader !== (sheet.name_column_header ?? null);
-  const columnsChanged = newCols.length > 0 || nameSlotChanged;
+  const nameHeaderRenamed =
+    !nameSlotChanged &&
+    nameKey &&
+    promoteName &&
+    derived.name?.key === nameKey &&
+    derived.name.header !== nameHeader;
+  const effectiveNameHeader = nameHeaderRenamed ? derived.name!.header : nameHeader;
+
+  const columnsChanged =
+    newCols.length > 0 ||
+    nameSlotChanged ||
+    renamedIndices.length > 0 ||
+    !!nameHeaderRenamed;
 
   if (!columnsChanged) {
     return {
@@ -113,23 +138,32 @@ export async function resolveFlowSheetColumns(
     };
   }
 
-  // Extend the live header row if it's already been written.
-  if (sheet.header_written && accessToken && newCols.length > 0) {
+  // Push header-cell writes for the live sheet: appended columns at the
+  // end, renamed columns in place at their existing position.
+  if (sheet.header_written && accessToken) {
     const standardLen = promoteName ? 4 : 5; // STANDARD_COLUMNS_V2 / V1
     const nameOffset = nameKey ? 1 : 0;
-    const baseOffset = nameOffset + standardLen + storedKeys.length;
-    try {
-      await updateHeaderCells(
-        accessToken,
-        sheet.spreadsheet_id,
-        sheet.sheet_tab,
-        newCols.map((c, i) => ({ colIndex: baseOffset + i, value: c.header })),
-      );
-    } catch (err) {
-      // Non-fatal — the column still gets persisted below and its data
-      // still lands in the right position; only the header label write
-      // failed. Logged for visibility, not thrown.
-      console.error("[sheet-sync] header extend failed:", err);
+    const baseOffset = nameOffset + standardLen;
+
+    const cellUpdates: Array<{ colIndex: number; value: string }> = [];
+    for (const i of renamedIndices) {
+      cellUpdates.push({ colIndex: baseOffset + i, value: mergedHeaders[i] });
+    }
+    newCols.forEach((c, i) => {
+      cellUpdates.push({ colIndex: baseOffset + storedKeys.length + i, value: c.header });
+    });
+    if (nameHeaderRenamed) {
+      cellUpdates.push({ colIndex: 0, value: effectiveNameHeader! });
+    }
+
+    if (cellUpdates.length > 0) {
+      try {
+        await updateHeaderCells(accessToken, sheet.spreadsheet_id, sheet.sheet_tab, cellUpdates);
+      } catch (err) {
+        // Non-fatal — persisted state below still gets updated so the next
+        // sync retries the header write; only the label edit failed here.
+        console.error("[sheet-sync] header update failed:", err);
+      }
     }
   }
 
@@ -139,7 +173,7 @@ export async function resolveFlowSheetColumns(
       answer_columns: mergedKeys,
       answer_headers: mergedHeaders,
       name_column_key: nameKey,
-      name_column_header: nameHeader,
+      name_column_header: effectiveNameHeader,
       updated_at: new Date().toISOString(),
     })
     .eq("flow_id", flowId)
@@ -149,7 +183,7 @@ export async function resolveFlowSheetColumns(
   return {
     sheet: updated ?? sheet,
     nameKey,
-    nameHeader,
+    nameHeader: effectiveNameHeader,
     keys: mergedKeys,
     headers: mergedHeaders,
   };
