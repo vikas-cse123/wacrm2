@@ -18,56 +18,27 @@ import { getValidAccessToken, googleOAuthConfigured } from "@/lib/google/oauth";
 import {
   createSpreadsheet,
   getSpreadsheet,
-  headerFromPrompt,
   parseSpreadsheetId,
+  CURRENT_SHEET_SCHEMA_VERSION,
 } from "@/lib/google/sheets";
+import { deriveFlowColumns, type FlowNodeLite } from "@/lib/flows/sheet-columns";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Answer columns captured by this flow's collect_input nodes, in order:
- * `keys` are the var_keys (used to look up each answer), `headers` are the
- * question prompts (used for the sheet's header row). Same length/order.
+ * Every question node this flow currently has, split into the promoted
+ * "Name" slot (if any) and the rest, in flow order. Used both to seed a
+ * brand-new link and to recompute after a relink.
  */
-async function answerColumnsForFlow(
+async function deriveColumnsForFlow(
   db: SupabaseClient,
   flowId: string,
-): Promise<{ keys: string[]; headers: string[] }> {
-  // Every question-asking node maps to a column:
-  //   - collect_input → keyed by its var_key, value from the typed reply.
-  //   - send_buttons / send_list → keyed by node_key, value from the tapped
-  //     option's label (the engine records it into vars on tap).
+): Promise<ReturnType<typeof deriveFlowColumns>> {
   const { data: nodes } = await db
     .from("flow_nodes")
-    .select("node_type, node_key, config, created_at")
+    .select("node_key, node_type, config")
     .eq("flow_id", flowId)
-    .in("node_type", ["collect_input", "send_buttons", "send_list"])
     .order("created_at", { ascending: true });
-
-  const seen = new Set<string>();
-  const keys: string[] = [];
-  const headers: string[] = [];
-  for (const n of nodes ?? []) {
-    const cfg = n.config as {
-      var_key?: string;
-      prompt_text?: string;
-      text?: string;
-      sheet_include?: boolean;
-      sheet_column_name?: string;
-    };
-    // Opt-out: skip questions the author excluded from the sheet.
-    if (cfg.sheet_include === false) continue;
-
-    const isCollect = n.node_type === "collect_input";
-    const key = isCollect ? cfg.var_key : n.node_key;
-    const prompt = isCollect ? cfg.prompt_text : cfg.text;
-    if (!key || seen.has(key)) continue;
-
-    seen.add(key);
-    keys.push(key);
-    const custom = (cfg.sheet_column_name ?? "").trim();
-    headers.push(custom || headerFromPrompt(prompt, key));
-  }
-  return { keys, headers };
+  return deriveFlowColumns((nodes ?? []) as FlowNodeLite[], true);
 }
 
 async function assertOwnedFlow(
@@ -124,8 +95,6 @@ async function linkSheet(
   flowId: string,
   meta: { spreadsheetId: string; url: string; title: string; tab: string },
 ) {
-  const { keys, headers } = await answerColumnsForFlow(ctx.supabase, flowId);
-
   // Re-linking the SAME spreadsheet (e.g. just to pick up a renamed
   // column or a newly-included question) must not re-trigger the header
   // write — the header row is already there. Only a genuinely different
@@ -133,13 +102,27 @@ async function linkSheet(
   // the next sync writes a fresh header into the new sheet.
   const { data: existing } = await ctx.supabase
     .from("flow_sheet_configs")
-    .select("spreadsheet_id, header_written")
+    .select("spreadsheet_id, header_written, schema_version")
     .eq("flow_id", flowId)
     .maybeSingle();
-  const headerWritten =
-    existing?.spreadsheet_id === meta.spreadsheetId
-      ? (existing?.header_written ?? false)
-      : false;
+
+  const sameSpreadsheet = existing?.spreadsheet_id === meta.spreadsheetId;
+  const headerWritten = sameSpreadsheet ? (existing?.header_written ?? false) : false;
+  // A genuinely fresh header (new spreadsheet, or one never synced yet)
+  // adopts the current schema (v2: no WhatsApp-name column, flow-captured
+  // name promoted first). Relinking the SAME spreadsheet that already has
+  // a header keeps whatever version it was written under — the on-sheet
+  // header text can't be silently reflowed.
+  const isFreshHeader = !sameSpreadsheet || !headerWritten;
+  const schemaVersion = isFreshHeader
+    ? CURRENT_SHEET_SCHEMA_VERSION
+    : (existing?.schema_version ?? 1);
+
+  const derived = await deriveColumnsForFlow(ctx.supabase, flowId);
+  const promoteName = schemaVersion >= 2;
+  const nameKey = promoteName ? (derived.name?.key ?? null) : null;
+  const nameHeader = promoteName ? (derived.name?.header ?? null) : null;
+  const rest = promoteName ? derived.rest : [...(derived.name ? [derived.name] : []), ...derived.rest];
 
   const { data, error } = await ctx.supabase
     .from("flow_sheet_configs")
@@ -151,8 +134,11 @@ async function linkSheet(
         spreadsheet_url: meta.url,
         spreadsheet_name: meta.title,
         sheet_tab: meta.tab,
-        answer_columns: keys,
-        answer_headers: headers,
+        answer_columns: rest.map((c) => c.key),
+        answer_headers: rest.map((c) => c.header),
+        name_column_key: nameKey,
+        name_column_header: nameHeader,
+        schema_version: schemaVersion,
         header_written: headerWritten,
         updated_at: new Date().toISOString(),
       },

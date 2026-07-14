@@ -36,9 +36,11 @@ import { supabaseAdmin } from "./admin-client";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRow,
-  STANDARD_COLUMNS,
+  STANDARD_COLUMNS_V1,
+  STANDARD_COLUMNS_V2,
   formatSubmissionTimeIST,
 } from "@/lib/google/sheets";
+import { resolveFlowSheetColumns } from "./sheet-sync";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -165,45 +167,46 @@ async function syncRunToGoogleSheet(
   db: AdminClient,
   run: FlowRunRow,
 ): Promise<"synced" | "not_linked"> {
-  const { data: sheet } = await db
-    .from("flow_sheet_configs")
-    .select("*")
-    .eq("flow_id", run.flow_id)
-    .maybeSingle();
+  const token = await getValidAccessToken(db, run.account_id).catch(() => null);
 
-  // Flow has no sheet linked — nothing to sync, and not an error.
-  if (!sheet) return "not_linked";
+  // Reconcile columns against the flow's CURRENT nodes before building the
+  // row — a question added (or newly marked "include in sheet") after the
+  // sheet was linked shows up starting this sync, no manual relink needed.
+  const resolved = await resolveFlowSheetColumns(db, run.flow_id, token);
+  if (!resolved) return "not_linked"; // no sheet linked — not an error.
+  const { sheet, nameKey, keys: answerColumns, headers: answerHeaders } = resolved;
 
   const [{ data: contact }, { data: flow }] = await Promise.all([
     run.contact_id
-      ? db
-          .from("contacts")
-          .select("name, phone")
-          .eq("id", run.contact_id)
-          .maybeSingle()
-      : Promise.resolve({ data: null as { name?: string; phone?: string } | null }),
+      ? db.from("contacts").select("phone").eq("id", run.contact_id).maybeSingle()
+      : Promise.resolve({ data: null as { phone?: string } | null }),
     db.from("flows").select("name").eq("id", run.flow_id).maybeSingle(),
   ]);
 
-  const answerColumns: string[] = sheet.answer_columns ?? [];
-  // Prefer the question-text headers; fall back to var_keys for sheets
-  // linked before answer_headers existed.
-  const answerHeaders: string[] =
-    sheet.answer_headers && sheet.answer_headers.length === answerColumns.length
-      ? sheet.answer_headers
-      : answerColumns;
-  const headers = [...STANDARD_COLUMNS, ...answerHeaders];
+  const promoteName = (sheet.schema_version ?? 1) >= 2;
+  const nameHeaderCell = nameKey ? [resolved.nameHeader ?? "Name"] : [];
+  const nameValueCell = nameKey ? [stringifyVar(run.vars?.[nameKey])] : [];
+
+  // v2's standard columns don't include Name (promoted separately above,
+  // or omitted entirely when the flow captures none). v1 (legacy) sheets
+  // still have a "Name" header written on-sheet from before this change —
+  // its value source (WhatsApp profile name) is gone per the "remove
+  // WhatsApp name" change, so that cell is simply left blank going
+  // forward; the column stays to keep every later cell aligned under its
+  // original header.
+  const standardColumns = promoteName ? STANDARD_COLUMNS_V2 : STANDARD_COLUMNS_V1;
+  const standardValues = promoteName
+    ? [contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(), run.contact_id ?? ""]
+    : ["", contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(), run.contact_id ?? ""];
+
+  const headers = [...nameHeaderCell, ...standardColumns, ...answerHeaders];
   const values = [
-    contact?.name ?? "",
-    contact?.phone ?? "",
-    flow?.name ?? "",
-    formatSubmissionTimeIST(),
-    run.contact_id ?? "",
+    ...nameValueCell,
+    ...standardValues,
     ...answerColumns.map((k) => stringifyVar(run.vars?.[k])),
   ];
 
   try {
-    const token = await getValidAccessToken(db, run.account_id);
     if (!token) throw new Error("no_google_connection");
 
     if (!sheet.header_written) {

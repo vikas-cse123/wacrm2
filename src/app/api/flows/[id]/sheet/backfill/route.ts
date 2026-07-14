@@ -11,9 +11,11 @@ import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRows,
-  STANDARD_COLUMNS,
+  STANDARD_COLUMNS_V1,
+  STANDARD_COLUMNS_V2,
   formatSubmissionTimeIST,
 } from "@/lib/google/sheets";
+import { resolveFlowSheetColumns } from "@/lib/flows/sheet-sync";
 
 function stringifyVar(v: unknown): string {
   if (v == null) return "";
@@ -29,20 +31,6 @@ export async function POST(
     const { id } = await context.params;
     const ctx = await requireRole("admin");
 
-    // Ownership + sheet link.
-    const { data: sheet } = await ctx.supabase
-      .from("flow_sheet_configs")
-      .select("*")
-      .eq("flow_id", id)
-      .eq("account_id", ctx.accountId)
-      .maybeSingle();
-    if (!sheet) {
-      return NextResponse.json(
-        { error: "Link a spreadsheet first." },
-        { status: 400 },
-      );
-    }
-
     const token = await getValidAccessToken(ctx.supabase, ctx.accountId);
     if (!token) {
       return NextResponse.json(
@@ -50,6 +38,17 @@ export async function POST(
         { status: 400 },
       );
     }
+
+    // Ownership + sheet link, reconciled against the flow's current nodes
+    // (picks up any question added/renamed since the sheet was linked).
+    const resolved = await resolveFlowSheetColumns(ctx.supabase, id, token);
+    if (!resolved || resolved.sheet.account_id !== ctx.accountId) {
+      return NextResponse.json(
+        { error: "Link a spreadsheet first." },
+        { status: 400 },
+      );
+    }
+    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders } = resolved;
 
     // All completed runs for this flow, oldest first.
     const { data: runs } = await ctx.supabase
@@ -63,20 +62,22 @@ export async function POST(
       return NextResponse.json({ imported: 0 });
     }
 
-    // Batch-load the contacts referenced by those runs.
+    // Batch-load the contacts referenced by those runs (phone only — the
+    // WhatsApp profile name is no longer synced; see the "remove
+    // WhatsApp name" change).
     const contactIds = [
       ...new Set(
         runs.map((r) => r.contact_id).filter((x): x is string => !!x),
       ),
     ];
-    const contactMap = new Map<string, { name?: string; phone?: string }>();
+    const contactMap = new Map<string, { phone?: string }>();
     if (contactIds.length > 0) {
       const { data: contacts } = await ctx.supabase
         .from("contacts")
-        .select("id, name, phone")
+        .select("id, phone")
         .in("id", contactIds);
       for (const c of contacts ?? []) {
-        contactMap.set(c.id, { name: c.name, phone: c.phone });
+        contactMap.set(c.id, { phone: c.phone });
       }
     }
 
@@ -86,20 +87,20 @@ export async function POST(
       .eq("id", id)
       .maybeSingle();
 
-    const answerColumns: string[] = sheet.answer_columns ?? [];
-    const answerHeaders: string[] =
-      sheet.answer_headers && sheet.answer_headers.length === answerColumns.length
-        ? sheet.answer_headers
-        : answerColumns;
+    const promoteName = (sheet.schema_version ?? 1) >= 2;
+    const standardColumns = promoteName ? STANDARD_COLUMNS_V2 : STANDARD_COLUMNS_V1;
+    const nameHeaderCell = nameKey ? [nameHeader ?? "Name"] : [];
+
     const rows: (string | number)[][] = runs.map((run) => {
       const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
+      const nameValueCell = nameKey ? [stringifyVar(vars[nameKey])] : [];
+      const standardValues = promoteName
+        ? [contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(run.ended_at ?? run.started_at), run.contact_id ?? ""]
+        : ["", contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(run.ended_at ?? run.started_at), run.contact_id ?? ""];
       return [
-        contact?.name ?? "",
-        contact?.phone ?? "",
-        flow?.name ?? "",
-        formatSubmissionTimeIST(run.ended_at ?? run.started_at),
-        run.contact_id ?? "",
+        ...nameValueCell,
+        ...standardValues,
         ...answerColumns.map((k) => stringifyVar(vars[k])),
       ];
     });
@@ -107,7 +108,7 @@ export async function POST(
     // Write the header row first if the sheet has never been synced.
     const toWrite = sheet.header_written
       ? rows
-      : [[...STANDARD_COLUMNS, ...answerHeaders], ...rows];
+      : [[...nameHeaderCell, ...standardColumns, ...answerHeaders], ...rows];
 
     await appendRows(token, sheet.spreadsheet_id, sheet.sheet_tab, toWrite);
 
