@@ -16,10 +16,10 @@ function stringifyVar(v: unknown): string {
 
 export async function POST(
   request: Request,
-  context: { params: Promise<{ flowId: string }> },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { flowId } = await context.params;
+    const { id: flowId } = await context.params;
     const ctx = await getCurrentAccount();
 
     // Verify flow ownership
