@@ -15,38 +15,6 @@ function stringifyVar(v: unknown): string {
   return String(v);
 }
 
-function getDateRange(filter: string): [Date, Date] {
-  const now = new Date();
-  const start = new Date(now);
-  const end = new Date(now);
-
-  switch (filter) {
-    case "yesterday":
-      start.setDate(start.getDate() - 1);
-      end.setDate(end.getDate() - 1);
-      break;
-    case "2days":
-      start.setDate(start.getDate() - 2);
-      break;
-    case "3days":
-      start.setDate(start.getDate() - 3);
-      break;
-    case "4days":
-      start.setDate(start.getDate() - 4);
-      break;
-    case "week":
-      start.setDate(start.getDate() - 7);
-      break;
-    case "month":
-      start.setMonth(start.getMonth() - 1);
-      break;
-    case "all":
-      start.setFullYear(1970);
-      break;
-  }
-
-  return [new Date(start.toISOString().split("T")[0]), new Date(end.toISOString().split("T")[0] + "T23:59:59Z")];
-}
 
 export async function POST(
   request: Request,
@@ -55,8 +23,6 @@ export async function POST(
   try {
     const { flowId } = await context.params;
     const ctx = await getCurrentAccount();
-    const body = await request.json();
-    const dateFilter = String(body.dateFilter ?? "week");
 
     const token = await getValidAccessToken(ctx.supabase, ctx.accountId);
     if (!token) {
@@ -76,14 +42,11 @@ export async function POST(
 
     const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
-    const [dateStart, dateEnd] = getDateRange(dateFilter);
     const { data: runs } = await ctx.supabase
       .from("flow_runs")
       .select("id, contact_id, vars, started_at, ended_at")
       .eq("flow_id", flowId)
       .eq("status", "completed")
-      .gte("ended_at", dateStart.toISOString())
-      .lte("ended_at", dateEnd.toISOString())
       .order("started_at", { ascending: true });
 
     if (!runs || runs.length === 0) {
