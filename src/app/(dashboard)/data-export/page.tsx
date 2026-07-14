@@ -13,16 +13,22 @@ interface LinkedSheet {
   sheet_tab: string;
 }
 
+interface FlowWithDroppedCount {
+  flow_id: string;
+  flow_name: string;
+  droppedCount: number;
+}
+
 export default function DataExportPage() {
   const [sheets, setSheets] = useState<LinkedSheet[]>([]);
   const [sheetsLoading, setSheetsLoading] = useState(true);
-  const [droppedOffCount, setDroppedOffCount] = useState<number | null>(null);
-  const [droppedOffLoading, setDroppedOffLoading] = useState(true);
-  const [generatingDroppedOff, setGeneratingDroppedOff] = useState(false);
+  const [flows, setFlows] = useState<FlowWithDroppedCount[]>([]);
+  const [flowsLoading, setFlowsLoading] = useState(true);
+  const [generatingFlowId, setGeneratingFlowId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSheets();
-    fetchDroppedOffCount();
+    fetchFlows();
   }, []);
 
   async function fetchSheets() {
@@ -38,17 +44,17 @@ export default function DataExportPage() {
     }
   }
 
-  async function fetchDroppedOffCount() {
+  async function fetchFlows() {
     try {
-      const res = await fetch("/api/dropped-off-users/query");
-      if (!res.ok) throw new Error("Failed to fetch count");
+      const res = await fetch("/api/flows/dropped-off");
+      if (!res.ok) throw new Error("Failed to fetch flows");
       const data = await res.json();
-      setDroppedOffCount(data.count);
+      setFlows(data.flows);
     } catch (err) {
       console.error(err);
-      setDroppedOffCount(0);
+      setFlows([]);
     } finally {
-      setDroppedOffLoading(false);
+      setFlowsLoading(false);
     }
   }
 
@@ -80,10 +86,10 @@ export default function DataExportPage() {
     }
   }
 
-  async function handleGenerateDroppedOff() {
-    setGeneratingDroppedOff(true);
+  async function handleGenerateDroppedOff(flowId: string) {
+    setGeneratingFlowId(flowId);
     try {
-      const res = await fetch("/api/dropped-off-users/generate", {
+      const res = await fetch(`/api/flows/${flowId}/dropped-off`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -95,7 +101,7 @@ export default function DataExportPage() {
     } catch (err) {
       alert(`Error: ${err instanceof Error ? err.message : "Generation failed"}`);
     } finally {
-      setGeneratingDroppedOff(false);
+      setGeneratingFlowId(null);
     }
   }
 
@@ -171,31 +177,48 @@ export default function DataExportPage() {
 
         {/* Dropped Off Users Tab */}
         <TabsContent value="dropped-off" className="space-y-4">
-          <div className="rounded-lg border border-border bg-card p-6">
-            <p className="text-sm text-muted-foreground mb-4">
-              Generate a sheet with all users who stopped messaging before completing a flow.
-              This includes all incomplete and abandoned runs across all flows.
-            </p>
-            {droppedOffLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Counting users...
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground mb-4">
-                <strong>{droppedOffCount}</strong> users found
+          <p className="text-sm text-muted-foreground">
+            Generate sheets for users who stopped messaging before completing each flow.
+          </p>
+          {flowsLoading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : flows.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border bg-muted/50 p-8 text-center">
+              <p className="text-sm text-muted-foreground">
+                No flows found, or no users have abandoned any flows yet.
               </p>
-            )}
-            <Button
-              onClick={handleGenerateDroppedOff}
-              disabled={generatingDroppedOff || droppedOffLoading || (droppedOffCount ?? 0) === 0}
-            >
-              {generatingDroppedOff && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              <Download className="mr-2 h-4 w-4" />
-              Generate Sheet
-            </Button>
-          </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {flows.map((flow) => (
+                <div
+                  key={flow.flow_id}
+                  className="flex items-center justify-between rounded-lg border border-border bg-card p-4"
+                >
+                  <div className="flex-1">
+                    <h3 className="font-medium text-foreground">{flow.flow_name}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {flow.droppedCount} user{flow.droppedCount !== 1 ? "s" : ""} abandoned this flow
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateDroppedOff(flow.flow_id)}
+                    disabled={generatingFlowId === flow.flow_id || flow.droppedCount === 0}
+                  >
+                    {generatingFlowId === flow.flow_id && (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    )}
+                    <Download className="mr-2 h-4 w-4" />
+                    Generate
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </div>

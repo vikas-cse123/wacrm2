@@ -1,6 +1,11 @@
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
 import { getValidAccessToken } from "@/lib/google/oauth";
-import { createSpreadsheet, appendRows, formatSubmissionTimeIST, STANDARD_COLUMNS_V2 } from "@/lib/google/sheets";
+import {
+  createSpreadsheet,
+  appendRows,
+  formatSubmissionTimeIST,
+  STANDARD_COLUMNS_V2,
+} from "@/lib/google/sheets";
 import { NextResponse } from "next/server";
 
 function stringifyVar(v: unknown): string {
@@ -9,9 +14,25 @@ function stringifyVar(v: unknown): string {
   return String(v);
 }
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ flowId: string }> },
+) {
   try {
+    const { flowId } = await context.params;
     const ctx = await getCurrentAccount();
+
+    // Verify flow ownership
+    const { data: flow } = await ctx.supabase
+      .from("flows")
+      .select("id, name")
+      .eq("id", flowId)
+      .eq("account_id", ctx.accountId)
+      .maybeSingle();
+
+    if (!flow) {
+      return NextResponse.json({ error: "Flow not found" }, { status: 404 });
+    }
 
     const token = await getValidAccessToken(ctx.supabase, ctx.accountId);
     if (!token) {
@@ -21,10 +42,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Get ALL incomplete/abandoned runs from any flow
+    // Get all incomplete/abandoned runs for THIS FLOW
     const { data: droppedRuns } = await ctx.supabase
       .from("flow_runs")
-      .select("id, contact_id, vars, started_at, ended_at, flow_id")
+      .select("id, contact_id, vars, started_at, ended_at")
+      .eq("flow_id", flowId)
       .neq("status", "completed")
       .order("started_at", { ascending: true });
 
@@ -33,8 +55,17 @@ export async function POST(request: Request) {
     }
 
     // Get unique contacts
-    const contactIds = [...new Set(droppedRuns.map((r: any) => r.contact_id).filter(Boolean))];
-    const contactMap = new Map<string, { name?: string; phone?: string }>();
+    const contactIds = [
+      ...new Set(
+        droppedRuns
+          .map((r: any) => r.contact_id)
+          .filter(Boolean),
+      ),
+    ];
+    const contactMap = new Map<
+      string,
+      { name?: string; phone?: string }
+    >();
     if (contactIds.length > 0) {
       const { data: contacts } = await ctx.supabase
         .from("contacts")
@@ -46,35 +77,50 @@ export async function POST(request: Request) {
     }
 
     // Create a new spreadsheet
-    const title = `Dropped Off Users — ${new Date().toISOString().split("T")[0]}`;
+    const title = `${flow.name} — Dropped Off Users`;
     const meta = await createSpreadsheet(token, title);
 
-    // Build rows with standard columns + all vars
-    const standardColumns = STANDARD_COLUMNS_V2;
+    // Build rows with standard columns + all vars from those runs
     const allVarKeys = new Set<string>();
     droppedRuns.forEach((run: any) => {
       Object.keys(run.vars ?? {}).forEach((k) => allVarKeys.add(k));
     });
 
-    const headers = ["Name", ...standardColumns, ...Array.from(allVarKeys)];
+    const headers = [
+      "Name",
+      ...STANDARD_COLUMNS_V2,
+      ...Array.from(allVarKeys),
+    ];
     const rows = droppedRuns.map((run: any) => {
-      const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
+      const contact = run.contact_id
+        ? contactMap.get(run.contact_id)
+        : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
       return [
         contact?.name ?? "",
         contact?.phone ?? "",
-        "", // flow name would require lookup
+        flow.name,
         formatSubmissionTimeIST(run.ended_at ?? run.started_at),
         run.contact_id ?? "",
-        ...Array.from(allVarKeys).map((k) => stringifyVar(vars[k])),
+        ...Array.from(allVarKeys).map((k) =>
+          stringifyVar(vars[k]),
+        ),
       ];
     });
 
     // Append header + rows
     const toWrite = [[...headers], ...rows];
-    await appendRows(token, meta.spreadsheetId, meta.firstSheetTitle, toWrite);
+    await appendRows(
+      token,
+      meta.spreadsheetId,
+      meta.firstSheetTitle,
+      toWrite,
+    );
 
-    return NextResponse.json({ rowCount: rows.length, sheetUrl: meta.url });
+    return NextResponse.json({
+      rowCount: rows.length,
+      sheetUrl: meta.url,
+    });
   } catch (err) {
     return toErrorResponse(err);
   }
