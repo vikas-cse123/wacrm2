@@ -9,7 +9,11 @@ import { NextResponse } from "next/server";
 
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { getValidAccessToken } from "@/lib/google/oauth";
-import { appendRows, STANDARD_COLUMNS } from "@/lib/google/sheets";
+import {
+  appendRows,
+  STANDARD_COLUMNS,
+  formatSubmissionTimeIST,
+} from "@/lib/google/sheets";
 
 function stringifyVar(v: unknown): string {
   if (v == null) return "";
@@ -65,14 +69,14 @@ export async function POST(
         runs.map((r) => r.contact_id).filter((x): x is string => !!x),
       ),
     ];
-    const contactMap = new Map<string, { name?: string; phone?: string }>();
+    const contactMap = new Map<string, { phone?: string }>();
     if (contactIds.length > 0) {
       const { data: contacts } = await ctx.supabase
         .from("contacts")
-        .select("id, name, phone")
+        .select("id, phone")
         .in("id", contactIds);
       for (const c of contacts ?? []) {
-        contactMap.set(c.id, { name: c.name, phone: c.phone });
+        contactMap.set(c.id, { phone: c.phone });
       }
     }
 
@@ -83,14 +87,17 @@ export async function POST(
       .maybeSingle();
 
     const answerColumns: string[] = sheet.answer_columns ?? [];
+    const answerHeaders: string[] =
+      sheet.answer_headers && sheet.answer_headers.length === answerColumns.length
+        ? sheet.answer_headers
+        : answerColumns;
     const rows: (string | number)[][] = runs.map((run) => {
       const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
       return [
-        contact?.name ?? "",
         contact?.phone ?? "",
         flow?.name ?? "",
-        run.ended_at ?? run.started_at ?? "",
+        formatSubmissionTimeIST(run.ended_at ?? run.started_at),
         run.contact_id ?? "",
         ...answerColumns.map((k) => stringifyVar(vars[k])),
       ];
@@ -99,7 +106,7 @@ export async function POST(
     // Write the header row first if the sheet has never been synced.
     const toWrite = sheet.header_written
       ? rows
-      : [[...STANDARD_COLUMNS, ...answerColumns], ...rows];
+      : [[...STANDARD_COLUMNS, ...answerHeaders], ...rows];
 
     await appendRows(token, sheet.spreadsheet_id, sheet.sheet_tab, toWrite);
 

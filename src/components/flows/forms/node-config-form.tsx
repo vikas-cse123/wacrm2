@@ -1074,6 +1074,7 @@ interface SheetConfigRow {
   spreadsheet_name: string | null;
   sheet_tab: string;
   answer_columns: string[];
+  answer_headers?: string[];
 }
 
 function GoogleSheetsSyncForm({
@@ -1287,9 +1288,12 @@ function GoogleSheetsSyncForm({
                 {sheet.spreadsheet_name || sheet.spreadsheet_id}
               </a>
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Columns: Name, Phone Number, Flow Name, Submission Time, User ID
-                {sheet.answer_columns.length > 0
-                  ? `, ${sheet.answer_columns.join(", ")}`
+                Columns: Phone Number, Flow Name, Submission Time, User ID
+                {(sheet.answer_headers?.length
+                  ? sheet.answer_headers
+                  : sheet.answer_columns
+                ).length > 0
+                  ? `, ${(sheet.answer_headers?.length ? sheet.answer_headers : sheet.answer_columns).join(", ")}`
                   : ""}
               </p>
 

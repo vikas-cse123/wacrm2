@@ -18,15 +18,20 @@ import { getValidAccessToken, googleOAuthConfigured } from "@/lib/google/oauth";
 import {
   createSpreadsheet,
   getSpreadsheet,
+  headerFromPrompt,
   parseSpreadsheetId,
 } from "@/lib/google/sheets";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** Ordered var_keys captured by this flow's collect_input nodes. */
+/**
+ * Answer columns captured by this flow's collect_input nodes, in order:
+ * `keys` are the var_keys (used to look up each answer), `headers` are the
+ * question prompts (used for the sheet's header row). Same length/order.
+ */
 async function answerColumnsForFlow(
   db: SupabaseClient,
   flowId: string,
-): Promise<string[]> {
+): Promise<{ keys: string[]; headers: string[] }> {
   const { data: nodes } = await db
     .from("flow_nodes")
     .select("node_type, config, created_at")
@@ -35,15 +40,18 @@ async function answerColumnsForFlow(
     .order("created_at", { ascending: true });
 
   const seen = new Set<string>();
-  const cols: string[] = [];
+  const keys: string[] = [];
+  const headers: string[] = [];
   for (const n of nodes ?? []) {
-    const key = (n.config as { var_key?: string })?.var_key;
+    const cfg = n.config as { var_key?: string; prompt_text?: string };
+    const key = cfg?.var_key;
     if (key && !seen.has(key)) {
       seen.add(key);
-      cols.push(key);
+      keys.push(key);
+      headers.push(headerFromPrompt(cfg.prompt_text, key));
     }
   }
-  return cols;
+  return { keys, headers };
 }
 
 async function assertOwnedFlow(
@@ -100,7 +108,7 @@ async function linkSheet(
   flowId: string,
   meta: { spreadsheetId: string; url: string; title: string; tab: string },
 ) {
-  const answerColumns = await answerColumnsForFlow(ctx.supabase, flowId);
+  const { keys, headers } = await answerColumnsForFlow(ctx.supabase, flowId);
   const { data, error } = await ctx.supabase
     .from("flow_sheet_configs")
     .upsert(
@@ -111,7 +119,8 @@ async function linkSheet(
         spreadsheet_url: meta.url,
         spreadsheet_name: meta.title,
         sheet_tab: meta.tab,
-        answer_columns: answerColumns,
+        answer_columns: keys,
+        answer_headers: headers,
         header_written: false,
         updated_at: new Date().toISOString(),
       },
