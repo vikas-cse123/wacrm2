@@ -6,7 +6,6 @@ import {
   LayoutGrid,
   Palette,
   PlugZap,
-  Route,
   Shield,
   Tags,
   User,
@@ -34,7 +33,6 @@ export const SETTINGS_SECTIONS = [
   'fields',
   'deals',
   'members',
-  'assignment',
   'api',
   'webhooks',
 ] as const;
@@ -62,7 +60,6 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
   members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
-  assignment: { id: 'assignment', label: 'Chat assignment', icon: Route, group: 'workspace' },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
    webhooks: { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'workspace' }
 };
