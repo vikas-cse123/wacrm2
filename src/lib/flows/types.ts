@@ -48,6 +48,10 @@ export interface SendButtonsNodeConfig {
     /** node_key the runner advances to when this button is tapped. */
     next_node_key: string;
   }>;
+  /** Record the tapped choice as a Google Sheet column (default true). */
+  sheet_include?: boolean;
+  /** Custom header for this question's Google Sheet column; blank → body text. */
+  sheet_column_name?: string;
 }
 
 export interface SendListNodeConfig {
@@ -66,6 +70,10 @@ export interface SendListNodeConfig {
       next_node_key: string;
     }>;
   }>;
+  /** Record the tapped choice as a Google Sheet column (default true). */
+  sheet_include?: boolean;
+  /** Custom header for this question's Google Sheet column; blank → body text. */
+  sheet_column_name?: string;
 }
 
 /**

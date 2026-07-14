@@ -7,8 +7,10 @@
 
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 
-/** Standard leading columns present on every synced sheet, in order. */
+/** Standard leading columns present on every synced sheet, in order.
+ * "Name" is the contact's name when available (blank otherwise). */
 export const STANDARD_COLUMNS = [
+  "Name",
   "Phone Number",
   "Flow Name",
   "Submission Time",

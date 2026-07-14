@@ -161,8 +161,8 @@ export function NodeConfigForm({
               .
             </p>
           </div>
-          <CollectInputSheetSettings
-            cfg={cfg as CollectInputSheetCfg}
+          <NodeSheetSettings
+            cfg={cfg as NodeSheetCfg}
             onUpdateConfig={onUpdateConfig}
           />
           <NextNodeRow
@@ -226,19 +226,20 @@ export function NodeConfigForm({
 }
 
 // ============================================================
-// collect_input — Google Sheet column settings
+// Google Sheet column settings — shared by the question-asking nodes
+// (collect_input, send_buttons, send_list).
 // ============================================================
 
-interface CollectInputSheetCfg {
+interface NodeSheetCfg {
   sheet_include?: boolean;
   sheet_column_name?: string;
 }
 
-function CollectInputSheetSettings({
+function NodeSheetSettings({
   cfg,
   onUpdateConfig,
 }: {
-  cfg: CollectInputSheetCfg;
+  cfg: NodeSheetCfg;
   onUpdateConfig: (patch: Record<string, unknown>) => void;
 }) {
   // Default ON — every captured answer is included unless turned off.
@@ -402,6 +403,7 @@ function SendButtonsForm({
           </Button>
         )}
       </div>
+      <NodeSheetSettings cfg={cfg as NodeSheetCfg} onUpdateConfig={onUpdateConfig} />
     </>
   );
 }
@@ -639,6 +641,7 @@ function SendListForm({
           </Button>
         )}
       </div>
+      <NodeSheetSettings cfg={cfg as NodeSheetCfg} onUpdateConfig={onUpdateConfig} />
     </>
   );
 }

@@ -69,14 +69,14 @@ export async function POST(
         runs.map((r) => r.contact_id).filter((x): x is string => !!x),
       ),
     ];
-    const contactMap = new Map<string, { phone?: string }>();
+    const contactMap = new Map<string, { name?: string; phone?: string }>();
     if (contactIds.length > 0) {
       const { data: contacts } = await ctx.supabase
         .from("contacts")
-        .select("id, phone")
+        .select("id, name, phone")
         .in("id", contactIds);
       for (const c of contacts ?? []) {
-        contactMap.set(c.id, { phone: c.phone });
+        contactMap.set(c.id, { name: c.name, phone: c.phone });
       }
     }
 
@@ -95,6 +95,7 @@ export async function POST(
       const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
       return [
+        contact?.name ?? "",
         contact?.phone ?? "",
         flow?.name ?? "",
         formatSubmissionTimeIST(run.ended_at ?? run.started_at),

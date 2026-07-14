@@ -178,10 +178,10 @@ async function syncRunToGoogleSheet(
     run.contact_id
       ? db
           .from("contacts")
-          .select("phone")
+          .select("name, phone")
           .eq("id", run.contact_id)
           .maybeSingle()
-      : Promise.resolve({ data: null as { phone?: string } | null }),
+      : Promise.resolve({ data: null as { name?: string; phone?: string } | null }),
     db.from("flows").select("name").eq("id", run.flow_id).maybeSingle(),
   ]);
 
@@ -194,6 +194,7 @@ async function syncRunToGoogleSheet(
       : answerColumns;
   const headers = [...STANDARD_COLUMNS, ...answerHeaders];
   const values = [
+    contact?.name ?? "",
     contact?.phone ?? "",
     flow?.name ?? "",
     formatSubmissionTimeIST(),
@@ -1051,6 +1052,21 @@ async function handleReplyForActiveRun(
       currentNode.node_type === "send_list")
   ) {
     matched = matchReplyId(currentNode, message.reply_id);
+    if (matched) {
+      // Record the tapped choice into vars, keyed by the node, so button /
+      // list questions can surface as Google Sheet columns just like
+      // free-text answers. Stored regardless of the sheet toggle — cheap,
+      // and column inclusion is decided when the sheet is linked.
+      const newVars = {
+        ...run.vars,
+        [currentNode.node_key]: message.reply_title,
+      };
+      const { error: capErr } = await db
+        .from("flow_runs")
+        .update({ vars: newVars })
+        .eq("id", run.id);
+      if (!capErr) run.vars = newVars;
+    }
   } else if (
     message.kind === "text" &&
     currentNode.node_type === "collect_input"
