@@ -7,15 +7,38 @@
 
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 
-/** Standard leading columns present on every synced sheet, in order.
- * "Name" is the contact's name when available (blank otherwise). */
-export const STANDARD_COLUMNS = [
+/**
+ * Standard leading columns, by schema version.
+ *
+ * v1 (legacy — sheets linked before the self-healing columns change):
+ *   Name (WhatsApp profile name), Phone Number, Flow Name, Submission
+ *   Time, User ID.
+ *
+ * v2 (current — any sheet linked/relinked from now on): no automatic
+ * WhatsApp-profile name column. If the flow itself captures a name
+ * (a question node whose var_key or column name is "Name"), that
+ * captured value is promoted to the first column instead; otherwise
+ * there's no Name column at all.
+ */
+export const STANDARD_COLUMNS_V1 = [
   "Name",
   "Phone Number",
   "Flow Name",
   "Submission Time",
   "User ID",
 ] as const;
+
+export const STANDARD_COLUMNS_V2 = [
+  "Phone Number",
+  "Flow Name",
+  "Submission Time",
+  "User ID",
+] as const;
+
+/** @deprecated use STANDARD_COLUMNS_V1 / STANDARD_COLUMNS_V2 */
+export const STANDARD_COLUMNS = STANDARD_COLUMNS_V1;
+
+export const CURRENT_SHEET_SCHEMA_VERSION = 2;
 
 /**
  * Format a timestamp as India Standard Time for the "Submission Time"
@@ -158,5 +181,54 @@ export async function appendRows(
   );
   if (!res.ok) {
     throw new Error(`Google Sheets append failed (${res.status}): ${await res.text()}`);
+  }
+}
+
+/** 0-based column index → A1 letters (0 → A, 25 → Z, 26 → AA, …). */
+export function columnLetter(index: number): string {
+  let n = index + 1;
+  let out = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+/**
+ * Write specific header-row cells without touching any other cell — used
+ * to extend an already-written header with newly-discovered columns, or
+ * to rename an existing one, in place. Each update is `{colIndex, value}`
+ * (0-based column index).
+ */
+export async function updateHeaderCells(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  updates: Array<{ colIndex: number; value: string }>,
+): Promise<void> {
+  if (updates.length === 0) return;
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}/values:batchUpdate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        valueInputOption: "USER_ENTERED",
+        data: updates.map((u) => ({
+          range: `${encodeURIComponent(tab)}!${columnLetter(u.colIndex)}1`,
+          values: [[u.value]],
+        })),
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets header update failed (${res.status}): ${await res.text()}`,
+    );
   }
 }
