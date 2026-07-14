@@ -186,18 +186,6 @@ export function SettingsOverview({
             }`,
     },
     {
-      section: 'templates',
-      loading: countsLoading,
-      subtitle:
-        counts?.templates == null
-          ? 'Manage message templates'
-          : `${counts.templates} template${counts.templates === 1 ? '' : 's'}${
-              counts.templatesPending
-                ? ` · ${counts.templatesPending} pending review`
-                : ''
-            }`,
-    },
-    {
       section: 'deals',
       loading: false,
       subtitle: `${defaultCurrency} — ${currencyLabel}`,
