@@ -79,7 +79,12 @@ export async function sendPushToAccount(
   payload: PushPayload,
   opts: { excludeUserId?: string } = {},
 ): Promise<void> {
-  if (!ensureConfigured()) return
+  if (!ensureConfigured()) {
+    console.warn('[push] VAPID keys not configured — skipping push')
+    return
+  }
+
+  console.log('[push] sending to account', accountId, 'payload:', payload.title)
 
   try {
     let query = supabaseAdmin()
@@ -97,10 +102,16 @@ export async function sendPushToAccount(
       console.error('[push] failed to load subscriptions:', error.message)
       return
     }
-    if (!data || data.length === 0) return
+    if (!data || data.length === 0) {
+      console.warn('[push] no subscriptions found for account', accountId)
+      return
+    }
+
+    console.log('[push] found', data.length, 'subscription(s) for account', accountId)
 
     const body = JSON.stringify(payload)
     const deadIds: string[] = []
+    let sentCount = 0
 
     await Promise.all(
       (data as (SubscriptionRow & { user_id: string })[]).map(async (row) => {
@@ -112,14 +123,15 @@ export async function sendPushToAccount(
             },
             body,
           )
+          sentCount++
+          console.log('[push] sent OK to', row.endpoint.slice(0, 60) + '...')
         } catch (err: unknown) {
           const statusCode =
             typeof err === 'object' && err !== null && 'statusCode' in err
               ? (err as { statusCode?: number }).statusCode
               : undefined
-          // 404 (Not Found) / 410 (Gone) mean the subscription is dead —
-          // the user cleared site data or uninstalled the PWA. Prune it.
           if (statusCode === 404 || statusCode === 410) {
+            console.warn('[push] dead subscription (', statusCode, ') pruning', row.id)
             deadIds.push(row.id)
           } else {
             console.error('[push] send failed:', statusCode ?? err)
@@ -127,6 +139,8 @@ export async function sendPushToAccount(
         }
       }),
     )
+
+    console.log('[push] done — sent:', sentCount, 'dead:', deadIds.length)
 
     if (deadIds.length > 0) {
       const { error: delErr } = await supabaseAdmin()
