@@ -22,13 +22,14 @@ export function useTotalUnread(): number {
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    (async () => {
+    const init = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
-      if (!userId) return;
+      if (!userId || cancelled) return;
 
       // Initial load — RLS scopes this to the signed-in user, but we also
       // explicitly filter here for clarity.
@@ -49,7 +50,7 @@ export function useTotalUnread(): number {
       setTotal(sum);
 
       // Subscribe to changes for this specific user's conversations only.
-      const channel = supabase
+      channel = supabase
         .channel(`total-unread-realtime-${userId}`)
         .on(
           "postgres_changes",
@@ -76,14 +77,13 @@ export function useTotalUnread(): number {
           },
         )
         .subscribe();
+    };
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    })();
+    init();
 
     return () => {
       cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 
