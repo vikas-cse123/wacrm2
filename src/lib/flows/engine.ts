@@ -34,7 +34,11 @@
 
 import { supabaseAdmin } from "./admin-client";
 import { getValidAccessToken } from "@/lib/google/oauth";
-import { appendRow, STANDARD_COLUMNS } from "@/lib/google/sheets";
+import {
+  appendRow,
+  STANDARD_COLUMNS,
+  formatSubmissionTimeIST,
+} from "@/lib/google/sheets";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -174,20 +178,25 @@ async function syncRunToGoogleSheet(
     run.contact_id
       ? db
           .from("contacts")
-          .select("name, phone")
+          .select("phone")
           .eq("id", run.contact_id)
           .maybeSingle()
-      : Promise.resolve({ data: null as { name?: string; phone?: string } | null }),
+      : Promise.resolve({ data: null as { phone?: string } | null }),
     db.from("flows").select("name").eq("id", run.flow_id).maybeSingle(),
   ]);
 
   const answerColumns: string[] = sheet.answer_columns ?? [];
-  const headers = [...STANDARD_COLUMNS, ...answerColumns];
+  // Prefer the question-text headers; fall back to var_keys for sheets
+  // linked before answer_headers existed.
+  const answerHeaders: string[] =
+    sheet.answer_headers && sheet.answer_headers.length === answerColumns.length
+      ? sheet.answer_headers
+      : answerColumns;
+  const headers = [...STANDARD_COLUMNS, ...answerHeaders];
   const values = [
-    contact?.name ?? "",
     contact?.phone ?? "",
     flow?.name ?? "",
-    new Date().toISOString(),
+    formatSubmissionTimeIST(),
     run.contact_id ?? "",
     ...answerColumns.map((k) => stringifyVar(run.vars?.[k])),
   ];

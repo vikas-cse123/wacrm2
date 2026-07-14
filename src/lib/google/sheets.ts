@@ -9,12 +9,37 @@ const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 
 /** Standard leading columns present on every synced sheet, in order. */
 export const STANDARD_COLUMNS = [
-  "Name",
   "Phone Number",
   "Flow Name",
   "Submission Time",
   "User ID",
 ] as const;
+
+/**
+ * Format a timestamp as India Standard Time for the "Submission Time"
+ * cell, e.g. "14 Jul 2026, 2:25 PM". Falls back to empty string on a bad
+ * input. Pass nothing to stamp "now".
+ */
+export function formatSubmissionTimeIST(input?: string | Date | null): string {
+  const d = input ? new Date(input) : new Date();
+  if (isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
+/** Derive a sheet header from a collect_input prompt, falling back to the var_key. */
+export function headerFromPrompt(prompt: string | null | undefined, fallbackKey: string): string {
+  const clean = (prompt ?? "").replace(/\s+/g, " ").trim();
+  if (!clean) return fallbackKey;
+  return clean.length > 100 ? `${clean.slice(0, 99)}…` : clean;
+}
 
 /** Pull the spreadsheet id out of a full Google Sheets URL (or accept a bare id). */
 export function parseSpreadsheetId(input: string): string | null {
