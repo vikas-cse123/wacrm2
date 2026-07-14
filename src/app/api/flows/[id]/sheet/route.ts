@@ -43,13 +43,20 @@ async function answerColumnsForFlow(
   const keys: string[] = [];
   const headers: string[] = [];
   for (const n of nodes ?? []) {
-    const cfg = n.config as { var_key?: string; prompt_text?: string };
+    const cfg = n.config as {
+      var_key?: string;
+      prompt_text?: string;
+      sheet_include?: boolean;
+      sheet_column_name?: string;
+    };
     const key = cfg?.var_key;
-    if (key && !seen.has(key)) {
-      seen.add(key);
-      keys.push(key);
-      headers.push(headerFromPrompt(cfg.prompt_text, key));
-    }
+    if (!key || seen.has(key)) continue;
+    // Opt-out: skip questions the author excluded from the sheet.
+    if (cfg.sheet_include === false) continue;
+    seen.add(key);
+    keys.push(key);
+    const custom = (cfg.sheet_column_name ?? "").trim();
+    headers.push(custom || headerFromPrompt(cfg.prompt_text, key));
   }
   return { keys, headers };
 }

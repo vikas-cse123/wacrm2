@@ -134,6 +134,17 @@ export interface CollectInputNodeConfig {
   regex?: string;
   /** Node to advance to after capture. */
   next_node_key: string;
+  /**
+   * Whether this answer becomes a column in the flow's Google Sheet.
+   * Defaults to true (every captured answer is included); set false to
+   * omit this question from the sheet.
+   */
+  sheet_include?: boolean;
+  /**
+   * Custom header for this answer's Google Sheet column. When blank, the
+   * question prompt is used as the header.
+   */
+  sheet_column_name?: string;
 }
 
 export type ConditionOperator =
