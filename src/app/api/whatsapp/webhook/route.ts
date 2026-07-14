@@ -10,7 +10,7 @@ import { resolveAssignment } from '@/lib/assignment/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
-import { sendPushToAccount, buildPreview } from '@/lib/push/send'
+import { sendPushToAccount, sendPushToUser, buildPreview } from '@/lib/push/send'
 import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
@@ -960,21 +960,21 @@ async function processMessage(
     console.error('Error updating conversation:', convError)
   }
 
-  // Web Push fan-out — notify account members who enabled notifications
-  // on a device. Fire-and-forget: a slow/failing push service must not
-  // block the webhook's 200 OK to Meta (which would trigger retries and
-  // duplicate inserts). The sender no-ops when VAPID keys are absent.
-  // Title is just the sender's phone number — no "New message from"
-  // prefix. senderPhone is digits-only, so prefix a '+'.
+  // Web Push — notify the assigned agent (or all account members if
+  // unassigned). Fire-and-forget: a slow/failing push service must not
+  // block the webhook's 200 OK to Meta.
   const senderPhoneDisplay = senderPhone ? `+${senderPhone}` : 'Unknown number'
-  void sendPushToAccount(accountId, {
+  const pushPayload: import('@/lib/push/send').PushPayload = {
     title: senderPhoneDisplay,
     body: buildPreview(contentText) || `[${message.type}]`,
     url: `/inbox?c=${conversation.id}`,
-    // One notification per conversation — a burst of messages collapses
-    // into a single, refreshed notification instead of a stack.
     tag: `conversation-${conversation.id}`,
-  })
+  }
+  if (conversation.assigned_agent_id) {
+    void sendPushToUser(conversation.assigned_agent_id, pushPayload)
+  } else {
+    void sendPushToAccount(accountId, pushPayload)
+  }
 
   // If this contact was a recent broadcast recipient, flag the reply
   // so the broadcast's `replied_count` advances (via the aggregate

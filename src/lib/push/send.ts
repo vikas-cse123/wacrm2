@@ -155,3 +155,82 @@ export async function sendPushToAccount(
     console.error('[push] unexpected error during fan-out:', err)
   }
 }
+
+/**
+ * Sends a push to a single user's devices only.
+ *
+ * Used when a conversation is assigned to a specific agent — only that
+ * agent should receive the notification, not the entire account.
+ */
+export async function sendPushToUser(
+  userId: string,
+  payload: PushPayload,
+): Promise<void> {
+  if (!ensureConfigured()) {
+    console.warn('[push] VAPID keys not configured — skipping push')
+    return
+  }
+
+  console.log('[push] sending to user', userId, 'payload:', payload.title)
+
+  try {
+    const { data, error } = await supabaseAdmin()
+      .from('push_subscriptions')
+      .select('id, endpoint, p256dh, auth')
+      .eq('user_id', userId)
+
+    if (error) {
+      console.error('[push] failed to load subscriptions for user:', error.message)
+      return
+    }
+    if (!data || data.length === 0) {
+      console.warn('[push] no subscriptions found for user', userId)
+      return
+    }
+
+    console.log('[push] found', data.length, 'subscription(s) for user', userId)
+
+    const body = JSON.stringify(payload)
+    const deadIds: string[] = []
+    let sentCount = 0
+
+    await Promise.all(
+      (data as SubscriptionRow[]).map(async (row) => {
+        try {
+          await webpush.sendNotification(
+            {
+              endpoint: row.endpoint,
+              keys: { p256dh: row.p256dh, auth: row.auth },
+            },
+            body,
+          )
+          sentCount++
+        } catch (err: unknown) {
+          const statusCode =
+            typeof err === 'object' && err !== null && 'statusCode' in err
+              ? (err as { statusCode?: number }).statusCode
+              : undefined
+          if (statusCode === 404 || statusCode === 410) {
+            deadIds.push(row.id)
+          } else {
+            console.error('[push] send failed:', statusCode ?? err)
+          }
+        }
+      }),
+    )
+
+    console.log('[push] user push done — sent:', sentCount, 'dead:', deadIds.length)
+
+    if (deadIds.length > 0) {
+      const { error: delErr } = await supabaseAdmin()
+        .from('push_subscriptions')
+        .delete()
+        .in('id', deadIds)
+      if (delErr) {
+        console.error('[push] failed to prune dead subscriptions:', delErr.message)
+      }
+    }
+  } catch (err) {
+    console.error('[push] unexpected error during user push:', err)
+  }
+}
