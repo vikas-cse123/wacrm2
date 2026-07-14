@@ -17,6 +17,7 @@ interface FlowWithDroppedCount {
   flow_id: string;
   flow_name: string;
   droppedCount: number;
+  generatedSheetUrl?: string;
 }
 
 export default function DataExportPage() {
@@ -94,10 +95,19 @@ export default function DataExportPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      if (!res.ok) throw new Error("Generation failed");
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || "Generation failed");
+      }
       const data = await res.json();
-      alert(`Generated sheet with ${data.rowCount} users`);
-      if (data.sheetUrl) window.open(data.sheetUrl, "_blank");
+      // Update flows to show the generated sheet URL
+      setFlows(
+        flows.map((f) =>
+          f.flow_id === flowId
+            ? { ...f, generatedSheetUrl: data.sheetUrl }
+            : f
+        )
+      );
     } catch (err) {
       alert(`Error: ${err instanceof Error ? err.message : "Generation failed"}`);
     } finally {
@@ -202,18 +212,28 @@ export default function DataExportPage() {
                     <p className="text-sm text-muted-foreground">
                       {flow.droppedCount} user{flow.droppedCount !== 1 ? "s" : ""} abandoned this flow
                     </p>
+                    {flow.generatedSheetUrl && (
+                      <a
+                        href={flow.generatedSheetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                      >
+                        View Sheet <ArrowUpRight className="h-3 w-3" />
+                      </a>
+                    )}
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleGenerateDroppedOff(flow.flow_id)}
-                    disabled={generatingFlowId === flow.flow_id || flow.droppedCount === 0}
+                    disabled={generatingFlowId === flow.flow_id || flow.droppedCount === 0 || !!flow.generatedSheetUrl}
                   >
                     {generatingFlowId === flow.flow_id && (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     )}
                     <Download className="mr-2 h-4 w-4" />
-                    Generate
+                    {flow.generatedSheetUrl ? "Generated" : "Generate"}
                   </Button>
                 </div>
               ))}
