@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
 import type { Conversation } from "@/types";
 
 /**
@@ -14,17 +15,24 @@ import type { Conversation } from "@/types";
  */
 export function useTotalUnread(): number {
   const [total, setTotal] = useState(0);
+  const { user } = useAuth();
+  const userId = user?.id;
 
   // Keep a live local mirror of {id: unread_count} so INSERT/UPDATE/DELETE
   // events can adjust the total in O(1) without refetching.
   const countsRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
+    if (!userId) {
+      setTotal(0);
+      countsRef.current = new Map();
+      return;
+    }
+
     const supabase = createClient();
     let cancelled = false;
 
-    // Initial load. RLS scopes this to the signed-in user automatically —
-    // no explicit user_id filter needed here.
+    // Initial load. RLS scopes this to the signed-in user automatically.
     (async () => {
       const { data, error } = await supabase
         .from("conversations")
@@ -43,7 +51,7 @@ export function useTotalUnread(): number {
     })();
 
     const channel = supabase
-      .channel("total-unread-realtime")
+      .channel(`total-unread-realtime-${userId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "conversations" },
@@ -56,7 +64,6 @@ export function useTotalUnread(): number {
             const row = payload.new as Conversation;
             map.set(row.id, row.unread_count ?? 0);
           }
-          // Recompute — cheap, conversations per user stay small.
           let sum = 0;
           for (const n of map.values()) if (n > 0) sum += 1;
           setTotal(sum);
@@ -68,7 +75,7 @@ export function useTotalUnread(): number {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [userId]);
 
   return total;
 }

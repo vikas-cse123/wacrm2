@@ -301,7 +301,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchProfile]);
 
   const signOut = useCallback(async () => {
+    // Unsubscribe Web Push before signing out so the server stops
+    // sending push notifications to this device for this user.
+    if ("serviceWorker" in navigator && "PushManager" in window) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          const endpoint = sub.endpoint;
+          await sub.unsubscribe().catch(() => {});
+          await fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint }),
+          }).catch(() => {});
+        }
+      } catch {
+        // Best-effort — don't block signout on push cleanup failure.
+      }
+    }
+
     const supabase = createClient();
+    // Remove all active realtime channels before signing out
+    supabase.removeAllChannels();
     await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
