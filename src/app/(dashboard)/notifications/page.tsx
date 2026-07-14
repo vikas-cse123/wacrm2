@@ -19,7 +19,7 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
 
 export default function NotificationsPage() {
   const router = useRouter();
-  const { accountId } = useAuth();
+  const { accountId, user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[] | null>(
     null,
   );
@@ -49,13 +49,21 @@ export default function NotificationsPage() {
 
   // Realtime — new assignments appear without a refresh, and a
   // "mark all read" fired from another tab/device stays in sync here.
+  const userId = user?.id;
   useEffect(() => {
+    if (!userId) return;
+
     const supabase = createClient();
     const channel = supabase
-      .channel("notifications-page")
+      .channel(`notifications-page-${userId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${userId}`,
+        },
         (payload) => {
           if (payload.eventType === "INSERT") {
             const row = payload.new as Notification;
@@ -83,7 +91,7 @@ export default function NotificationsPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [userId]);
 
   const markRead = useCallback(
     async (id: string) => {
