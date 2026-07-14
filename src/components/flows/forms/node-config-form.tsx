@@ -1243,7 +1243,7 @@ function GoogleSheetsSyncForm({
             </span>
           </div>
 
-          {sheet ? (
+          {sheet && (
             <div className="rounded-lg border border-border p-3">
               <p className="text-xs font-medium text-foreground">
                 Linked spreadsheet
@@ -1272,43 +1272,50 @@ function GoogleSheetsSyncForm({
                 Unlink
               </Button>
             </div>
-          ) : (
-            <div className="rounded-lg border border-border p-3">
-              <p className="text-xs font-medium text-foreground">
-                Link a spreadsheet
-              </p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Paste a Google Sheets link (must be owned by or shared with the
-                connected account), or create a fresh one.
-              </p>
-              <div className="mt-2 flex gap-2">
-                <Input
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  placeholder="https://docs.google.com/spreadsheets/d/…"
-                  className="bg-muted text-xs"
-                />
-                <Button size="sm" onClick={linkExisting} disabled={busy || !urlInput.trim()}>
-                  Link
-                </Button>
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <div className="h-px flex-1 bg-border" />
-                <span className="text-[10px] text-muted-foreground">or</span>
-                <div className="h-px flex-1 bg-border" />
-              </div>
+          )}
+
+          {/* Link / replace controls are always available so an author can
+              paste their own sheet URL without unlinking first. Linking a
+              new sheet replaces the current one. */}
+          <div className="rounded-lg border border-border p-3">
+            <p className="text-xs font-medium text-foreground">
+              {sheet ? "Use a different spreadsheet" : "Link a spreadsheet"}
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Paste a Google Sheets link (it must be owned by or shared with{" "}
+              {email ?? "the connected account"}), or create a fresh one.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Input
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/…"
+                className="bg-muted text-xs"
+              />
               <Button
-                variant="outline"
                 size="sm"
-                className="mt-2 w-full text-xs"
-                onClick={createNew}
-                disabled={busy}
+                onClick={linkExisting}
+                disabled={busy || !urlInput.trim()}
               >
-                {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
-                Create a new spreadsheet
+                {sheet ? "Replace" : "Link"}
               </Button>
             </div>
-          )}
+            <div className="mt-2 flex items-center gap-2">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-[10px] text-muted-foreground">or</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2 w-full text-xs"
+              onClick={createNew}
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
+              Create a new spreadsheet
+            </Button>
+          </div>
         </>
       )}
 
