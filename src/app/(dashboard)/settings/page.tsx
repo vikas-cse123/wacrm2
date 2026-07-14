@@ -19,7 +19,6 @@ import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import { WebhookSettings } from '@/components/settings/webhook-settings';
-import { ChatAssignmentPanel } from '@/components/settings/chat-assignment-panel';
 import {
   resolveSection,
   SECTION_META,
@@ -79,7 +78,6 @@ export default function SettingsPage() {
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
     members: <MembersTab />,
-    assignment: <ChatAssignmentPanel />,
     api: <ApiKeysSettings />,
      webhooks: <WebhookSettings />
   };

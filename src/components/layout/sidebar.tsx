@@ -17,6 +17,7 @@ import {
   LogOut,
   MessageSquare,
   Radio,
+  Route,
   Settings,
   Sheet,
   Shield,
@@ -103,6 +104,7 @@ const navItems: NavItem[] = [
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/data-export", label: "Data Export", icon: Sheet },
+  { href: "/chat-assignment", label: "Chat Assignment", icon: Route },
 ];
 
 const bottomNavItems = [
@@ -126,7 +128,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const visibleNavItems = navItems.filter((item) => {
     if (
       !isOwner &&
-      (item.href === "/flows" || item.href === "/agents" || item.href === "/data-export")
+      (item.href === "/flows" || item.href === "/agents" || item.href === "/data-export" || item.href === "/chat-assignment")
     ) {
       return false;
     }

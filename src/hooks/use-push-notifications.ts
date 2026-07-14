@@ -136,7 +136,13 @@ export function usePushNotifications(): PushState {
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
         const endpoint = sub.endpoint;
-        await sub.unsubscribe().catch(() => {});
+        const unsubscribed = await sub.unsubscribe().catch(() => false);
+        if (!unsubscribed) {
+          return {
+            ok: false,
+            error: "Browser refused to unsubscribe. Try clearing site data.",
+          };
+        }
         await fetch("/api/push/unsubscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
