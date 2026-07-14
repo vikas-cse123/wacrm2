@@ -698,6 +698,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'collect_input',
   'condition',
   'set_tag',
+  'google_sheets_sync',
   'handoff',
   'end',
 ];

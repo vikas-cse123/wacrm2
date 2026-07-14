@@ -173,6 +173,18 @@ export interface SetTagNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Appends a row of the run's collected answers to the flow's linked
+ * Google Sheet, then auto-advances. The spreadsheet link + column set
+ * live per-flow in `flow_sheet_configs`, not on the node — the node
+ * itself only marks WHERE in the flow the sync happens, so its config is
+ * just the advance target. Sync failures are non-fatal (logged, retried
+ * later); the run continues regardless.
+ */
+export interface GoogleSheetsSyncNodeConfig {
+  next_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -193,6 +205,7 @@ export type FlowNodeConfig =
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
+  | { node_type: "google_sheets_sync"; config: GoogleSheetsSyncNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 
