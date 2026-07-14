@@ -17,21 +17,25 @@ export const STANDARD_COLUMNS = [
 
 /**
  * Format a timestamp as India Standard Time for the "Submission Time"
- * cell, e.g. "14 Jul 2026, 2:25 PM". Falls back to empty string on a bad
- * input. Pass nothing to stamp "now".
+ * cell, time first, e.g. "2:25 PM, 14 Jul 2026". Falls back to empty
+ * string on a bad input. Pass nothing to stamp "now".
  */
 export function formatSubmissionTimeIST(input?: string | Date | null): string {
   const d = input ? new Date(input) : new Date();
   if (isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat("en-IN", {
+  const time = new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hour12: true,
   }).format(d);
+  const date = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(d);
+  return `${time}, ${date}`;
 }
 
 /** Derive a sheet header from a collect_input prompt, falling back to the var_key. */

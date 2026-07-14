@@ -37,6 +37,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -160,6 +161,10 @@ export function NodeConfigForm({
               .
             </p>
           </div>
+          <CollectInputSheetSettings
+            cfg={cfg as CollectInputSheetCfg}
+            onUpdateConfig={onUpdateConfig}
+          />
           <NextNodeRow
             value={(cfg as { next_node_key?: string }).next_node_key ?? ""}
             allNodes={allNodes}
@@ -218,6 +223,58 @@ export function NodeConfigForm({
         </p>
       );
   }
+}
+
+// ============================================================
+// collect_input — Google Sheet column settings
+// ============================================================
+
+interface CollectInputSheetCfg {
+  sheet_include?: boolean;
+  sheet_column_name?: string;
+}
+
+function CollectInputSheetSettings({
+  cfg,
+  onUpdateConfig,
+}: {
+  cfg: CollectInputSheetCfg;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  // Default ON — every captured answer is included unless turned off.
+  const included = cfg.sheet_include !== false;
+  return (
+    <div className="rounded-lg border border-border p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-foreground">
+            Include in Google Sheet
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            On by default. Turn off to keep this answer out of the sheet.
+          </p>
+        </div>
+        <Switch
+          checked={included}
+          onCheckedChange={(v) => onUpdateConfig({ sheet_include: v })}
+          aria-label="Include this answer in Google Sheet"
+        />
+      </div>
+      {included && (
+        <div className="mt-3">
+          <label className="mb-1 block text-[11px] text-muted-foreground">
+            Column name in the sheet (optional)
+          </label>
+          <Input
+            value={cfg.sheet_column_name ?? ""}
+            onChange={(e) => onUpdateConfig({ sheet_column_name: e.target.value })}
+            placeholder="Blank = use the question as the heading"
+            className="bg-muted text-xs"
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ============================================================
