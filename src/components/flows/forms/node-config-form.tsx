@@ -1097,6 +1097,7 @@ function GoogleSheetsSyncForm({
   const [sheet, setSheet] = useState<SheetConfigRow | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -1197,6 +1198,35 @@ function GoogleSheetsSyncForm({
     }
   };
 
+  const importPast = async () => {
+    if (
+      !window.confirm(
+        "Import all past completed responses for this flow into the linked sheet? This appends rows — running it again will add them again.",
+      )
+    ) {
+      return;
+    }
+    setImporting(true);
+    try {
+      const res = await fetch(`/api/flows/${flowId}/sheet/backfill`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Import failed");
+      toast.success(
+        data.imported > 0
+          ? `Imported ${data.imported} past response${data.imported === 1 ? "" : "s"}.`
+          : "No past completed responses to import.",
+      );
+      // Header is now written; refresh so the card reflects it.
+      load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-muted-foreground">
@@ -1262,6 +1292,29 @@ function GoogleSheetsSyncForm({
                   ? `, ${sheet.answer_columns.join(", ")}`
                   : ""}
               </p>
+
+              <div className="mt-3 rounded-md bg-muted/40 p-2.5">
+                <p className="text-[11px] font-medium text-foreground">
+                  Import past responses
+                </p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  Add every already-completed run of this flow to the sheet as
+                  rows. New completions sync automatically going forward.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 h-7 text-xs"
+                  onClick={importPast}
+                  disabled={importing || busy}
+                >
+                  {importing ? (
+                    <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                  ) : null}
+                  Import past completed responses
+                </Button>
+              </div>
+
               <Button
                 variant="ghost"
                 size="sm"

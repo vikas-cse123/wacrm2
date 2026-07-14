@@ -99,6 +99,20 @@ export async function appendRow(
   tab: string,
   values: (string | number)[],
 ): Promise<void> {
+  await appendRows(accessToken, spreadsheetId, tab, [values]);
+}
+
+/**
+ * Append many rows in a single request (used for backfilling historical
+ * responses). Still INSERT_ROWS, so it only ever adds — never overwrites.
+ */
+export async function appendRows(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  rows: (string | number)[][],
+): Promise<void> {
+  if (rows.length === 0) return;
   const range = `${encodeURIComponent(tab)}!A1`;
   const res = await fetch(
     `${SHEETS_API}/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
@@ -108,7 +122,7 @@ export async function appendRow(
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ values: [values] }),
+      body: JSON.stringify({ values: rows }),
     },
   );
   if (!res.ok) {
