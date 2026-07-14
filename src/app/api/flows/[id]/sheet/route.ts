@@ -32,11 +32,15 @@ async function answerColumnsForFlow(
   db: SupabaseClient,
   flowId: string,
 ): Promise<{ keys: string[]; headers: string[] }> {
+  // Every question-asking node maps to a column:
+  //   - collect_input → keyed by its var_key, value from the typed reply.
+  //   - send_buttons / send_list → keyed by node_key, value from the tapped
+  //     option's label (the engine records it into vars on tap).
   const { data: nodes } = await db
     .from("flow_nodes")
-    .select("node_type, config, created_at")
+    .select("node_type, node_key, config, created_at")
     .eq("flow_id", flowId)
-    .eq("node_type", "collect_input")
+    .in("node_type", ["collect_input", "send_buttons", "send_list"])
     .order("created_at", { ascending: true });
 
   const seen = new Set<string>();
@@ -46,17 +50,22 @@ async function answerColumnsForFlow(
     const cfg = n.config as {
       var_key?: string;
       prompt_text?: string;
+      text?: string;
       sheet_include?: boolean;
       sheet_column_name?: string;
     };
-    const key = cfg?.var_key;
-    if (!key || seen.has(key)) continue;
     // Opt-out: skip questions the author excluded from the sheet.
     if (cfg.sheet_include === false) continue;
+
+    const isCollect = n.node_type === "collect_input";
+    const key = isCollect ? cfg.var_key : n.node_key;
+    const prompt = isCollect ? cfg.prompt_text : cfg.text;
+    if (!key || seen.has(key)) continue;
+
     seen.add(key);
     keys.push(key);
     const custom = (cfg.sheet_column_name ?? "").trim();
-    headers.push(custom || headerFromPrompt(cfg.prompt_text, key));
+    headers.push(custom || headerFromPrompt(prompt, key));
   }
   return { keys, headers };
 }
