@@ -57,15 +57,16 @@ export default function NotificationsPage() {
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    (async () => {
+    const subscribe = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
       if (!userId || cancelled) return;
 
-      const channel = supabase
+      channel = supabase
         .channel(`notifications-page-${userId}`)
         .on(
           "postgres_changes",
@@ -99,14 +100,13 @@ export default function NotificationsPage() {
           },
         )
         .subscribe();
+    };
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    })();
+    subscribe();
 
     return () => {
       cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 

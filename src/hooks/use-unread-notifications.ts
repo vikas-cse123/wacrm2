@@ -18,13 +18,14 @@ export function useUnreadNotifications(): number {
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    (async () => {
+    const init = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
-      if (!userId) return;
+      if (!userId || cancelled) return;
 
       // head:true skips fetching rows — we only need the `count`
       // supabase-js returns alongside the (empty) response body.
@@ -37,7 +38,7 @@ export function useUnreadNotifications(): number {
       setCount(unreadCount ?? 0);
 
       // Subscribe to changes for this specific user only
-      const channel = supabase
+      channel = supabase
         .channel(`notifications-unread-count-${userId}`)
         .on(
           "postgres_changes",
@@ -62,14 +63,13 @@ export function useUnreadNotifications(): number {
           },
         )
         .subscribe();
+    };
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    })();
+    init();
 
     return () => {
       cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 
