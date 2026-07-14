@@ -33,6 +33,8 @@
  */
 
 import { supabaseAdmin } from "./admin-client";
+import { getValidAccessToken } from "@/lib/google/oauth";
+import { appendRow, STANDARD_COLUMNS } from "@/lib/google/sheets";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -56,6 +58,7 @@ import {
   type SendMediaNodeConfig,
   type SendMessageNodeConfig,
   type SetTagNodeConfig,
+  type GoogleSheetsSyncNodeConfig,
   type StartNodeConfig,
   type KeywordTriggerConfig,
 } from "./types";
@@ -118,7 +121,8 @@ export function isAutoAdvancing(node_type: string): boolean {
     node_type === "send_message" ||
     node_type === "send_media" ||
     node_type === "condition" ||
-    node_type === "set_tag"
+    node_type === "set_tag" ||
+    node_type === "google_sheets_sync"
   );
 }
 
@@ -134,6 +138,91 @@ export function isSuspending(node_type: string): boolean {
 /** Nodes that end the run. */
 export function isTerminal(node_type: string): boolean {
   return node_type === "handoff" || node_type === "end";
+}
+
+/** Flatten a stored var into a single cell value for a spreadsheet. */
+function stringifyVar(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/**
+ * Append the run's collected answers as a new row on the flow's linked
+ * Google Sheet. Writes the header row on first sync. Every call appends
+ * one row — existing rows are never touched, so repeat completions from
+ * the same contact each get their own row.
+ *
+ * Throws on failure (after durably logging the row to
+ * google_sheets_sync_failures) so the caller can record the error; the
+ * caller treats it as non-fatal and lets the flow continue.
+ */
+async function syncRunToGoogleSheet(
+  db: AdminClient,
+  run: FlowRunRow,
+): Promise<"synced" | "not_linked"> {
+  const { data: sheet } = await db
+    .from("flow_sheet_configs")
+    .select("*")
+    .eq("flow_id", run.flow_id)
+    .maybeSingle();
+
+  // Flow has no sheet linked — nothing to sync, and not an error.
+  if (!sheet) return "not_linked";
+
+  const [{ data: contact }, { data: flow }] = await Promise.all([
+    run.contact_id
+      ? db
+          .from("contacts")
+          .select("name, phone")
+          .eq("id", run.contact_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null as { name?: string; phone?: string } | null }),
+    db.from("flows").select("name").eq("id", run.flow_id).maybeSingle(),
+  ]);
+
+  const answerColumns: string[] = sheet.answer_columns ?? [];
+  const headers = [...STANDARD_COLUMNS, ...answerColumns];
+  const values = [
+    contact?.name ?? "",
+    contact?.phone ?? "",
+    flow?.name ?? "",
+    new Date().toISOString(),
+    run.contact_id ?? "",
+    ...answerColumns.map((k) => stringifyVar(run.vars?.[k])),
+  ];
+
+  try {
+    const token = await getValidAccessToken(db, run.account_id);
+    if (!token) throw new Error("no_google_connection");
+
+    if (!sheet.header_written) {
+      await appendRow(token, sheet.spreadsheet_id, sheet.sheet_tab, headers);
+      await db
+        .from("flow_sheet_configs")
+        .update({ header_written: true })
+        .eq("flow_id", run.flow_id);
+    }
+
+    await appendRow(token, sheet.spreadsheet_id, sheet.sheet_tab, values);
+    return "synced";
+  } catch (err) {
+    // Preserve the row so nothing is lost to a transient API failure.
+    await db.from("google_sheets_sync_failures").insert({
+      account_id: run.account_id,
+      flow_id: run.flow_id,
+      flow_run_id: run.id,
+      contact_id: run.contact_id,
+      payload: {
+        headers,
+        values,
+        spreadsheet_id: sheet.spreadsheet_id,
+        sheet_tab: sheet.sheet_tab,
+      },
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 /**
@@ -729,6 +818,26 @@ async function advanceFromNodeKey(
         // strand the customer mid-flow.
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "set_tag_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "google_sheets_sync") {
+      const cfg = node.config as unknown as GoogleSheetsSyncNodeConfig;
+      try {
+        const result = await syncRunToGoogleSheet(db, run);
+        await logEvent(db, run.id, "node_entered", node.node_key, {
+          node_type: "google_sheets_sync",
+          result,
+        });
+      } catch (err) {
+        // Non-fatal by design — a Sheets outage must never strand the
+        // customer mid-flow. The row is preserved in
+        // google_sheets_sync_failures for later retry.
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "google_sheets_sync_failed",
           detail: err instanceof Error ? err.message : String(err),
         });
       }

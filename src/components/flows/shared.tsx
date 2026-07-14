@@ -25,6 +25,7 @@ import {
   MessageCircle,
   Paperclip,
   PlayCircle,
+  Sheet,
   Tag,
   UserPlus,
   Workflow,
@@ -49,6 +50,7 @@ export type NodeType =
   | 'collect_input'
   | 'condition'
   | 'set_tag'
+  | 'google_sheets_sync'
   | 'handoff'
   | 'end';
 
@@ -152,6 +154,13 @@ export const NODE_META: Record<
     blurb: 'Adds or removes a contact tag',
     category: 'logic',
   },
+  google_sheets_sync: {
+    label: 'Google Sheets sync',
+    icon: Sheet,
+    color: 'text-green-500',
+    blurb: 'Appends the collected answers to a Google Sheet',
+    category: 'logic',
+  },
   handoff: {
     label: 'Handoff to agent',
     icon: UserPlus,
@@ -205,6 +214,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   collect_input: { l: 0.65, c: 0.1, h: 185 }, // teal — capture
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
+  google_sheets_sync: { l: 0.62, c: 0.15, h: 152 }, // sheets green
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -419,5 +429,7 @@ export function summarizeNode(node: BuilderNode): string | null {
       const note = typeof cfg.note === 'string' ? cfg.note : '';
       return note.length > 0 ? truncate(note) : null;
     }
+    case 'google_sheets_sync':
+      return 'Appends answers to the linked Google Sheet';
   }
 }

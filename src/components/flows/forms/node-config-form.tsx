@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import { uploadAccountMedia, MEDIA_MAX_BYTES } from "@/lib/storage/upload-media";
 import { slugify, type BuilderNode } from "../shared";
+import { useFlowEditor } from "../flow-editor-state";
 import { NextNodeRow, NodeKeySelect, TextRow } from "./fields";
 
 interface NodeConfigFormProps {
@@ -183,6 +184,16 @@ export function NodeConfigForm({
       return (
         <SetTagForm
           cfg={cfg as SetTagCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      );
+
+    case "google_sheets_sync":
+      return (
+        <GoogleSheetsSyncForm
+          cfg={cfg as { next_node_key?: string }}
           allNodes={allNodes}
           currentKey={node.node_key}
           onUpdateConfig={onUpdateConfig}
@@ -1045,5 +1056,269 @@ function SendMediaForm({
         label="After sending, advance to"
       />
     </>
+  );
+}
+
+// ============================================================
+// google_sheets_sync
+//
+// Per-flow Google Sheet linking. The Google account itself is connected
+// once per workspace (account-level OAuth) but surfaced here so authors
+// configure everything in one place. Reads flowId from the editor
+// context rather than prop-drilling it through both call sites.
+// ============================================================
+
+interface SheetConfigRow {
+  spreadsheet_id: string;
+  spreadsheet_url: string | null;
+  spreadsheet_name: string | null;
+  sheet_tab: string;
+  answer_columns: string[];
+}
+
+function GoogleSheetsSyncForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: { next_node_key?: string };
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const { flow, state } = useFlowEditor();
+  const flowId = flow.id;
+
+  const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState(false);
+  const [configured, setConfigured] = useState(true);
+  const [email, setEmail] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<SheetConfigRow | null>(null);
+  const [urlInput, setUrlInput] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/flows/${flowId}/sheet`, {
+        cache: "no-store",
+      });
+      const data = await res.json();
+      setConnected(!!data.connected);
+      setConfigured(data.configured !== false);
+      setEmail(data.email ?? null);
+      setSheet(data.config ?? null);
+    } catch {
+      // Non-fatal — the node still works, the panel just can't show status.
+    } finally {
+      setLoading(false);
+    }
+  }, [flowId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Coming back from the Google consent redirect (?google=connected).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const g = params.get("google");
+    if (g === "connected") {
+      toast.success("Google account connected.");
+      load();
+    } else if (g === "error") {
+      toast.error("Google connection failed. Please try again.");
+    }
+    if (g) {
+      params.delete("google");
+      params.delete("reason");
+      const qs = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + (qs ? `?${qs}` : ""),
+      );
+    }
+  }, [load]);
+
+  const linkExisting = async () => {
+    if (!urlInput.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/flows/${flowId}/sheet`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to link sheet");
+      setSheet(data.config);
+      setUrlInput("");
+      toast.success("Spreadsheet linked to this flow.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to link sheet");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createNew = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/flows/${flowId}/sheet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `${state.name || "Flow"} — responses` }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create sheet");
+      setSheet(data.config);
+      toast.success("New spreadsheet created and linked.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create sheet");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unlink = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/flows/${flowId}/sheet`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to unlink");
+      setSheet(null);
+      toast.success("Spreadsheet unlinked.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to unlink");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground">
+        When a contact reaches this node, their collected answers are appended
+        as a new row to the linked Google Sheet.
+      </p>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" /> Loading…
+        </div>
+      ) : !connected ? (
+        <div className="rounded-lg border border-border bg-muted/40 p-3">
+          <p className="text-xs text-muted-foreground">
+            Connect a Google account to sync responses. This connects once for
+            the whole workspace.
+          </p>
+          <Button
+            size="sm"
+            className="mt-2"
+            disabled={!configured}
+            onClick={() => {
+              if (!configured) return;
+              window.location.href = "/api/integrations/google/connect";
+            }}
+          >
+            Connect Google account
+          </Button>
+          {!configured && (
+            <p className="mt-2 text-[11px] text-amber-500">
+              Google isn&apos;t configured on the server yet. Add
+              GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable this.
+            </p>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between rounded-md bg-muted/40 px-2.5 py-1.5 text-xs">
+            <span className="text-muted-foreground">
+              Connected as{" "}
+              <span className="font-medium text-foreground">
+                {email ?? "Google account"}
+              </span>
+            </span>
+          </div>
+
+          {sheet ? (
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs font-medium text-foreground">
+                Linked spreadsheet
+              </p>
+              <a
+                href={sheet.spreadsheet_url ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-0.5 block truncate text-xs text-primary hover:underline"
+              >
+                {sheet.spreadsheet_name || sheet.spreadsheet_id}
+              </a>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Columns: Name, Phone Number, Flow Name, Submission Time, User ID
+                {sheet.answer_columns.length > 0
+                  ? `, ${sheet.answer_columns.join(", ")}`
+                  : ""}
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2 h-7 text-xs text-muted-foreground hover:text-destructive"
+                onClick={unlink}
+                disabled={busy}
+              >
+                Unlink
+              </Button>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs font-medium text-foreground">
+                Link a spreadsheet
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                Paste a Google Sheets link (must be owned by or shared with the
+                connected account), or create a fresh one.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Input
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/…"
+                  className="bg-muted text-xs"
+                />
+                <Button size="sm" onClick={linkExisting} disabled={busy || !urlInput.trim()}>
+                  Link
+                </Button>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-[10px] text-muted-foreground">or</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2 w-full text-xs"
+                onClick={createNew}
+                disabled={busy}
+              >
+                {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
+                Create a new spreadsheet
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+
+      <NextNodeRow
+        value={cfg.next_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ next_node_key: v })}
+        label="After syncing, advance to"
+      />
+    </div>
   );
 }
