@@ -20,42 +20,56 @@ export function useUnreadNotifications(): number {
     let cancelled = false;
 
     (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) return;
+
       // head:true skips fetching rows — we only need the `count`
       // supabase-js returns alongside the (empty) response body.
       const { count: unreadCount, error } = await supabase
         .from("notifications")
         .select("*", { count: "exact", head: true })
+        .eq("user_id", userId)
         .is("read_at", null);
       if (cancelled || error) return;
       setCount(unreadCount ?? 0);
-    })();
 
-    const channel = supabase
-      .channel("notifications-unread-count")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            const row = payload.new as Notification;
-            if (!row.read_at) setCount((n) => n + 1);
-          } else if (payload.eventType === "UPDATE") {
-            // Updates here only ever set read_at (marking a notification
-            // read). Derive purely from the new row so we don't rely on
-            // payload.old columns, which require REPLICA IDENTITY FULL.
-            const newRow = payload.new as Notification;
-            if (newRow.read_at) setCount((n) => Math.max(0, n - 1));
-          } else if (payload.eventType === "DELETE") {
-            const oldRow = payload.old as Partial<Notification>;
-            if (!oldRow.read_at) setCount((n) => Math.max(0, n - 1));
-          }
-        },
-      )
-      .subscribe();
+      // Subscribe to changes for this specific user only
+      const channel = supabase
+        .channel(`notifications-unread-count-${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "notifications",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (cancelled) return;
+            if (payload.eventType === "INSERT") {
+              const row = payload.new as Notification;
+              if (!row.read_at) setCount((n) => n + 1);
+            } else if (payload.eventType === "UPDATE") {
+              const newRow = payload.new as Notification;
+              if (newRow.read_at) setCount((n) => Math.max(0, n - 1));
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as Partial<Notification>;
+              if (!oldRow.read_at) setCount((n) => Math.max(0, n - 1));
+            }
+          },
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    })();
 
     return () => {
       cancelled = true;
-      supabase.removeChannel(channel);
     };
   }, []);
 
