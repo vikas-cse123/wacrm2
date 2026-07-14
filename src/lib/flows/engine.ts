@@ -174,7 +174,7 @@ async function syncRunToGoogleSheet(
   // sheet was linked shows up starting this sync, no manual relink needed.
   const resolved = await resolveFlowSheetColumns(db, run.flow_id, token);
   if (!resolved) return "not_linked"; // no sheet linked — not an error.
-  const { sheet, nameKey, keys: answerColumns, headers: answerHeaders } = resolved;
+  const { sheet, nameKey, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
   const [{ data: contact }, { data: flow }] = await Promise.all([
     run.contact_id
@@ -203,7 +203,8 @@ async function syncRunToGoogleSheet(
   const values = [
     ...nameValueCell,
     ...standardValues,
-    ...answerColumns.map((k) => stringifyVar(run.vars?.[k])),
+    // Only write to active columns; leave inactive ones (sheet_include: false) empty.
+    ...answerColumns.map((k) => activeKeys.has(k) ? stringifyVar(run.vars?.[k]) : ""),
   ];
 
   try {
