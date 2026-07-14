@@ -80,17 +80,17 @@ export async function POST(
     const title = `${flow.name} — Dropped Off Users`;
     const meta = await createSpreadsheet(token, title);
 
-    // Build rows with standard columns + all vars from those runs
+    // Build rows with exact same headers as Google Sheets: Name + Standard + Answer vars
     const allVarKeys = new Set<string>();
     droppedRuns.forEach((run: any) => {
       Object.keys(run.vars ?? {}).forEach((k) => allVarKeys.add(k));
     });
 
-    const headers = [
-      "Name",
-      ...STANDARD_COLUMNS_V2,
-      ...Array.from(allVarKeys),
-    ];
+    // Use same header structure as Google Sheets sync
+    const nameHeaderCell = ["Name"];
+    const answerHeaders = Array.from(allVarKeys);
+    const headers = [...nameHeaderCell, ...STANDARD_COLUMNS_V2, ...answerHeaders];
+
     const rows = droppedRuns.map((run: any) => {
       const contact = run.contact_id
         ? contactMap.get(run.contact_id)
