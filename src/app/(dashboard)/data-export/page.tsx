@@ -126,8 +126,8 @@ export default function DataExportPage() {
 
       <Tabs defaultValue="sheets" className="w-full">
         <TabsList>
-          <TabsTrigger value="sheets">Google Sheets</TabsTrigger>
-          <TabsTrigger value="dropped-off">Dropped Off Users</TabsTrigger>
+          <TabsTrigger value="sheets">Completed Flows</TabsTrigger>
+          <TabsTrigger value="dropped-off">Incomplete Flows</TabsTrigger>
         </TabsList>
 
         {/* Google Sheets Tab */}
@@ -185,10 +185,10 @@ export default function DataExportPage() {
           )}
         </TabsContent>
 
-        {/* Dropped Off Users Tab */}
+        {/* Incomplete Flows Tab */}
         <TabsContent value="dropped-off" className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Generate sheets for users who stopped messaging before completing each flow.
+            Generate sheets for flows that users didn't complete.
           </p>
           {flowsLoading ? (
             <div className="flex justify-center py-8">
@@ -209,9 +209,6 @@ export default function DataExportPage() {
                 >
                   <div className="flex-1">
                     <h3 className="font-medium text-foreground">{flow.flow_name}</h3>
-                    <p className="text-sm text-muted-foreground">
-                      {flow.droppedCount} user{flow.droppedCount !== 1 ? "s" : ""} abandoned this flow
-                    </p>
                     {flow.generatedSheetUrl && (
                       <a
                         href={flow.generatedSheetUrl}
