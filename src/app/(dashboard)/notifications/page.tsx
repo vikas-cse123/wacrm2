@@ -19,7 +19,7 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
 
 export default function NotificationsPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { accountId } = useAuth();
   const [notifications, setNotifications] = useState<Notification[] | null>(
     null,
   );
@@ -27,10 +27,12 @@ export default function NotificationsPage() {
   const [markingAll, setMarkingAll] = useState(false);
 
   const load = useCallback(async () => {
+    if (!accountId) return;
     const supabase = createClient();
     const { data, error: fetchErr } = await supabase
       .from("notifications")
       .select("*")
+      .eq("account_id", accountId)
       .order("created_at", { ascending: false })
       .limit(100);
     if (fetchErr) {
@@ -38,7 +40,7 @@ export default function NotificationsPage() {
       return;
     }
     setNotifications((data ?? []) as Notification[]);
-  }, []);
+  }, [accountId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -48,24 +50,13 @@ export default function NotificationsPage() {
   // Realtime — new assignments appear without a refresh, and a
   // "mark all read" fired from another tab/device stays in sync here.
   useEffect(() => {
-    if (!user?.id) return;
-
     const supabase = createClient();
-    let cancelled = false;
-    const userId = user.id;
-
     const channel = supabase
-      .channel(`notifications-page-${userId}`)
+      .channel("notifications-page")
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "notifications",
-          filter: `user_id=eq.${userId}`,
-        },
+        { event: "*", schema: "public", table: "notifications" },
         (payload) => {
-          if (cancelled) return;
           if (payload.eventType === "INSERT") {
             const row = payload.new as Notification;
             setNotifications((prev) => {
@@ -90,10 +81,9 @@ export default function NotificationsPage() {
       .subscribe();
 
     return () => {
-      cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [user?.id]);
+  }, []);
 
   const markRead = useCallback(
     async (id: string) => {
