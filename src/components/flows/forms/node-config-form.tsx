@@ -1332,6 +1332,30 @@ function GoogleSheetsSyncForm({
                 {email ?? "Google account"}
               </span>
             </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] text-muted-foreground hover:text-destructive"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm("Disconnect this Google account? Sheet syncing will stop until you reconnect.")) return;
+                setBusy(true);
+                try {
+                  const res = await fetch("/api/integrations/google/disconnect", { method: "POST" });
+                  if (!res.ok) throw new Error("Failed to disconnect");
+                  setConnected(false);
+                  setEmail(null);
+                  setSheet(null);
+                  toast.success("Google account disconnected.");
+                } catch {
+                  toast.error("Failed to disconnect Google account.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Disconnect
+            </Button>
           </div>
 
           {sheet && (
