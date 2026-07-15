@@ -14,8 +14,17 @@ import {
   saveConnection,
 } from "@/lib/google/oauth";
 
+function siteOrigin(request: Request): string {
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL;
+  if (explicit) return explicit.replace(/\/$/, "");
+  const proto = request.headers.get("x-forwarded-proto") ?? "https";
+  const host =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  return `${proto}://${host}`;
+}
+
 function backTo(request: Request, status: "connected" | "error", detail?: string) {
-  const url = new URL("/flows", new URL(request.url).origin);
+  const url = new URL("/flows", siteOrigin(request));
   url.searchParams.set("google", status);
   if (detail) url.searchParams.set("reason", detail);
   return NextResponse.redirect(url);
