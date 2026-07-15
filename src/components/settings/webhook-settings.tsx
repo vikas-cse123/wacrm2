@@ -390,7 +390,7 @@ export function WebhookSettings() {
             Webhooks
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            wacrm will POST a signed JSON payload to your URL for every subscribed event.
+            Interscale will POST a signed JSON payload to your URL for every subscribed event.
           </p>
         </div>
         {!showAdd && (
@@ -459,7 +459,7 @@ export function WebhookSettings() {
         </div>
       )}
 
-      {/* Payload reference */}
+      {/* Payload reference
       {endpoints.length > 0 && (
         <div className="rounded-lg border border-border bg-muted/40 p-4 space-y-2">
           <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Example payload — message.received</p>
@@ -480,7 +480,7 @@ export function WebhookSettings() {
             Verify with the <code className="font-mono">X-Wacrm-Signature</code> header using your signing secret.
           </p>
         </div>
-      )}
+      )} */}
     </div>
   )
 }
