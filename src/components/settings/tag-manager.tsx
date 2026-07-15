@@ -167,31 +167,36 @@ export function TagManager() {
         ) : (
           <>
             {tags.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-x-3 gap-y-2">
                 {tags.map((tag) => (
-                  <span
-                    key={tag.id}
-                    className="group inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors"
-                    style={{
-                      backgroundColor: `${tag.color}20`,
-                      color: tag.color,
-                      border: `1px solid ${tag.color}40`,
-                    }}
-                  >
+                  <div key={tag.id} className="flex flex-col items-start gap-1">
                     <span
-                      className="size-2 rounded-full"
-                      style={{ backgroundColor: tag.color }}
-                    />
-                    {tag.name}
-                    <button
-                      type="button"
-                      onClick={() => confirmDelete(tag)}
-                      aria-label={`Delete ${tag.name}`}
-                      className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+                      className="group inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors"
+                      style={{
+                        backgroundColor: `${tag.color}20`,
+                        color: tag.color,
+                        border: `1px solid ${tag.color}40`,
+                      }}
                     >
-                      <X className="size-3" />
-                    </button>
-                  </span>
+                      <span
+                        className="size-2 rounded-full"
+                        style={{ backgroundColor: tag.color }}
+                      />
+                      {tag.name}
+                      <button
+                        type="button"
+                        onClick={() => confirmDelete(tag)}
+                        aria-label={`Delete ${tag.name}`}
+                        className="ml-0.5 rounded-full p-0.5 opacity-60 transition-opacity hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                    {/* select-all so a click grabs the whole id for copying */}
+                    <span className="select-all px-1 font-mono text-[10px] leading-none text-muted-foreground">
+                      {tag.id}
+                    </span>
+                  </div>
                 ))}
               </div>
             ) : (
