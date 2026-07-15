@@ -85,6 +85,7 @@ const TRAIT_FIELDS = [
   { value: "country", label: "Country" },
   { value: "source", label: "Source" },
   { value: "ad_name", label: "Ad Name" },
+  { value: "first_message", label: "First Message" },
 ];
 
 export function ChatAssignmentPanel() {
