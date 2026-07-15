@@ -702,6 +702,45 @@ async function handleReaction(
   }
 }
 
+/**
+ * Plain text of an inbound message: the body, a media caption, or the
+ * title of a tapped button/list row. Null for anything with no text
+ * (audio, sticker, location, reaction).
+ */
+function inboundText(message: WhatsAppMessage): string | null {
+  return (
+    message.text?.body ??
+    message.image?.caption ??
+    message.video?.caption ??
+    message.document?.caption ??
+    message.interactive?.button_reply?.title ??
+    message.interactive?.list_reply?.title ??
+    null
+  )
+}
+
+/**
+ * Text of the conversation's first *customer* message — the `first_message`
+ * assignment trait. The inbound being processed hasn't been inserted yet at
+ * assignment time, so a brand-new thread has no rows to read and falls back
+ * to the text of this message.
+ */
+async function getFirstMessageText(
+  conversationId: string,
+  currentMessage: WhatsAppMessage
+): Promise<string | null> {
+  const { data } = await supabaseAdmin()
+    .from('messages')
+    .select('content_text')
+    .eq('conversation_id', conversationId)
+    .eq('sender_type', 'customer')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  return data?.content_text ?? inboundText(currentMessage)
+}
+
 async function processMessage(
   message: WhatsAppMessage,
   contact: { profile: { name: string }; wa_id: string },
@@ -759,6 +798,7 @@ async function processMessage(
       country: contactRecord.country ?? null,
       source: contactRecord.source_url ?? null,
       ad_name: contactRecord.source_type ?? null,
+      first_message: await getFirstMessageText(conversation.id, message),
     }
     const agentId = await resolveAssignment(supabaseAdmin(), accountId, traits, {
       currentAgentId: conversation.assigned_agent_id ?? null,
