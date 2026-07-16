@@ -19,6 +19,7 @@ import {
   X,
   Loader2,
   Sparkles,
+  MessageSquareText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -37,6 +38,11 @@ import {
   MEDIA_MAX_BYTES_BY_KIND,
 } from "@/lib/storage/upload-media";
 import { ReplyQuote } from "./reply-quote";
+import {
+  QuickReplyPicker,
+  type QuickReplyPickerHandle,
+} from "./quick-reply-picker";
+import type { Contact } from "@/types";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -99,6 +105,8 @@ interface MessageComposerProps {
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
   onClearReply?: () => void;
+  contact?: Contact | null;
+  agentName?: string | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -120,11 +128,19 @@ export function MessageComposer({
   onOpenTemplates,
   replyTo,
   onClearReply,
+  contact,
+  agentName,
 }: MessageComposerProps) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Quick Reply state
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const slashPickerRef = useRef<QuickReplyPickerHandle>(null);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
@@ -208,22 +224,59 @@ export function MessageComposer({
     }
   }, [text, sending, sessionExpired, onSend, replyTo?.id]);
 
+  // When a quick reply is selected, insert its text into the composer
+  const handleQuickReplySelect = useCallback(
+    (message: string) => {
+      setText(message);
+      setSlashOpen(false);
+      setSlashQuery("");
+      setQrModalOpen(false);
+      requestAnimationFrame(() => {
+        adjustHeight();
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(el.value.length, el.value.length);
+        }
+      });
+    },
+    [adjustHeight],
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // When slash picker is open, forward navigation keys
+      if (slashOpen) {
+        if (["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(e.key)) {
+          e.preventDefault();
+          slashPickerRef.current?.handleKey(e.key);
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend]
+    [handleSend, slashOpen],
   );
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      setText(e.target.value);
+      const val = e.target.value;
+      setText(val);
       adjustHeight();
+
+      // Slash command detection: trigger when text starts with /
+      if (val.startsWith("/") && !val.includes(" ")) {
+        setSlashOpen(true);
+        setSlashQuery(val.slice(1));
+      } else {
+        setSlashOpen(false);
+        setSlashQuery("");
+      }
     },
-    [adjustHeight]
+    [adjustHeight],
   );
 
   // Ask the AI assistant for a suggested reply and drop it into the
@@ -425,7 +478,7 @@ export function MessageComposer({
   // ---- Render --------------------------------------------------------
 
   return (
-    <div className="border-t border-border bg-card p-3">
+    <div className="relative border-t border-border bg-card p-3">
       {replyTo && (
         <div className="mb-2">
           <ReplyQuote
@@ -588,6 +641,18 @@ export function MessageComposer({
                 <Sparkles className="h-4 w-4" />
               )}
             </GatedButton>
+
+            <GatedButton
+              variant="ghost"
+              size="sm"
+              canAct={!readOnly}
+              gateReason="send messages"
+              title={readOnly ? undefined : "Quick replies"}
+              className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setQrModalOpen(true)}
+            >
+              <MessageSquareText className="h-4 w-4" />
+            </GatedButton>
           </div>
 
           {/* Input + send row */}
@@ -627,14 +692,30 @@ export function MessageComposer({
         </div>
       )}
 
-      {/* Hint sits outside the flex row so its height doesn't push
-          `items-end` buttons below the textarea. Indented to line up
-          under the textarea left edge. */}
-      {/* {!draft && !recording && (
-        <p className="mt-1 pl-[5.5rem] text-[10px] text-muted-foreground">
-          Tap the ✨ to draft a reply with AI — you can edit it before sending
-        </p>
-      )} */}
+      {/* Slash command inline picker */}
+      <QuickReplyPicker
+        ref={slashPickerRef}
+        open={slashOpen}
+        mode="inline"
+        slashQuery={slashQuery}
+        contact={contact ?? null}
+        agentName={agentName ?? null}
+        onSelect={handleQuickReplySelect}
+        onClose={() => {
+          setSlashOpen(false);
+          setSlashQuery("");
+        }}
+      />
+
+      {/* Modal picker (button-triggered) */}
+      <QuickReplyPicker
+        open={qrModalOpen}
+        mode="modal"
+        contact={contact ?? null}
+        agentName={agentName ?? null}
+        onSelect={handleQuickReplySelect}
+        onClose={() => setQrModalOpen(false)}
+      />
     </div>
   );
 }
