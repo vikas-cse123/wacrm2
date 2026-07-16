@@ -493,7 +493,7 @@ export default function QuickRepliesPage() {
                 onChange={(e) =>
                   setForm((f) => ({ ...f, message: e.target.value }))
                 }
-                placeholder="Hello {{name}}, thank you for contacting us!"
+                placeholder="Hello, Thank you for contacting us!"
                 rows={4}
                 className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
               />
