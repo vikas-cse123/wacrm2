@@ -8,7 +8,7 @@ import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync'
  * Sweep abandoned active flow runs.
  *
  * Reads each active run's parent-flow `fallback_policy.on_timeout_hours`
- * to compute the staleness cutoff (default 24h), then marks any run
+ * to compute the staleness cutoff (default 10m), then marks any run
  * past its cutoff as `timed_out`. Writes a matching `flow_run_events`
  * row for the audit trail.
  *
@@ -23,8 +23,8 @@ import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync'
  * URLs so one failing doesn't block the other.
  *
  * Hosting: hit on a schedule (Vercel Cron / GitHub Actions / external
- * pinger). A 5-minute interval is more than enough for a 24h timeout
- * default; once per hour would also be acceptable for low-volume
+ * pinger). A 5-minute interval is more than enough for a 10m timeout
+ * default; once per minute would also be acceptable for low-volume
  * tenants.
  */
 export async function GET(request: Request) {
