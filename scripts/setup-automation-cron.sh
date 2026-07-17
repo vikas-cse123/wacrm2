@@ -23,11 +23,13 @@ set -euo pipefail
 APP_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PUBLIC_URL="${2:-https://interscalechat.co.in}"
 ENV_FILE="$APP_DIR/.env.local"
-CRON_URL="${PUBLIC_URL%/}/api/automations/cron"
+AUTOMATION_CRON_URL="${PUBLIC_URL%/}/api/automations/cron"
+FLOW_CRON_URL="${PUBLIC_URL%/}/api/flows/cron"
 MARKER="# wacrm-automation-cron"
 
 echo "▸ App dir     : $APP_DIR"
-echo "▸ Cron target : $CRON_URL"
+echo "▸ Cron targets: $AUTOMATION_CRON_URL"
+echo "               $FLOW_CRON_URL"
 
 # 1) Ensure the secret exists ------------------------------------------------
 if [ ! -f "$ENV_FILE" ]; then
@@ -65,7 +67,7 @@ fi
 
 # Reads the secret from .env.local at run time, so rotating it + re-running
 # this script keeps the two in sync automatically.
-CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$CRON_URL\" >/dev/null 2>&1 $MARKER"
+CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$AUTOMATION_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$FLOW_CRON_URL\" >/dev/null 2>&1 $MARKER"
 
 # Replace any prior line we installed, keep everything else. Both `crontab -l`
 # (no crontab yet) and `grep -v` (empty input) legitimately exit non-zero, so
@@ -82,7 +84,7 @@ echo "▸ Cron        : installed (every minute)"
 echo "▸ Verifying   : calling the endpoint (waiting for the app to come up)…"
 CODE="" RESP=""
 for _ in 1 2 3 4 5 6 7 8; do
-  OUT="$(curl -sS -m 10 -w $'\n%{http_code}' -H "x-cron-secret: $SECRET" "$CRON_URL" 2>/dev/null || true)"
+  OUT="$(curl -sS -m 10 -w $'\n%{http_code}' -H "x-cron-secret: $SECRET" "$AUTOMATION_CRON_URL" 2>/dev/null || true)"
   CODE="${OUT##*$'\n'}"
   RESP="${OUT%$'\n'*}"
   [ "$CODE" = "200" ] && break
@@ -92,10 +94,19 @@ case "$CODE" in
   200) echo "✓ Working — endpoint responded: $RESP" ;;
   503) echo "✗ App isn't loading the secret (HTTP 503). Check AUTOMATION_CRON_SECRET is in .env.local, then restart the app." >&2; exit 1 ;;
   401) echo "✗ Secret mismatch (HTTP 401) between .env.local and the running app. Restart the app and re-run." >&2; exit 1 ;;
-  000 | "") echo "✗ Couldn't reach $CRON_URL (no HTTP status). Is the app up and served over HTTPS?  Try: curl -I $PUBLIC_URL" >&2; exit 1 ;;
-  *) echo "✗ Unexpected HTTP $CODE from $CRON_URL — body: $RESP" >&2; exit 1 ;;
+  000 | "") echo "✗ Couldn't reach $AUTOMATION_CRON_URL (no HTTP status). Is the app up and served over HTTPS?  Try: curl -I $PUBLIC_URL" >&2; exit 1 ;;
+  *) echo "✗ Unexpected HTTP $CODE from $AUTOMATION_CRON_URL — body: $RESP" >&2; exit 1 ;;
 esac
 
+FLOW_OUT="$(curl -sS -m 60 -w $'\n%{http_code}' -H "x-cron-secret: $SECRET" "$FLOW_CRON_URL" 2>/dev/null || true)"
+FLOW_CODE="${FLOW_OUT##*$'\n'}"
+FLOW_RESP="${FLOW_OUT%$'\n'*}"
+if [ "$FLOW_CODE" != "200" ]; then
+  echo "✗ Flow cron verification failed (HTTP $FLOW_CODE): $FLOW_RESP" >&2
+  exit 1
+fi
+echo "✓ Flow sweep working — endpoint responded: $FLOW_RESP"
+
 echo
-echo "Done. Wait-step automations will now resume within ~1 minute of their due time."
+echo "Done. Wait-step automations and incomplete-flow sheets now update every minute."
 echo "Watch it run:  crontab -l | grep automation-cron"
