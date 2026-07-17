@@ -1,14 +1,12 @@
-import { timingSafeEqual } from 'node:crypto'
-import { NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/flows/admin-client'
-import { resolveFallbackPolicy } from '@/lib/flows/fallback'
-import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync'
+import { timingSafeEqual } from 'node:crypto';
+import { NextResponse } from 'next/server';
+import { runFlowCron } from '@/lib/flows/cron-runner';
 
 /**
  * Sweep abandoned active flow runs.
  *
  * Reads each active run's parent-flow `fallback_policy.on_timeout_hours`
- * to compute the staleness cutoff (default 10m), then marks any run
+ * to compute the staleness cutoff (default 5m), then marks any run
  * past its cutoff as `timed_out`. Writes a matching `flow_run_events`
  * row for the audit trail.
  *
@@ -22,104 +20,42 @@ import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync'
  * and this one) are independent operations; we keep them on separate
  * URLs so one failing doesn't block the other.
  *
- * Hosting: hit on a schedule (Vercel Cron / GitHub Actions / external
- * pinger). A 5-minute interval is more than enough for a 10m timeout
- * default; once per minute would also be acceptable for low-volume
- * tenants.
+ * Hosting: Vercel calls this endpoint from vercel.json. Persistent Node
+ * deployments also run the same job internally from instrumentation.ts.
  */
 export async function GET(request: Request) {
-  const expected = process.env.CRON_SECRET ?? process.env.AUTOMATION_CRON_SECRET
-  if (!expected) {
-    return NextResponse.json({ error: 'cron not configured' }, { status: 503 })
+  const expectedSecrets = [
+    process.env.CRON_SECRET,
+    process.env.AUTOMATION_CRON_SECRET,
+  ].filter((secret): secret is string => Boolean(secret));
+  if (expectedSecrets.length === 0) {
+    return NextResponse.json({ error: 'cron not configured' }, { status: 503 });
   }
   // Constant-time compare so an attacker who can hit the endpoint
   // can't recover the secret byte-by-byte from response-time deltas.
   // Length pre-check is required by timingSafeEqual (throws otherwise)
   // and leaks only the length itself, which isn't sensitive.
-  const authorization = request.headers.get('authorization')
-  const supplied = request.headers.get('x-cron-secret') ??
-    (authorization?.startsWith('Bearer ') ? authorization.slice(7) : '')
-  const suppliedBuf = Buffer.from(supplied)
-  const expectedBuf = Buffer.from(expected)
-  if (
-    suppliedBuf.length !== expectedBuf.length ||
-    !timingSafeEqual(suppliedBuf, expectedBuf)
-  ) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const authorization = request.headers.get('authorization');
+  const supplied =
+    request.headers.get('x-cron-secret') ??
+    (authorization?.startsWith('Bearer ') ? authorization.slice(7) : '');
+  const suppliedBuf = Buffer.from(supplied);
+  const authorized = expectedSecrets.some((expected) => {
+    const expectedBuf = Buffer.from(expected);
+    return (
+      suppliedBuf.length === expectedBuf.length &&
+      timingSafeEqual(suppliedBuf, expectedBuf)
+    );
+  });
+  if (!authorized) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const admin = supabaseAdmin()
-  const now = new Date()
-
-  // Pull all currently-active runs along with their parent flow's
-  // fallback_policy. Joined in one query — the small set of active
-  // runs per tenant keeps this cheap.
-  const { data: runs, error } = await admin
-    .from('flow_runs')
-    .select(
-      'id, flow_id, user_id, contact_id, last_advanced_at, flows ( fallback_policy )',
-    )
-    .eq('status', 'active')
-
-  if (error) {
-    console.error('[flows-cron] active-run scan failed:', error.message)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  try {
+    return NextResponse.json(await runFlowCron());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[flows-cron] sweep failed:', message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-  if (!runs?.length) {
-    // Still run the incomplete-sheet sync — earlier passes (or manual
-    // status changes) may have left unsynced dropped runs behind.
-    const incomplete = await syncAllIncompleteSheets(admin)
-    return NextResponse.json({ swept: 0, incompleteSynced: incomplete.synced })
-  }
-
-  type Row = {
-    id: string
-    flow_id: string
-    user_id: string
-    contact_id: string | null
-    last_advanced_at: string
-    flows: { fallback_policy: unknown } | { fallback_policy: unknown }[] | null
-  }
-
-  let swept = 0
-  for (const r of runs as Row[]) {
-    const flowsField = Array.isArray(r.flows) ? r.flows[0] : r.flows
-    const policy = resolveFallbackPolicy(flowsField?.fallback_policy ?? null)
-    const lastAdvanced = new Date(r.last_advanced_at)
-    const ageHours = (now.getTime() - lastAdvanced.getTime()) / (1000 * 60 * 60)
-    if (ageHours < policy.on_timeout_hours) continue
-
-    // Mark timed_out — guarded by the precondition `status='active'`
-    // so concurrent advance from a late inbound doesn't overwrite a
-    // legitimate update.
-    const { data: updated } = await admin
-      .from('flow_runs')
-      .update({
-        status: 'timed_out',
-        ended_at: now.toISOString(),
-        end_reason: 'stale_sweep',
-      })
-      .eq('id', r.id)
-      .eq('status', 'active')
-      .select('id')
-
-    if (Array.isArray(updated) && updated.length > 0) {
-      await admin.from('flow_run_events').insert({
-        flow_run_id: r.id,
-        event_type: 'timeout',
-        payload: {
-          age_hours: Math.round(ageHours * 10) / 10,
-          policy_hours: policy.on_timeout_hours,
-        },
-      })
-      swept += 1
-    }
-  }
-
-  // Live incomplete-sheets: append the runs this sweep just timed out
-  // (plus any older unsynced ones) to their flows' linked spreadsheets.
-  // Watermark-based, so re-running never duplicates a row.
-  const incomplete = await syncAllIncompleteSheets(admin)
-
-  return NextResponse.json({ swept, incompleteSynced: incomplete.synced })
 }
