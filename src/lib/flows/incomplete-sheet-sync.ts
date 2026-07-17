@@ -68,14 +68,17 @@ export async function syncIncompleteRunsForFlow(
   db: SupabaseClient,
   config: IncompleteSheetConfigRow,
   accessToken: string,
+  window?: { from?: string; to?: string },
 ): Promise<number> {
-  const { data: runs } = await db
+  let runsQuery = db
     .from("flow_runs")
     .select("id, contact_id, vars, started_at, ended_at")
     .eq("flow_id", config.flow_id)
     .in("status", INCOMPLETE_STATUSES)
-    .is("incomplete_synced_at", null)
-    .order("started_at", { ascending: true });
+    .is("incomplete_synced_at", null);
+  if (window?.from) runsQuery = runsQuery.gte("started_at", window.from);
+  if (window?.to) runsQuery = runsQuery.lt("started_at", window.to);
+  const { data: runs } = await runsQuery.order("started_at", { ascending: true });
 
   if (!runs || runs.length === 0) return 0;
 

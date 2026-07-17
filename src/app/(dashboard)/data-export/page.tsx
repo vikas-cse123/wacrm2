@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Loader2, Trash2, ArrowUpRight, Download } from "lucide-react";
+import { Loader2, Trash2, ArrowUpRight } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ImportDateRangePopover } from "@/components/flows/import-date-range-popover";
 
 interface LinkedSheet {
   flow_id: string;
@@ -60,18 +62,26 @@ export default function DataExportPage() {
     }
   }
 
-  async function handleImport(flowId: string) {
+  async function handleImport(
+    flowId: string,
+    window_: { from?: string; to?: string },
+  ) {
     try {
       const res = await fetch(`/api/google-sheets/${flowId}/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(window_),
       });
-      if (!res.ok) throw new Error("Import failed");
-      const data = await res.json();
-      alert(`Imported ${data.imported} rows`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Import failed");
+      toast.success(
+        data.imported > 0
+          ? `Imported ${data.imported} row${data.imported === 1 ? "" : "s"}`
+          : "No completed responses in that range.",
+      );
     } catch (err) {
-      alert(`Error: ${err instanceof Error ? err.message : "Import failed"}`);
+      toast.error(err instanceof Error ? err.message : "Import failed");
+      throw err; // keep the popover open on failure
     }
   }
 
@@ -88,11 +98,16 @@ export default function DataExportPage() {
     }
   }
 
-  async function handleEnableLiveSheet(flowId: string) {
+  async function handleEnableLiveSheet(
+    flowId: string,
+    window_: { from?: string; to?: string },
+  ) {
     setGeneratingFlowId(flowId);
     try {
       const res = await fetch(`/api/flows/${flowId}/incomplete-sheet`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(window_),
       });
       if (!res.ok) {
         const error = await res.json().catch(() => ({}));
@@ -109,6 +124,11 @@ export default function DataExportPage() {
               }
             : f
         )
+      );
+      toast.success(
+        data.imported > 0
+          ? `Imported ${data.imported} incomplete run${data.imported === 1 ? "" : "s"}.`
+          : "Live sheet is ready. No incomplete runs in that range.",
       );
     } catch (err) {
       alert(
@@ -194,13 +214,12 @@ export default function DataExportPage() {
                     </a>
                   </div>
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleImport(sheet.flow_id)}
-                    >
-                      Import
-                    </Button>
+                    <ImportDateRangePopover
+                      triggerLabel="Import"
+                      onConfirm={(window_) =>
+                        handleImport(sheet.flow_id, window_)
+                      }
+                    />
                     <Button
                       variant="outline"
                       size="sm"
@@ -261,29 +280,20 @@ export default function DataExportPage() {
                       </a>
                     )}
                   </div>
-                  {flow.liveSheetUrl ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDisableLiveSheet(flow.flow_id)}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Disable
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleEnableLiveSheet(flow.flow_id)}
+                  <div className="flex gap-2">
+                    <ImportDateRangePopover
+                      triggerLabel={flow.liveSheetUrl ? "Import" : "Enable live sheet"}
+                      onConfirm={(window_) => handleEnableLiveSheet(flow.flow_id, window_)}
                       disabled={generatingFlowId === flow.flow_id}
-                    >
-                      {generatingFlowId === flow.flow_id && (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      )}
-                      <Download className="mr-2 h-4 w-4" />
-                      Enable Live Sheet
-                    </Button>
-                  )}
+                      busy={generatingFlowId === flow.flow_id}
+                    />
+                    {flow.liveSheetUrl && (
+                      <Button variant="outline" size="sm" onClick={() => handleDisableLiveSheet(flow.flow_id)}>
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Disable
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

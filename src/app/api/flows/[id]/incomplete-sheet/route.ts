@@ -20,12 +20,22 @@ import {
 } from "@/lib/flows/incomplete-sheet-sync";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id: flowId } = await context.params;
     const ctx = await requireRole("admin");
+    const body = await request.json().catch(() => ({}));
+    const parseDate = (value: unknown) => {
+      if (typeof value !== "string" || !value) return undefined;
+      const ms = Date.parse(value);
+      return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
+    };
+    const window = {
+      from: parseDate((body as Record<string, unknown>).from),
+      to: parseDate((body as Record<string, unknown>).to),
+    };
 
     const { data: flow } = await ctx.supabase
       .from("flows")
@@ -45,14 +55,18 @@ export async function POST(
       );
     }
 
-    // Already enabled → idempotent success.
+    // Already enabled: use this as a manual, date-filterable import of
+    // unsynced historical incomplete runs. The cron handles future runs.
     const { data: existing } = await ctx.supabase
       .from("flow_incomplete_sheet_configs")
       .select("*")
       .eq("flow_id", flowId)
       .maybeSingle<IncompleteSheetConfigRow>();
     if (existing) {
-      return NextResponse.json({ config: existing, imported: 0 });
+      const imported = await syncIncompleteRunsForFlow(
+        supabaseAdmin(), existing, token, window,
+      );
+      return NextResponse.json({ config: existing, imported });
     }
 
     const meta = await createSpreadsheet(
@@ -84,6 +98,7 @@ export async function POST(
       supabaseAdmin(),
       config,
       token,
+      window,
     );
 
     return NextResponse.json({ config, imported });

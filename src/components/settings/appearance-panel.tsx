@@ -176,29 +176,20 @@ function FontCard({
           : "border-border hover:border-border hover:bg-muted/40",
       )}
     >
-      <div className="flex items-center justify-between">
-        <span
-          aria-hidden
-          className="text-xl leading-none text-foreground"
-          style={{ fontFamily: preview }}
-        >
-          Ag
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold text-foreground">{name}</div>
         {isActive && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
             <Check className="h-3 w-3" />
             Active
           </span>
         )}
       </div>
-      <div>
-        <div className="text-sm font-semibold text-foreground">{name}</div>
-        <div
-          className="mt-1 truncate text-xs text-muted-foreground"
-          style={{ fontFamily: preview }}
-        >
-          The quick brown fox jumps
-        </div>
+      <div
+        className="truncate text-xs text-muted-foreground"
+        style={{ fontFamily: preview }}
+      >
+        The quick brown fox jumps
       </div>
       <span className="sr-only">Font id: {id}</span>
     </button>
