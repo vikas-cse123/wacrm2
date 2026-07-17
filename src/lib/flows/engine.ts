@@ -306,6 +306,60 @@ async function loadActiveRunForContact(
   return rows[0] ?? null;
 }
 
+/**
+ * Return the newest timed-out run whose parent flow is still active.
+ * A timeout reports abandonment to the incomplete sheet, but does not erase
+ * the customer's position; a later inbound can reopen this row and continue.
+ */
+async function loadResumableRunForContact(
+  db: AdminClient,
+  accountId: string,
+  contactId: string,
+): Promise<FlowRunRow | null> {
+  const { data, error } = await db
+    .from("flow_runs")
+    .select("*, flows!inner(status)")
+    .eq("account_id", accountId)
+    .eq("contact_id", contactId)
+    .eq("status", "timed_out")
+    .eq("flows.status", "active")
+    .not("current_node_key", "is", null)
+    .order("ended_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error("[flows] loadResumableRunForContact error:", error.message);
+    return null;
+  }
+  const rows = (data as unknown as FlowRunRow[] | null) ?? [];
+  return rows[0] ?? null;
+}
+
+/** Atomically reopen a timed-out run while preserving its pointer and vars. */
+async function resumeTimedOutRun(
+  db: AdminClient,
+  runId: string,
+): Promise<FlowRunRow | null> {
+  const { data, error } = await db
+    .from("flow_runs")
+    .update({
+      status: "active",
+      ended_at: null,
+      end_reason: null,
+      last_advanced_at: new Date().toISOString(),
+    })
+    .eq("id", runId)
+    .eq("status", "timed_out")
+    .select("*")
+    .maybeSingle();
+  if (error) {
+    // A simultaneous inbound may already have resumed this run. The caller
+    // reloads the active row, so a unique-index race is safe to ignore here.
+    console.error("[flows] resumeTimedOutRun error:", error.message);
+    return null;
+  }
+  return (data as FlowRunRow | null) ?? null;
+}
+
 async function loadFlow(
   db: AdminClient,
   flowId: string,
@@ -1004,6 +1058,43 @@ export async function dispatchInboundToFlows(
       // in-memory. See loadAllNodes.
       const nodes = await loadAllNodes(db, activeRun.flow_id);
       return handleReplyForActiveRun(db, activeRun, input.message, nodes);
+    }
+
+    // A timeout means "report as incomplete", not "discard progress".
+    // Reopen the newest timed-out run and apply this inbound to the exact
+    // question where the customer stopped. Keep incomplete_synced_at intact
+    // so resuming cannot append a duplicate incomplete-sheet row.
+    const resumableRun = await loadResumableRunForContact(
+      db,
+      input.accountId,
+      input.contactId,
+    );
+    if (resumableRun) {
+      const dupe = await isDuplicateInbound(
+        db,
+        input.accountId,
+        input.contactId,
+        input.message.meta_message_id,
+      );
+      if (dupe) {
+        return {
+          consumed: true,
+          flow_run_id: resumableRun.id,
+          outcome: "duplicate_inbound_ignored",
+        };
+      }
+
+      const resumed = await resumeTimedOutRun(db, resumableRun.id);
+      const run =
+        resumed ??
+        (await loadActiveRunForContact(db, input.accountId, input.contactId));
+      if (run) {
+        await logEvent(db, run.id, "node_entered", run.current_node_key, {
+          resumed_after_timeout: true,
+        });
+        const nodes = await loadAllNodes(db, run.flow_id);
+        return handleReplyForActiveRun(db, run, input.message, nodes);
+      }
     }
 
     // No active run → look for a flow whose entry trigger matches.
