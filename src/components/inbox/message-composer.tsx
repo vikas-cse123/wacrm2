@@ -89,6 +89,14 @@ const PICKER_ACCEPT: Record<"image" | "video" | "document", string> = {
     "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
 };
 
+const EMOJI_PICKER = [
+  "😀", "😃", "😄", "😁", "😆", "😊", "🙂", "😉",
+  "😍", "😘", "😎", "🤩", "🤔", "🙌", "👏", "👍",
+  "🙏", "💯", "🔥", "✨", "🎉", "✅", "❌", "⚠️",
+  "📌", "📞", "💬", "📅", "⏰", "🚀", "🎁", "🌟",
+  "🤝", "💪", "❤️", "💙", "💚", "🧠", "📝", "📣",
+] as const;
+
 interface MediaDraft {
   kind: ComposerMediaKind;
   mediaUrl: string;
@@ -654,7 +662,7 @@ export function MessageComposer({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-64 border-border bg-popover p-2">
                 <div className="grid grid-cols-8 gap-1" aria-label="Emoji picker">
-                  {["😀", "😃", "😊", "😍", "😘", "😂", "😭", "😅", "😉", "🤔", "🙌", "👍", "👎", "👏", "🙏", "💯", "❤️", "🔥", "✨", "🎉", "✅", "❌", "⚠️", "📌", "📞", "💬", "📅", "⏰", "🚀", "🎁", "🌟", "😊"].map((emoji, index) => (
+                  {EMOJI_PICKER.map((emoji, index) => (
                     <button
                       key={`${emoji}-${index}`}
                       type="button"

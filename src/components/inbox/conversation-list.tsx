@@ -216,6 +216,7 @@ useEffect(() => {
   const clearContactFilters = useCallback(() => {
     setSelectedTagIds([]);
     setSelectedCompany(null);
+    setSelectedMemberIds([]);
   }, []);
 
   const toggleMember = useCallback((id: string) => {

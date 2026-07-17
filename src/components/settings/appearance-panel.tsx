@@ -177,7 +177,12 @@ function FontCard({
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-foreground">{name}</div>
+        <div className="space-y-0.5">
+          <div className="text-sm font-semibold text-foreground">{name}</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Font family
+          </div>
+        </div>
         {isActive && (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
             <Check className="h-3 w-3" />
@@ -186,10 +191,13 @@ function FontCard({
         )}
       </div>
       <div
-        className="truncate text-xs text-muted-foreground"
+        className="truncate text-sm text-muted-foreground"
         style={{ fontFamily: preview }}
       >
         The quick brown fox jumps
+      </div>
+      <div className="truncate text-[11px] text-muted-foreground/80">
+        {preview}
       </div>
       <span className="sr-only">Font id: {id}</span>
     </button>
