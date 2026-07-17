@@ -76,14 +76,24 @@ printf '%s\n%s\n' "$KEPT" "$CRON_LINE" | grep -v '^[[:space:]]*$' | crontab -
 echo "▸ Cron        : installed (every minute)"
 
 # 4) Verify ------------------------------------------------------------------
-echo "▸ Verifying   : calling the endpoint once…"
-RESP="$(curl -fsS -H "x-cron-secret: $SECRET" "$CRON_URL" 2>/dev/null || true)"
-case "$RESP" in
-  *processed*) echo "✓ Working — endpoint responded: $RESP" ;;
-  *"cron not configured"*) echo "✗ App hasn't loaded the secret yet. Give the restart a few seconds and re-run, or check the app is serving $PUBLIC_URL." >&2; exit 1 ;;
-  *Unauthorized*) echo "✗ Secret mismatch between .env.local and the running app. Restart the app and re-run." >&2; exit 1 ;;
-  "") echo "✗ No response from $CRON_URL — is the app up and reachable over HTTPS?" >&2; exit 1 ;;
-  *) echo "? Unexpected response: $RESP" >&2; exit 1 ;;
+# Retry, because the app is usually still booting right after the restart.
+# No `-f`: we want the error body/status, not an empty string, so we can
+# tell "still booting" (502/000) from a real 401/503.
+echo "▸ Verifying   : calling the endpoint (waiting for the app to come up)…"
+CODE="" RESP=""
+for _ in 1 2 3 4 5 6 7 8; do
+  OUT="$(curl -sS -m 10 -w $'\n%{http_code}' -H "x-cron-secret: $SECRET" "$CRON_URL" 2>/dev/null || true)"
+  CODE="${OUT##*$'\n'}"
+  RESP="${OUT%$'\n'*}"
+  [ "$CODE" = "200" ] && break
+  sleep 3
+done
+case "$CODE" in
+  200) echo "✓ Working — endpoint responded: $RESP" ;;
+  503) echo "✗ App isn't loading the secret (HTTP 503). Check AUTOMATION_CRON_SECRET is in .env.local, then restart the app." >&2; exit 1 ;;
+  401) echo "✗ Secret mismatch (HTTP 401) between .env.local and the running app. Restart the app and re-run." >&2; exit 1 ;;
+  000 | "") echo "✗ Couldn't reach $CRON_URL (no HTTP status). Is the app up and served over HTTPS?  Try: curl -I $PUBLIC_URL" >&2; exit 1 ;;
+  *) echo "✗ Unexpected HTTP $CODE from $CRON_URL — body: $RESP" >&2; exit 1 ;;
 esac
 
 echo
