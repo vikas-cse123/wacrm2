@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS flows (
   -- (enforced by the validator, not at the DB level so drafts can save).
   entry_node_id TEXT,
   fallback_policy JSONB NOT NULL DEFAULT
-    '{"on_unknown_reply":"reprompt","max_reprompts":2,"on_timeout_hours":24,"on_exhaust":"handoff"}'::jsonb,
+    '{"on_unknown_reply":"reprompt","max_reprompts":2,"on_timeout_hours":0.1666666667,"on_exhaust":"handoff"}'::jsonb,
   execution_count INTEGER NOT NULL DEFAULT 0,
   last_executed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
