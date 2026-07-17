@@ -8,8 +8,8 @@ import {
   normalizeConversations,
 } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X } from "lucide-react";
+import type { AccountMember, Conversation, ConversationStatus, Tag } from "@/types";
+import { Search, ChevronDown, Users, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
 import {
@@ -67,6 +67,8 @@ export function ConversationList({
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  const [members, setMembers] = useState<AccountMember[]>([]);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -121,6 +123,20 @@ export function ConversationList({
     // up on any events sent while the WS was disconnected or throttled.
   }, [resyncToken]);
 
+  // Assignment is account-wide, so load the roster through the scoped API
+  // instead of exposing profile queries from this client component.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/account/members");
+      const data = await res.json().catch(() => ({}));
+      if (!cancelled && res.ok && Array.isArray(data.members)) {
+        setMembers(data.members as AccountMember[]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [resyncToken]);
+
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
 useEffect(() => {
@@ -172,6 +188,12 @@ useEffect(() => {
       );
     }
 
+    if (selectedMemberIds.length > 0) {
+      result = result.filter((c) =>
+        selectedMemberIds.includes(c.assigned_agent_id ?? "unassigned"),
+      );
+    }
+
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter((c) => {
@@ -183,7 +205,7 @@ useEffect(() => {
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [conversations, filter, search, selectedTagIds, selectedCompany, selectedMemberIds]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -196,7 +218,13 @@ useEffect(() => {
     setSelectedCompany(null);
   }, []);
 
-  const hasContactFilters = selectedTagIds.length > 0 || selectedCompany !== null;
+  const toggleMember = useCallback((id: string) => {
+    setSelectedMemberIds((prev) =>
+      prev.includes(id) ? prev.filter((memberId) => memberId !== id) : [...prev, id],
+    );
+  }, []);
+
+  const hasContactFilters = selectedTagIds.length > 0 || selectedCompany !== null || selectedMemberIds.length > 0;
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -347,6 +375,34 @@ useEffect(() => {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          {members.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={cn(
+                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  selectedMemberIds.length > 0 ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Users className="h-3 w-3" />
+                Team
+                {selectedMemberIds.length > 0 && (
+                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{selectedMemberIds.length}</span>
+                )}
+                <ChevronDown className="h-3 w-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-64 w-56 border-border bg-popover">
+                <DropdownMenuCheckboxItem checked={selectedMemberIds.includes("unassigned")} onCheckedChange={() => toggleMember("unassigned")} className="text-sm text-popover-foreground">
+                  Unassigned
+                </DropdownMenuCheckboxItem>
+                {members.map((member) => (
+                  <DropdownMenuCheckboxItem key={member.user_id} checked={selectedMemberIds.includes(member.user_id)} onCheckedChange={() => toggleMember(member.user_id)} className="text-sm text-popover-foreground">
+                    {member.full_name || "Unnamed member"}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
         {hasContactFilters && (
@@ -377,6 +433,15 @@ useEffect(() => {
                 <X className="h-3 w-3" />
               </button>
             )}
+            {selectedMemberIds.map((id) => {
+              const member = members.find((item) => item.user_id === id);
+              return (
+                <button key={id} onClick={() => toggleMember(id)} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70">
+                  <span className="max-w-24 truncate">{id === "unassigned" ? "Unassigned" : member?.full_name || "Team member"}</span>
+                  <X className="h-3 w-3" />
+                </button>
+              );
+            })}
             <button
               onClick={clearContactFilters}
               className="px-1 text-[11px] text-muted-foreground hover:text-foreground"

@@ -20,6 +20,7 @@ import {
   Loader2,
   Sparkles,
   MessageSquareText,
+  Smile,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -278,6 +279,24 @@ export function MessageComposer({
     },
     [adjustHeight],
   );
+
+  // Inserts at the actual caret rather than always appending, so agents can
+  // compose naturally in the middle of a message too.
+  const insertEmoji = useCallback((emoji: string) => {
+    const input = textareaRef.current;
+    const start = input?.selectionStart ?? text.length;
+    const end = input?.selectionEnd ?? text.length;
+    const next = `${text.slice(0, start)}${emoji}${text.slice(end)}`;
+    setText(next);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const cursor = start + emoji.length;
+      el.focus();
+      el.setSelectionRange(cursor, cursor);
+      adjustHeight();
+    });
+  }, [adjustHeight, text]);
 
   // Ask the AI assistant for a suggested reply and drop it into the
   // composer for the agent to edit + send. Read-only server-side —
@@ -624,6 +643,31 @@ export function MessageComposer({
             >
               <LayoutTemplate className="h-4 w-4" />
             </GatedButton>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={inputsDisabled}
+                title={readOnly ? "Read-only — your role can't send messages" : "Add emoji"}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Smile className="h-4 w-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64 border-border bg-popover p-2">
+                <div className="grid grid-cols-8 gap-1" aria-label="Emoji picker">
+                  {["😀", "😃", "😊", "😍", "😘", "😂", "😭", "😅", "😉", "🤔", "🙌", "👍", "👎", "👏", "🙏", "💯", "❤️", "🔥", "✨", "🎉", "✅", "❌", "⚠️", "📌", "📞", "💬", "📅", "⏰", "🚀", "🎁", "🌟", "😊"].map((emoji, index) => (
+                    <button
+                      key={`${emoji}-${index}`}
+                      type="button"
+                      className="rounded p-1 text-lg leading-none hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                      onClick={() => insertEmoji(emoji)}
+                      aria-label={`Insert ${emoji}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             <GatedButton
               variant="ghost"

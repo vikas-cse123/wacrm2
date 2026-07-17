@@ -15,6 +15,12 @@ function stringifyVar(v: unknown): string {
   return String(v);
 }
 
+function parseIsoDate(value: unknown): string | null {
+  if (typeof value !== "string" || !value) return null;
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).toISOString();
+}
 
 export async function POST(
   request: Request,
@@ -23,6 +29,12 @@ export async function POST(
   try {
     const { flowId } = await context.params;
     const ctx = await getCurrentAccount();
+
+    // Optional date-range filter on started_at (from inclusive, to
+    // exclusive). Absent/empty body imports everything.
+    const body = await request.json().catch(() => ({}));
+    const from = parseIsoDate((body as Record<string, unknown>)?.from);
+    const to = parseIsoDate((body as Record<string, unknown>)?.to);
 
     const token = await getValidAccessToken(ctx.supabase, ctx.accountId);
     if (!token) {
@@ -42,12 +54,16 @@ export async function POST(
 
     const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
-    const { data: runs } = await ctx.supabase
+    let runsQuery = ctx.supabase
       .from("flow_runs")
       .select("id, contact_id, vars, started_at, ended_at")
       .eq("flow_id", flowId)
-      .eq("status", "completed")
-      .order("started_at", { ascending: true });
+      .eq("status", "completed");
+    if (from) runsQuery = runsQuery.gte("started_at", from);
+    if (to) runsQuery = runsQuery.lt("started_at", to);
+    const { data: runs } = await runsQuery.order("started_at", {
+      ascending: true,
+    });
 
     if (!runs || runs.length === 0) {
       return NextResponse.json({ imported: 0 });
