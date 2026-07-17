@@ -197,9 +197,22 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
 
       setTags((prev) => [...prev, { ...tag, contact_tag_id: data.id }]);
       setTogglingTagId(null);
-        onTagsChanged?.();
+      onTagsChanged?.();
+
+      // A manual tag add should also be able to fire a `tag_added`
+      // automation. The server route resolves the account from the session
+      // and matches the tag; fire-and-forget so the UI never blocks on it.
+      void fetch("/api/automations/engine", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          trigger_type: "tag_added",
+          contact_id: contact.id,
+          context: { tag_id: tag.id },
+        }),
+      }).catch(() => {});
     },
-    [contact, accountId,onTagsChanged],
+    [contact, accountId, onTagsChanged],
   );
 
   // Remove a tag from the current contact (does not delete the tag
