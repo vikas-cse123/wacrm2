@@ -10,12 +10,16 @@ import {
 } from "react";
 
 import {
+  DEFAULT_FONT,
   DEFAULT_MODE,
   DEFAULT_THEME,
+  FONT_STORAGE_KEY,
   MODE_STORAGE_KEY,
   STORAGE_KEY,
+  isFontId,
   isMode,
   isThemeId,
+  type FontId,
   type Mode,
   type ThemeId,
 } from "@/lib/themes";
@@ -43,6 +47,8 @@ interface ThemeContextValue {
   mode: Mode;
   setMode: (next: Mode) => void;
   toggleMode: () => void;
+  font: FontId;
+  setFont: (next: FontId) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -76,9 +82,23 @@ function readInitialMode(): Mode {
   return DEFAULT_MODE;
 }
 
+function readInitialFont(): FontId {
+  if (typeof window === "undefined") return DEFAULT_FONT;
+  const fromAttr = document.documentElement.dataset.font;
+  if (isFontId(fromAttr)) return fromAttr;
+  try {
+    const stored = localStorage.getItem(FONT_STORAGE_KEY);
+    if (isFontId(stored)) return stored;
+  } catch {
+    // localStorage can throw in private-browsing / sandboxed contexts.
+  }
+  return DEFAULT_FONT;
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeId>(readInitialTheme);
   const [mode, setModeState] = useState<Mode>(readInitialMode);
+  const [font, setFontState] = useState<FontId>(readInitialFont);
 
   const setTheme = useCallback((next: ThemeId) => {
     setThemeState(next);
@@ -109,6 +129,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setMode(mode === "dark" ? "light" : "dark");
   }, [mode, setMode]);
 
+  const setFont = useCallback((next: FontId) => {
+    setFontState(next);
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.font = next;
+    }
+    try {
+      localStorage.setItem(FONT_STORAGE_KEY, next);
+    } catch {
+      // Same private-browsing edge case as above.
+    }
+  }, []);
+
   // Sync from other tabs — change theme or mode in tab A, tab B
   // catches up without a refresh.
   useEffect(() => {
@@ -125,14 +157,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           setModeState(e.newValue);
           document.documentElement.dataset.mode = e.newValue;
         }
+        return;
+      }
+      if (e.key === FONT_STORAGE_KEY) {
+        if (isFontId(e.newValue) && e.newValue !== font) {
+          setFontState(e.newValue);
+          document.documentElement.dataset.font = e.newValue;
+        }
       }
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [theme, mode]);
+  }, [theme, mode, font]);
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, mode, setMode, toggleMode }}>
+    <ThemeContext.Provider
+      value={{ theme, setTheme, mode, setMode, toggleMode, font, setFont }}
+    >
       {children}
     </ThemeContext.Provider>
   );
@@ -150,6 +191,8 @@ export function useTheme(): ThemeContextValue {
       mode: DEFAULT_MODE,
       setMode: () => {},
       toggleMode: () => {},
+      font: DEFAULT_FONT,
+      setFont: () => {},
     };
   }
   return ctx;

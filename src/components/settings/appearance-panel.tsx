@@ -1,9 +1,16 @@
 "use client";
 
-import { Check, Moon, Palette, SunMoon, Sun } from "lucide-react";
+import { Check, Moon, Palette, SunMoon, Sun, Type } from "lucide-react";
 
 import { useTheme } from "@/hooks/use-theme";
-import { MODES, THEMES, type Mode, type ThemeId } from "@/lib/themes";
+import {
+  FONTS,
+  MODES,
+  THEMES,
+  type FontId,
+  type Mode,
+  type ThemeId,
+} from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { SettingsPanelHead } from "./settings-panel-head";
 
@@ -20,7 +27,7 @@ import { SettingsPanelHead } from "./settings-panel-head";
  * loads.
  */
 export function AppearancePanel() {
-  const { theme, setTheme, mode, setMode } = useTheme();
+  const { theme, setTheme, mode, setMode, font, setFont } = useTheme();
   return (
     <section className="max-w-3xl animate-in fade-in-50 duration-200">
       <SettingsPanelHead
@@ -45,6 +52,30 @@ export function AppearancePanel() {
               mode={m}
               isActive={m === mode}
               onPick={() => setMode(m)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-8 space-y-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Type className="size-4 text-muted-foreground" />
+          Font family
+        </h3>
+
+        <div
+          role="radiogroup"
+          aria-label="Font family"
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
+        >
+          {FONTS.map((f) => (
+            <FontCard
+              key={f.id}
+              id={f.id}
+              name={f.name}
+              preview={f.preview}
+              isActive={f.id === font}
+              onPick={() => setFont(f.id)}
             />
           ))}
         </div>
@@ -114,6 +145,62 @@ function ModeCard({
           Active
         </span>
       )}
+    </button>
+  );
+}
+
+function FontCard({
+  id,
+  name,
+  preview,
+  isActive,
+  onPick,
+}: {
+  id: FontId;
+  name: string;
+  preview: string;
+  isActive: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      onClick={onPick}
+      aria-checked={isActive}
+      aria-label={`Use ${name} font`}
+      className={cn(
+        "flex flex-col gap-2 rounded-lg border bg-card p-4 text-left transition-colors",
+        isActive
+          ? "border-primary/60 ring-2 ring-primary/40"
+          : "border-border hover:border-border hover:bg-muted/40",
+      )}
+    >
+      <div className="flex items-center justify-between">
+        <span
+          aria-hidden
+          className="text-xl leading-none text-foreground"
+          style={{ fontFamily: preview }}
+        >
+          Ag
+        </span>
+        {isActive && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+            <Check className="h-3 w-3" />
+            Active
+          </span>
+        )}
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-foreground">{name}</div>
+        <div
+          className="mt-1 truncate text-xs text-muted-foreground"
+          style={{ fontFamily: preview }}
+        >
+          The quick brown fox jumps
+        </div>
+      </div>
+      <span className="sr-only">Font id: {id}</span>
     </button>
   );
 }

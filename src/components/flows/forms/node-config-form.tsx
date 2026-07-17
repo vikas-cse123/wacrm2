@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  CalendarDays,
   Loader2,
   Paperclip,
   Plus,
@@ -34,10 +35,18 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { addDays, format, startOfDay, subDays } from "date-fns";
+import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -1137,6 +1146,36 @@ interface SheetConfigRow {
   answer_headers?: string[];
 }
 
+/** Range presets for "Import past completed responses". */
+type ImportPreset = "1d" | "2d" | "3d" | "7d" | "all" | "custom";
+
+const IMPORT_PRESETS: Array<{ id: ImportPreset; label: string }> = [
+  { id: "1d", label: "Last 1 day" },
+  { id: "2d", label: "Last 2 days" },
+  { id: "3d", label: "Last 3 days" },
+  { id: "7d", label: "Last 7 days" },
+  { id: "all", label: "All time" },
+  { id: "custom", label: "Custom range" },
+];
+
+/**
+ * Preset → API date window. `from` is inclusive, `to` exclusive
+ * (matching the backfill route). Custom ranges snap to whole days —
+ * picking the same date twice imports that single day.
+ */
+function importPresetToWindow(
+  preset: ImportPreset,
+  range: DateRange | undefined,
+): { from?: string; to?: string } | null {
+  const days = { "1d": 1, "2d": 2, "3d": 3, "7d": 7 }[preset as string];
+  if (days) return { from: subDays(new Date(), days).toISOString() };
+  if (preset === "all") return {};
+  if (!range?.from) return null;
+  const from = startOfDay(range.from);
+  const to = addDays(startOfDay(range.to ?? range.from), 1);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
 function GoogleSheetsSyncForm({
   cfg,
   allNodes,
@@ -1159,6 +1198,9 @@ function GoogleSheetsSyncForm({
   const [urlInput, setUrlInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importPreset, setImportPreset] = useState<ImportPreset>("all");
+  const [importRange, setImportRange] = useState<DateRange | undefined>();
 
   const load = useCallback(async () => {
     try {
@@ -1260,25 +1302,26 @@ function GoogleSheetsSyncForm({
   };
 
   const importPast = async () => {
-    if (
-      !window.confirm(
-        "Import all past completed responses for this flow into the linked sheet? This appends rows — running it again will add them again.",
-      )
-    ) {
+    const window_ = importPresetToWindow(importPreset, importRange);
+    if (!window_) {
+      toast.error("Pick a date range first.");
       return;
     }
     setImporting(true);
     try {
       const res = await fetch(`/api/flows/${flowId}/sheet/backfill`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(window_),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import failed");
       toast.success(
         data.imported > 0
           ? `Imported ${data.imported} past response${data.imported === 1 ? "" : "s"}.`
-          : "No past completed responses to import.",
+          : "No past completed responses in that range.",
       );
+      setImportOpen(false);
       // Header is now written; refresh so the card reflects it.
       load();
     } catch (err) {
@@ -1386,21 +1429,85 @@ function GoogleSheetsSyncForm({
                   Import past responses
                 </p>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  Add every already-completed run of this flow to the sheet as
+                  Add already-completed runs of this flow to the sheet as
                   rows. New completions sync automatically going forward.
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2 h-7 text-xs"
-                  onClick={importPast}
-                  disabled={importing || busy}
-                >
-                  {importing ? (
-                    <Loader2 className="mr-1.5 size-3.5 animate-spin" />
-                  ) : null}
-                  Import past completed responses
-                </Button>
+                <Popover open={importOpen} onOpenChange={setImportOpen}>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 h-7 text-xs"
+                        disabled={importing || busy}
+                      />
+                    }
+                  >
+                    {importing ? (
+                      <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                    ) : (
+                      <CalendarDays className="mr-1.5 size-3.5" />
+                    )}
+                    Import past completed responses
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-3">
+                    <p className="text-xs font-medium text-foreground">
+                      Which responses to import?
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      {IMPORT_PRESETS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setImportPreset(p.id)}
+                          className={cn(
+                            "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                            importPreset === p.id
+                              ? "border-primary/60 bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:bg-muted/60",
+                          )}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                    {importPreset === "custom" && (
+                      <div className="mt-2 rounded-md border border-border">
+                        <Calendar
+                          mode="range"
+                          selected={importRange}
+                          onSelect={setImportRange}
+                          numberOfMonths={1}
+                          disabled={{ after: new Date() }}
+                          autoFocus
+                        />
+                        <p className="border-t border-border px-2 py-1.5 text-[11px] text-muted-foreground">
+                          {importRange?.from
+                            ? `${format(importRange.from, "d MMM yyyy")} — ${format(importRange.to ?? importRange.from, "d MMM yyyy")}`
+                            : "Pick a start and end date"}
+                        </p>
+                      </div>
+                    )}
+                    <p className="mt-2 max-w-[15rem] text-[11px] text-muted-foreground">
+                      Appends rows — importing the same range twice adds the
+                      rows again.
+                    </p>
+                    <Button
+                      size="sm"
+                      className="mt-2 h-7 w-full text-xs"
+                      onClick={importPast}
+                      disabled={
+                        importing ||
+                        (importPreset === "custom" && !importRange?.from)
+                      }
+                    >
+                      {importing ? (
+                        <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                      ) : null}
+                      Import
+                    </Button>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               <Button

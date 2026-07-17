@@ -17,7 +17,8 @@ interface FlowWithDroppedCount {
   flow_id: string;
   flow_name: string;
   droppedCount: number;
-  generatedSheetUrl?: string;
+  liveSheetUrl: string | null;
+  liveSheetName: string | null;
 }
 
 export default function DataExportPage() {
@@ -87,31 +88,60 @@ export default function DataExportPage() {
     }
   }
 
-  async function handleGenerateDroppedOff(flowId: string) {
+  async function handleEnableLiveSheet(flowId: string) {
     setGeneratingFlowId(flowId);
     try {
-      const res = await fetch(`/api/flows/${flowId}/dropped-off`, {
+      const res = await fetch(`/api/flows/${flowId}/incomplete-sheet`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
       });
       if (!res.ok) {
         const error = await res.json().catch(() => ({}));
-        throw new Error(error.error || "Generation failed");
+        throw new Error(error.error || "Failed to enable live sheet");
       }
       const data = await res.json();
-      // Update flows to show the generated sheet URL
-      setFlows(
-        flows.map((f) =>
+      setFlows((prev) =>
+        prev.map((f) =>
           f.flow_id === flowId
-            ? { ...f, generatedSheetUrl: data.sheetUrl }
+            ? {
+                ...f,
+                liveSheetUrl: data.config?.spreadsheet_url ?? null,
+                liveSheetName: data.config?.spreadsheet_name ?? null,
+              }
             : f
         )
       );
     } catch (err) {
-      alert(`Error: ${err instanceof Error ? err.message : "Generation failed"}`);
+      alert(
+        `Error: ${err instanceof Error ? err.message : "Failed to enable live sheet"}`
+      );
     } finally {
       setGeneratingFlowId(null);
+    }
+  }
+
+  async function handleDisableLiveSheet(flowId: string) {
+    if (
+      !confirm(
+        "Disable the live sheet? The spreadsheet stays in Google Drive but stops receiving new records."
+      )
+    )
+      return;
+    try {
+      const res = await fetch(`/api/flows/${flowId}/incomplete-sheet`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to disable live sheet");
+      setFlows((prev) =>
+        prev.map((f) =>
+          f.flow_id === flowId
+            ? { ...f, liveSheetUrl: null, liveSheetName: null }
+            : f
+        )
+      );
+    } catch (err) {
+      alert(
+        `Error: ${err instanceof Error ? err.message : "Failed to disable live sheet"}`
+      );
     }
   }
 
@@ -188,7 +218,9 @@ export default function DataExportPage() {
         {/* Incomplete Flows Tab */}
         <TabsContent value="dropped-off" className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Generate sheets for flows that users didn't complete.
+            Live sheets for flows that users didn&apos;t complete. Enabling
+            creates a spreadsheet with every dropped run so far; new dropped
+            runs are appended automatically.
           </p>
           {flowsLoading ? (
             <div className="flex justify-center py-8">
@@ -209,29 +241,49 @@ export default function DataExportPage() {
                 >
                   <div className="flex-1">
                     <h3 className="font-medium text-foreground">{flow.flow_name}</h3>
-                    {flow.generatedSheetUrl && (
+                    <p className="text-xs text-muted-foreground">
+                      {flow.droppedCount} incomplete run
+                      {flow.droppedCount !== 1 ? "s" : ""}
+                    </p>
+                    {flow.liveSheetUrl && (
                       <a
-                        href={flow.generatedSheetUrl}
+                        href={flow.liveSheetUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
                       >
-                        View Sheet <ArrowUpRight className="h-3 w-3" />
+                        <span className="relative flex h-2 w-2">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                        </span>
+                        {flow.liveSheetName || "View Live Sheet"}{" "}
+                        <ArrowUpRight className="h-3 w-3" />
                       </a>
                     )}
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleGenerateDroppedOff(flow.flow_id)}
-                    disabled={generatingFlowId === flow.flow_id || flow.droppedCount === 0 || !!flow.generatedSheetUrl}
-                  >
-                    {generatingFlowId === flow.flow_id && (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    <Download className="mr-2 h-4 w-4" />
-                    {flow.generatedSheetUrl ? "Generated" : "Generate"}
-                  </Button>
+                  {flow.liveSheetUrl ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleDisableLiveSheet(flow.flow_id)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Disable
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleEnableLiveSheet(flow.flow_id)}
+                      disabled={generatingFlowId === flow.flow_id}
+                    >
+                      {generatingFlowId === flow.flow_id && (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      )}
+                      <Download className="mr-2 h-4 w-4" />
+                      Enable Live Sheet
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>

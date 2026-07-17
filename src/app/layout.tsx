@@ -1,23 +1,84 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import {
+  Inter,
+  Lato,
+  Montserrat,
+  Nunito_Sans,
+  Open_Sans,
+  Poppins,
+  Roboto,
+} from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { ThemedToaster } from "@/components/themed-toaster";
 import { ServiceWorkerRegister } from "@/components/pwa/service-worker-register";
 import {
+  DEFAULT_FONT,
   DEFAULT_MODE,
   DEFAULT_THEME,
+  FONT_IDS,
+  FONT_STORAGE_KEY,
   MODE_STORAGE_KEY,
   MODES,
   STORAGE_KEY,
   THEME_IDS,
 } from "@/lib/themes";
 
+// Default face — preloaded, since most sessions render with it.
 const inter = Inter({
-  variable: "--font-sans",
+  variable: "--font-inter",
   subsets: ["latin"],
 });
+
+// Alternative faces the Appearance → Font family picker can switch to.
+// `preload: false` keeps them out of the critical path: each is only
+// fetched by the browser once a `html[data-font]` block actually
+// references its CSS variable. Helvetica / Arial / SF Pro are system
+// stacks and need no loading at all.
+const roboto = Roboto({
+  variable: "--font-roboto",
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "700"],
+  preload: false,
+});
+const openSans = Open_Sans({
+  variable: "--font-open-sans",
+  subsets: ["latin"],
+  preload: false,
+});
+const poppins = Poppins({
+  variable: "--font-poppins",
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  preload: false,
+});
+const montserrat = Montserrat({
+  variable: "--font-montserrat",
+  subsets: ["latin"],
+  preload: false,
+});
+const lato = Lato({
+  variable: "--font-lato",
+  subsets: ["latin"],
+  weight: ["300", "400", "700"],
+  preload: false,
+});
+const nunitoSans = Nunito_Sans({
+  variable: "--font-nunito-sans",
+  subsets: ["latin"],
+  preload: false,
+});
+
+const FONT_VARIABLE_CLASSES = [
+  inter.variable,
+  roboto.variable,
+  openSans.variable,
+  poppins.variable,
+  montserrat.variable,
+  lato.variable,
+  nunitoSans.variable,
+].join(" ");
 
 
 
@@ -81,9 +142,16 @@ const THEME_BOOT_SCRIPT = `
     var MODES = ${JSON.stringify(MODES)};
     var savedMode = localStorage.getItem(MODE_KEY);
     d.dataset.mode = MODES.indexOf(savedMode) !== -1 ? savedMode : MODE_DEFAULT;
+
+    var FONT_KEY = ${JSON.stringify(FONT_STORAGE_KEY)};
+    var FONT_DEFAULT = ${JSON.stringify(DEFAULT_FONT)};
+    var FONTS = ${JSON.stringify(FONT_IDS)};
+    var savedFont = localStorage.getItem(FONT_KEY);
+    d.dataset.font = FONTS.indexOf(savedFont) !== -1 ? savedFont : FONT_DEFAULT;
   } catch (_e) {
     d.dataset.theme = ${JSON.stringify(DEFAULT_THEME)};
     d.dataset.mode = ${JSON.stringify(DEFAULT_MODE)};
+    d.dataset.font = ${JSON.stringify(DEFAULT_FONT)};
   }
 })();
 `;
@@ -98,7 +166,8 @@ export default function RootLayout({
       lang="en"
       data-theme={DEFAULT_THEME}
       data-mode={DEFAULT_MODE}
-      className={`${inter.variable} h-full antialiased`}
+      data-font={DEFAULT_FONT}
+      className={`${FONT_VARIABLE_CLASSES} h-full antialiased`}
       // The `theme-boot` script below rewrites `data-theme` and
       // `data-mode` on <html> from localStorage before React hydrates,
       // so for any non-default choice the client DOM intentionally
