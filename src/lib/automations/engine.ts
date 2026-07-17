@@ -9,6 +9,7 @@ import type {
   SendTemplateStepConfig,
   SendWebhookStepConfig,
   TagStepConfig,
+  TagTriggerConfig,
   UpdateContactFieldStepConfig,
   WaitStepConfig,
   CreateDealStepConfig,
@@ -106,6 +107,28 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
   } catch (err) {
     console.error('[automations] dispatch failed:', err)
   }
+}
+
+/**
+ * Fan a tag addition out to any `tag_added` automations watching that tag.
+ *
+ * Fire-and-forget: never awaited, never throws — a slow or failing
+ * automation must not block whatever added the tag (a flow's set_tag node,
+ * an automation's add_tag step, or a manual UI action). This is the single
+ * entry point every tag-write path calls so the trigger fires consistently.
+ */
+export function dispatchTagAdded(
+  accountId: string,
+  contactId: string,
+  tagId: string,
+  conversationId?: string,
+): void {
+  void runAutomationsForTrigger({
+    accountId,
+    triggerType: 'tag_added',
+    contactId,
+    context: { tag_id: tagId, conversation_id: conversationId },
+  }).catch((err) => console.error('[automations] tag_added dispatch failed:', err))
 }
 
 /**
@@ -404,6 +427,12 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           { contact_id: args.contactId, tag_id: cfg.tag_id },
           { onConflict: 'contact_id,tag_id', ignoreDuplicates: true },
         )
+      // A tag add can itself be an automation trigger — fan out to any
+      // tag_added automations watching this tag. Fire-and-forget so a slow
+      // downstream automation doesn't block this run. (No cycle detection:
+      // an add_tag step that adds this automation's own trigger tag will
+      // loop — the same footgun the docs already warn about for waits.)
+      dispatchTagAdded(args.automation.account_id, args.contactId, cfg.tag_id, args.context.conversation_id)
       return `tag ${cfg.tag_id} added`
     }
 
@@ -579,6 +608,14 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
+  // tag_added fires only for the specific tag the automation watches — the
+  // dispatcher passes the added tag in ctx.tag_id. Without this guard every
+  // tag_added automation would run for every tag, since the branch below
+  // only special-cases keyword_match.
+  if (automation.trigger_type === 'tag_added') {
+    const cfg = automation.trigger_config as TagTriggerConfig
+    return Boolean(cfg?.tag_id) && ctx?.tag_id === cfg.tag_id
+  }
   if (automation.trigger_type !== 'keyword_match') return true
   const cfg = automation.trigger_config as KeywordMatchTriggerConfig
   if (!cfg?.keywords || cfg.keywords.length === 0) return false

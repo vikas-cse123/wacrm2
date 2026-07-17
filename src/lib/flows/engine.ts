@@ -49,6 +49,7 @@ import {
 } from "./meta-send";
 import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import { dispatchNodeWebhook } from "./webhook-dispatch";
+import { dispatchTagAdded } from "@/lib/automations/engine";
 
 import {
   type CollectInputNodeConfig,
@@ -828,6 +829,17 @@ async function advanceFromNodeKey(
               { contact_id: run.contact_id!, tag_id: cfg.tag_id },
               { onConflict: "contact_id,tag_id" },
             );
+          // Let this tag add drive a 'tag_added' automation (e.g. a
+          // follow-up reminder). Fire-and-forget so a downstream automation
+          // never stalls the flow's advance to the next node.
+          if (run.contact_id) {
+            dispatchTagAdded(
+              run.account_id,
+              run.contact_id,
+              cfg.tag_id,
+              run.conversation_id ?? undefined,
+            );
+          }
         } else {
           await db
             .from("contact_tags")
