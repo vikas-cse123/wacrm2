@@ -4,6 +4,10 @@
 // Google Sheet. Appends one row per completed run (oldest first) in the
 // same column layout as the live sync. Append-only — running it twice
 // adds the rows again, so the UI confirms first.
+//
+// Body (optional): { from?: string, to?: string } — ISO timestamps
+// bounding `started_at` (inclusive from, exclusive to). Omit both to
+// import everything.
 
 import { NextResponse } from "next/server";
 
@@ -23,13 +27,25 @@ function stringifyVar(v: unknown): string {
   return String(v);
 }
 
+function parseIsoDate(value: unknown): string | null {
+  if (typeof value !== "string" || !value) return null;
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await context.params;
     const ctx = await requireRole("admin");
+
+    // Optional date-range filter. Absent/empty body → import everything.
+    const body = await request.json().catch(() => ({}));
+    const from = parseIsoDate((body as Record<string, unknown>)?.from);
+    const to = parseIsoDate((body as Record<string, unknown>)?.to);
 
     const token = await getValidAccessToken(ctx.supabase, ctx.accountId);
     if (!token) {
@@ -50,13 +66,18 @@ export async function POST(
     }
     const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
-    // All completed runs for this flow, oldest first.
-    const { data: runs } = await ctx.supabase
+    // All completed runs for this flow, oldest first, optionally
+    // bounded by the requested started_at window.
+    let runsQuery = ctx.supabase
       .from("flow_runs")
       .select("id, contact_id, vars, started_at, ended_at")
       .eq("flow_id", id)
-      .eq("status", "completed")
-      .order("started_at", { ascending: true });
+      .eq("status", "completed");
+    if (from) runsQuery = runsQuery.gte("started_at", from);
+    if (to) runsQuery = runsQuery.lt("started_at", to);
+    const { data: runs } = await runsQuery.order("started_at", {
+      ascending: true,
+    });
 
     if (!runs || runs.length === 0) {
       return NextResponse.json({ imported: 0 });

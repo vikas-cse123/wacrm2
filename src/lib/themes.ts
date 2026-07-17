@@ -105,3 +105,109 @@ export function isThemeId(value: unknown): value is ThemeId {
     (THEME_IDS as ReadonlyArray<string>).includes(value)
   );
 }
+
+/**
+ * FONT — the typeface dimension, orthogonal to accent + mode.
+ *
+ * The CSS lives in `src/app/globals.css` under `html[data-font="..."]`
+ * blocks, each overriding `--font-sans`. Google-hosted faces are loaded
+ * via `next/font/google` in `src/app/layout.tsx` (with `preload: false`
+ * for the non-default ones); Helvetica / Arial / SF Pro are system
+ * stacks — SF Pro only renders on Apple devices and falls back to the
+ * platform UI font elsewhere.
+ *
+ * Adding a font is a three-step change: load it in layout.tsx (if
+ * Google-hosted), add its `html[data-font="<id>"]` block in
+ * globals.css, and add an entry below.
+ */
+
+export const FONT_IDS = [
+  "inter",
+  "roboto",
+  "helvetica",
+  "arial",
+  "sf-pro",
+  "open-sans",
+  "poppins",
+  "montserrat",
+  "lato",
+  "nunito-sans",
+] as const;
+
+export type FontId = (typeof FONT_IDS)[number];
+
+export const DEFAULT_FONT: FontId = "inter";
+
+export const FONT_STORAGE_KEY = "wacrm.font";
+
+export function isFontId(value: unknown): value is FontId {
+  return (
+    typeof value === "string" &&
+    (FONT_IDS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+export interface FontMeta {
+  id: FontId;
+  name: string;
+  /**
+   * CSS font-family used to render this card's preview text in the
+   * picker. Mirrors the `--font-sans` value of the matching
+   * `html[data-font]` block in globals.css.
+   */
+  preview: string;
+}
+
+export const FONTS: ReadonlyArray<FontMeta> = [
+  {
+    id: "inter",
+    name: "Inter",
+    preview: "var(--font-inter), ui-sans-serif, system-ui, sans-serif",
+  },
+  {
+    id: "roboto",
+    name: "Roboto",
+    preview: "var(--font-roboto), ui-sans-serif, system-ui, sans-serif",
+  },
+  {
+    id: "helvetica",
+    name: "Helvetica",
+    preview: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+  },
+  {
+    id: "arial",
+    name: "Arial",
+    preview: "Arial, Helvetica, sans-serif",
+  },
+  {
+    id: "sf-pro",
+    name: "SF Pro",
+    preview:
+      '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif',
+  },
+  {
+    id: "open-sans",
+    name: "Open Sans",
+    preview: "var(--font-open-sans), ui-sans-serif, system-ui, sans-serif",
+  },
+  {
+    id: "poppins",
+    name: "Poppins",
+    preview: "var(--font-poppins), ui-sans-serif, system-ui, sans-serif",
+  },
+  {
+    id: "montserrat",
+    name: "Montserrat",
+    preview: "var(--font-montserrat), ui-sans-serif, system-ui, sans-serif",
+  },
+  {
+    id: "lato",
+    name: "Lato",
+    preview: "var(--font-lato), ui-sans-serif, system-ui, sans-serif",
+  },
+  {
+    id: "nunito-sans",
+    name: "Nunito Sans",
+    preview: "var(--font-nunito-sans), ui-sans-serif, system-ui, sans-serif",
+  },
+];

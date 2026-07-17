@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { resolveFallbackPolicy } from '@/lib/flows/fallback'
+import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync'
 
 /**
  * Sweep abandoned active flow runs.
@@ -62,7 +63,12 @@ export async function GET(request: Request) {
     console.error('[flows-cron] active-run scan failed:', error.message)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
-  if (!runs?.length) return NextResponse.json({ swept: 0 })
+  if (!runs?.length) {
+    // Still run the incomplete-sheet sync — earlier passes (or manual
+    // status changes) may have left unsynced dropped runs behind.
+    const incomplete = await syncAllIncompleteSheets(admin)
+    return NextResponse.json({ swept: 0, incompleteSynced: incomplete.synced })
+  }
 
   type Row = {
     id: string
@@ -108,5 +114,10 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json({ swept })
+  // Live incomplete-sheets: append the runs this sweep just timed out
+  // (plus any older unsynced ones) to their flows' linked spreadsheets.
+  // Watermark-based, so re-running never duplicates a row.
+  const incomplete = await syncAllIncompleteSheets(admin)
+
+  return NextResponse.json({ swept, incompleteSynced: incomplete.synced })
 }
