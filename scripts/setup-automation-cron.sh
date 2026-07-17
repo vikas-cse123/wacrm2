@@ -58,12 +58,21 @@ else
 fi
 
 # 3) Install the per-minute drain cron ---------------------------------------
+if ! command -v crontab >/dev/null 2>&1; then
+  echo "✗ 'crontab' not found. Install cron first:  sudo apt-get install -y cron" >&2
+  exit 1
+fi
+
 # Reads the secret from .env.local at run time, so rotating it + re-running
 # this script keeps the two in sync automatically.
 CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$CRON_URL\" >/dev/null 2>&1 $MARKER"
 
-# Replace any prior line we installed, keep everything else.
-( crontab -l 2>/dev/null | grep -vF "$MARKER"; echo "$CRON_LINE" ) | crontab -
+# Replace any prior line we installed, keep everything else. Both `crontab -l`
+# (no crontab yet) and `grep -v` (empty input) legitimately exit non-zero, so
+# each gets `|| true` — otherwise `set -e` kills the script silently here.
+EXISTING="$(crontab -l 2>/dev/null || true)"
+KEPT="$(printf '%s\n' "$EXISTING" | grep -vF "$MARKER" || true)"
+printf '%s\n%s\n' "$KEPT" "$CRON_LINE" | grep -v '^[[:space:]]*$' | crontab -
 echo "▸ Cron        : installed (every minute)"
 
 # 4) Verify ------------------------------------------------------------------
