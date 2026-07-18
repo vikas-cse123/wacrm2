@@ -40,8 +40,10 @@ export async function register() {
       if (
         result.swept > 0 ||
         result.incompleteSynced > 0 ||
+        result.incompleteRemoved > 0 ||
         result.sweepErrors > 0 ||
-        result.incompleteErrors > 0
+        result.incompleteErrors > 0 ||
+        result.incompleteRemovalErrors > 0
       ) {
         console.info('[flows-cron] internal sweep:', result);
       }
