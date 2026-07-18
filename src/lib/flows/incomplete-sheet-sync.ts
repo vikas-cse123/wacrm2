@@ -25,12 +25,16 @@ import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRows,
   formatSubmissionTimeIST,
+  insertSheetColumns,
+  setSheetColumnHidden,
   STANDARD_COLUMNS_V2,
   updateHeaderCells,
 } from "@/lib/google/sheets";
 
 /** Terminal statuses that count as "incomplete" for the live sheet. */
 export const INCOMPLETE_STATUSES = ["timed_out", "failed", "handed_off"];
+export const INCOMPLETE_RUN_ID_HEADER = "Flow Run ID";
+export const INCOMPLETE_RUN_ID_MARKER = "incomplete_sheet_row_key_written";
 
 export interface IncompleteSheetConfigRow {
   flow_id: string;
@@ -119,21 +123,56 @@ export async function syncIncompleteRunsForFlow(
   }
   const answerColumns = [...storedKeys, ...newKeys];
 
-  // Header layout: Name (from the contact record) + standard columns +
-  // answer vars — same shape as the old one-shot dropped-off export.
-  const headers = ["Name", ...STANDARD_COLUMNS_V2, ...answerColumns];
+  // The hidden run-id column is a stable row key. A contact may abandon the
+  // same flow more than once, so phone/contact id alone cannot safely identify
+  // which incomplete row to remove after a later completion.
+  const headers = [
+    "Name",
+    ...STANDARD_COLUMNS_V2,
+    ...answerColumns,
+    INCOMPLETE_RUN_ID_HEADER,
+  ];
   const baseOffset = 1 + STANDARD_COLUMNS_V2.length;
+  const previousRunIdCol = baseOffset + storedKeys.length;
+  const runIdCol = baseOffset + answerColumns.length;
 
-  if (config.header_written && newKeys.length > 0) {
-    await updateHeaderCells(
-      accessToken,
-      config.spreadsheet_id,
-      config.sheet_tab,
-      newKeys.map((k, i) => ({
-        colIndex: baseOffset + storedKeys.length + i,
-        value: k,
-      })),
-    );
+  if (config.header_written) {
+    // Upgrade already-created sheets in place. Put the stable key after the
+    // existing answers. If new answer columns appear later, insert them before
+    // this key so all existing run IDs shift safely with their rows.
+    await updateHeaderCells(accessToken, config.spreadsheet_id, config.sheet_tab, [
+      { colIndex: previousRunIdCol, value: INCOMPLETE_RUN_ID_HEADER },
+    ]);
+    if (newKeys.length > 0) {
+      await insertSheetColumns(
+        accessToken,
+        config.spreadsheet_id,
+        config.sheet_tab,
+        previousRunIdCol,
+        newKeys.length,
+      );
+      await updateHeaderCells(
+        accessToken,
+        config.spreadsheet_id,
+        config.sheet_tab,
+        newKeys.map((k, i) => ({
+          colIndex: previousRunIdCol + i,
+          value: k,
+        })),
+      );
+    }
+
+    // Persist the shifted layout before appending. If Google accepts the
+    // column insertion but a later append fails, the retry must not insert
+    // those same columns a second time.
+    const { error: columnStateError } = await db
+      .from("flow_incomplete_sheet_configs")
+      .update({
+        answer_columns: answerColumns,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("flow_id", config.flow_id);
+    if (columnStateError) throw columnStateError;
   }
 
   const rows: (string | number)[][] = (runs as RunRow[]).map((run) => {
@@ -146,11 +185,41 @@ export async function syncIncompleteRunsForFlow(
       formatSubmissionTimeIST(run.ended_at ?? run.started_at),
       run.contact_id ?? "",
       ...answerColumns.map((k) => stringifyVar(vars[k])),
+      run.id,
     ];
   });
 
+  // This marker lets cleanup distinguish a new keyed row from a legacy row
+  // that predates the hidden Flow Run ID column. Write it before the sheet
+  // append so an appended row can never exist without its durable cleanup key.
+  const { error: markerError } = await db.from("flow_run_events").insert(
+    (runs as RunRow[]).map((run) => ({
+      flow_run_id: run.id,
+      event_type: "node_entered",
+      node_key: null,
+      payload: { [INCOMPLETE_RUN_ID_MARKER]: true },
+    })),
+  );
+  if (markerError) throw markerError;
+
   const toWrite = config.header_written ? rows : [headers, ...rows];
   await appendRows(accessToken, config.spreadsheet_id, config.sheet_tab, toWrite);
+  try {
+    await setSheetColumnHidden(
+      accessToken,
+      config.spreadsheet_id,
+      config.sheet_tab,
+      runIdCol,
+      true,
+    );
+  } catch (error) {
+    // Visibility is cosmetic. The stable IDs are already written and must not
+    // be appended again merely because Google refused to hide the column.
+    console.error(
+      "[incomplete-sheet-sync] could not hide Flow Run ID column:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   // Persist header/column state, then stamp the watermark. If the stamp
   // failed after a successful append, the next sweep would re-append

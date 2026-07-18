@@ -232,3 +232,227 @@ export async function updateHeaderCells(
     );
   }
 }
+
+async function getSheetId(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+): Promise<number> {
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}?fields=sheets.properties`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets tab lookup failed (${res.status}): ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as {
+    sheets?: Array<{ properties?: { sheetId?: number; title?: string } }>;
+  };
+  const sheetId = data.sheets?.find((sheet) => sheet.properties?.title === tab)
+    ?.properties?.sheetId;
+  if (typeof sheetId !== "number") {
+    throw new Error(`Google Sheets tab not found: ${tab}`);
+  }
+  return sheetId;
+}
+
+/** Insert blank columns before a 0-based column index. */
+export async function insertSheetColumns(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  startIndex: number,
+  count: number,
+): Promise<void> {
+  if (count <= 0) return;
+  const sheetId = await getSheetId(accessToken, spreadsheetId, tab);
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      requests: [
+        {
+          insertDimension: {
+            range: {
+              sheetId,
+              dimension: "COLUMNS",
+              startIndex,
+              endIndex: startIndex + count,
+            },
+            inheritFromBefore: false,
+          },
+        },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets column insert failed (${res.status}): ${await res.text()}`,
+    );
+  }
+}
+
+/** Hide or show one 0-based sheet column. */
+export async function setSheetColumnHidden(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  colIndex: number,
+  hidden: boolean,
+): Promise<void> {
+  const sheetId = await getSheetId(accessToken, spreadsheetId, tab);
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      requests: [
+        {
+          updateDimensionProperties: {
+            range: {
+              sheetId,
+              dimension: "COLUMNS",
+              startIndex: colIndex,
+              endIndex: colIndex + 1,
+            },
+            properties: { hiddenByUser: hidden },
+            fields: "hiddenByUser",
+          },
+        },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets column visibility update failed (${res.status}): ${await res.text()}`,
+    );
+  }
+}
+
+/** Find a header's 0-based column index, or null when absent. */
+export async function findHeaderColumn(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  header: string,
+): Promise<number | null> {
+  const range = `${encodeURIComponent(tab)}!1:1`;
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}/values/${range}?majorDimension=ROWS`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets header read failed (${res.status}): ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as { values?: unknown[][] };
+  const row = data.values?.[0] ?? [];
+  const index = row.findIndex((value) => String(value) === header);
+  return index >= 0 ? index : null;
+}
+
+/** Find the 1-based row number containing an exact value in one column. */
+export async function findExactValueRow(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  colIndex: number,
+  value: string,
+): Promise<number | null> {
+  const rows = await findExactValueRows(
+    accessToken,
+    spreadsheetId,
+    tab,
+    colIndex,
+    [value],
+  );
+  return rows.get(value) ?? null;
+}
+
+/** Find exact values in one column with a single Google read request. */
+export async function findExactValueRows(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  colIndex: number,
+  wantedValues: string[],
+): Promise<Map<string, number>> {
+  if (wantedValues.length === 0) return new Map();
+  const letter = columnLetter(colIndex);
+  const range = `${encodeURIComponent(tab)}!${letter}2:${letter}`;
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}/values/${range}?majorDimension=COLUMNS`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets column read failed (${res.status}): ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as { values?: unknown[][] };
+  const values = data.values?.[0] ?? [];
+  const wanted = new Set(wantedValues);
+  const found = new Map<string, number>();
+  values.forEach((cell, index) => {
+    const value = String(cell);
+    if (wanted.has(value) && !found.has(value)) found.set(value, index + 2);
+  });
+  return found;
+}
+
+/** Delete one 1-based row from a sheet. */
+export async function deleteSheetRow(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  rowNumber: number,
+): Promise<void> {
+  await deleteSheetRows(accessToken, spreadsheetId, tab, [rowNumber]);
+}
+
+/** Delete multiple 1-based rows in one request, bottom-to-top. */
+export async function deleteSheetRows(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  rowNumbers: number[],
+): Promise<void> {
+  if (rowNumbers.length === 0) return;
+  if (rowNumbers.some((rowNumber) => rowNumber < 2)) {
+    throw new Error("Refusing to delete a sheet header row");
+  }
+  const sheetId = await getSheetId(accessToken, spreadsheetId, tab);
+  const descendingRows = [...new Set(rowNumbers)].sort((a, b) => b - a);
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      requests: descendingRows.map((rowNumber) => ({
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: "ROWS",
+              startIndex: rowNumber - 1,
+              endIndex: rowNumber,
+            },
+          },
+        })),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets row delete failed (${res.status}): ${await res.text()}`,
+    );
+  }
+}

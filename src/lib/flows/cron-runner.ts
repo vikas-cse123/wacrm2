@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { resolveFallbackPolicy } from '@/lib/flows/fallback';
+import { cleanupCompletedIncompleteRows } from '@/lib/flows/incomplete-sheet-cleanup';
 import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync';
 
 export interface FlowCronResult {
@@ -7,6 +8,8 @@ export interface FlowCronResult {
   sweepErrors: number;
   incompleteSynced: number;
   incompleteErrors: number;
+  incompleteRemoved: number;
+  incompleteRemovalErrors: number;
 }
 
 /**
@@ -91,10 +94,13 @@ export async function runFlowCron(): Promise<FlowCronResult> {
   }
 
   const incomplete = await syncAllIncompleteSheets(admin);
+  const cleanup = await cleanupCompletedIncompleteRows(admin);
   return {
     swept,
     sweepErrors,
     incompleteSynced: incomplete.synced,
     incompleteErrors: incomplete.errors,
+    incompleteRemoved: cleanup.removed,
+    incompleteRemovalErrors: cleanup.errors,
   };
 }
