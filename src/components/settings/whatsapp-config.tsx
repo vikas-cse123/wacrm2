@@ -44,6 +44,7 @@ export function WhatsAppConfig() {
   const [showToken, setShowToken] = useState(false);
   const [config, setConfig] = useState<WhatsAppConfigType | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('unknown');
+  const [connectedPhoneNumber, setConnectedPhoneNumber] = useState<string | null>(null);
   const [resetReason, setResetReason] = useState<ResetReason>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
   // Guards against re-hydrating the form when the load effect below
@@ -140,19 +141,25 @@ setAppSecretEdited(false);
 
           if (payload.connected) {
             setConnectionStatus('connected');
+            setConnectedPhoneNumber(
+              payload.phone_info?.display_phone_number ?? null,
+            );
             setResetReason(null);
             setStatusMessage('');
           } else {
             setConnectionStatus('disconnected');
+            setConnectedPhoneNumber(null);
             setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
             setStatusMessage(payload.message || '');
           }
         } catch (err) {
           console.error('Health check failed:', err);
           setConnectionStatus('disconnected');
+          setConnectedPhoneNumber(null);
         }
       } else {
         setConnectionStatus('disconnected');
+        setConnectedPhoneNumber(null);
         setResetReason(null);
         setStatusMessage('');
       }
@@ -289,6 +296,9 @@ if (appSecretEdited && appSecret !== MASKED_TOKEN && appSecret.trim()) {
 
       if (payload.connected) {
         setConnectionStatus('connected');
+        setConnectedPhoneNumber(
+          payload.phone_info?.display_phone_number ?? null,
+        );
         setResetReason(null);
         setStatusMessage('');
         toast.success(
@@ -298,6 +308,7 @@ if (appSecretEdited && appSecret !== MASKED_TOKEN && appSecret.trim()) {
         );
       } else {
         setConnectionStatus('disconnected');
+        setConnectedPhoneNumber(null);
         setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
         setStatusMessage(payload.message || '');
         toast.error(payload.message || 'API connection failed');
@@ -305,6 +316,7 @@ if (appSecretEdited && appSecret !== MASKED_TOKEN && appSecret.trim()) {
     } catch (err) {
       console.error('Test connection error:', err);
       setConnectionStatus('disconnected');
+      setConnectedPhoneNumber(null);
       toast.error('Connection test failed. Check network and try again.');
     } finally {
       setTesting(false);
@@ -360,6 +372,7 @@ if (appSecretEdited && appSecret !== MASKED_TOKEN && appSecret.trim()) {
       setVerifyToken('');
       setTokenEdited(false);
       setConnectionStatus('disconnected');
+      setConnectedPhoneNumber(null);
       setResetReason(null);
       setStatusMessage('');
       setAppSecret('');
@@ -450,10 +463,25 @@ setAppSecretEdited(false);
             </AlertTitle>
           </div>
           <AlertDescription className="text-muted-foreground">
-            {connectionStatus === 'connected'
-              ? 'Your access token authenticates with Meta. See Registration status below for whether webhooks are actually wired.'
-              : statusMessage ||
-                'Configure your Meta API credentials below to connect your WhatsApp Business account.'}
+            {connectionStatus === 'connected' ? (
+              <span className="flex flex-col gap-1">
+                {connectedPhoneNumber ? (
+                  <span>
+                    Connected number:{' '}
+                    <strong className="font-semibold text-foreground">
+                      {connectedPhoneNumber}
+                    </strong>
+                  </span>
+                ) : null}
+                <span>
+                  Your access token authenticates with Meta. See Registration status
+                  below for whether webhooks are actually wired.
+                </span>
+              </span>
+            ) : (
+              statusMessage ||
+              'Configure your Meta API credentials below to connect your WhatsApp Business account.'
+            )}
           </AlertDescription>
         </Alert>
 
