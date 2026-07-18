@@ -7,7 +7,6 @@ import {
   FONTS,
   MODES,
   THEMES,
-  type FontId,
   type Mode,
   type ThemeId,
 } from "@/lib/themes";
@@ -71,7 +70,6 @@ export function AppearancePanel() {
           {FONTS.map((f) => (
             <FontCard
               key={f.id}
-              id={f.id}
               name={f.name}
               preview={f.preview}
               isActive={f.id === font}
@@ -150,13 +148,11 @@ function ModeCard({
 }
 
 function FontCard({
-  id,
   name,
   preview,
   isActive,
   onPick,
 }: {
-  id: FontId;
   name: string;
   preview: string;
   isActive: boolean;
@@ -170,36 +166,18 @@ function FontCard({
       aria-checked={isActive}
       aria-label={`Use ${name} font`}
       className={cn(
-        "flex flex-col gap-2 rounded-lg border bg-card p-4 text-left transition-colors",
+        "rounded-lg border bg-card p-4 text-left transition-colors",
         isActive
           ? "border-primary/60 ring-2 ring-primary/40"
           : "border-border hover:border-border hover:bg-muted/40",
       )}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="space-y-0.5">
-          <div className="text-sm font-semibold text-foreground">{name}</div>
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-            Font family
-          </div>
-        </div>
-        {isActive && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
-            <Check className="h-3 w-3" />
-            Active
-          </span>
-        )}
-      </div>
-      <div
-        className="truncate text-sm text-muted-foreground"
+      <span
+        className="block truncate text-sm font-semibold text-foreground"
         style={{ fontFamily: preview }}
       >
-        The quick brown fox jumps
-      </div>
-      <div className="truncate text-[11px] text-muted-foreground/80">
-        {preview}
-      </div>
-      <span className="sr-only">Font id: {id}</span>
+        {name}
+      </span>
     </button>
   );
 }
