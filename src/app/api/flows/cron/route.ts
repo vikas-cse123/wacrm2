@@ -6,7 +6,7 @@ import { runFlowCron } from '@/lib/flows/cron-runner';
  * Sweep abandoned active flow runs.
  *
  * Reads each active run's parent-flow `fallback_policy.on_timeout_hours`
- * to compute the staleness cutoff (default 3h), then marks any run
+ * to compute the staleness cutoff (default 5m), then marks any run
  * past its cutoff as `timed_out`. Writes a matching `flow_run_events`
  * row for the audit trail.
  *
