@@ -1,9 +1,16 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
-import { LogOut, Menu, Settings as SettingsIcon, User } from "lucide-react";
+import {
+  LogOut,
+  Menu,
+  Phone,
+  Settings as SettingsIcon,
+  User,
+} from "lucide-react";
 import {
   Avatar,
   AvatarFallback,
@@ -45,10 +52,43 @@ interface HeaderProps {
 
 export function Header({ onOpenSidebar }: HeaderProps) {
   const pathname = usePathname();
-  const { profile, accountRole, signOut } = useAuth();
+  const { profile, accountId, accountRole, signOut } = useAuth();
+  const [connectedPhone, setConnectedPhone] = useState<{
+    accountId: string;
+    number: string | null;
+  } | null>(null);
   // UI-only: Settings link is owner-only, matching the sidebar gating.
   const isOwner = accountRole === "owner";
   const title = getPageTitle(pathname);
+  const connectedPhoneNumber =
+    connectedPhone?.accountId === accountId ? connectedPhone.number : null;
+
+  // The connected number is safe account-level metadata, unlike the access
+  // token and other WhatsApp credentials. Every account member can see it so
+  // agents always know which business number they are replying from.
+  useEffect(() => {
+    if (!accountId) return;
+
+    let cancelled = false;
+    fetch("/api/whatsapp/config", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (cancelled) return;
+        setConnectedPhone({
+          accountId,
+          number: payload.connected
+            ? payload.phone_info?.display_phone_number ?? null
+            : null,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setConnectedPhone({ accountId, number: null });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId]);
 
   const initial =
     profile?.full_name?.charAt(0)?.toUpperCase() ??
@@ -73,6 +113,18 @@ export function Header({ onOpenSidebar }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2">
+        {connectedPhoneNumber ? (
+          <div
+            className="flex min-w-0 items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-foreground sm:px-3"
+            title={`Connected WhatsApp number: ${connectedPhoneNumber}`}
+            aria-label={`Connected WhatsApp number: ${connectedPhoneNumber}`}
+          >
+            <Phone className="size-3.5 shrink-0 text-primary" />
+            <span className="max-w-28 truncate sm:max-w-none">
+              {connectedPhoneNumber}
+            </span>
+          </div>
+        ) : null}
         <ModeToggle />
 
         <DropdownMenu>
