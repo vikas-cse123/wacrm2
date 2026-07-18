@@ -58,6 +58,27 @@ export function AppearancePanel() {
 
       <div className="mt-8 space-y-4">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Palette className="size-4 text-muted-foreground" />
+          Accent color
+        </h3>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {THEMES.map((t) => (
+            <ThemeCard
+              key={t.id}
+              id={t.id}
+              name={t.name}
+              tagline={t.tagline}
+              swatch={t.swatch}
+              isActive={t.id === theme}
+              onPick={() => setTheme(t.id)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-8 space-y-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <Type className="size-4 text-muted-foreground" />
           Font family
         </h3>
@@ -74,27 +95,6 @@ export function AppearancePanel() {
               preview={f.preview}
               isActive={f.id === font}
               onPick={() => setFont(f.id)}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-8 space-y-4">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Palette className="size-4 text-muted-foreground" />
-          Accent color
-        </h3>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {THEMES.map((t) => (
-            <ThemeCard
-              key={t.id}
-              id={t.id}
-              name={t.name}
-              tagline={t.tagline}
-              swatch={t.swatch}
-              isActive={t.id === theme}
-              onPick={() => setTheme(t.id)}
             />
           ))}
         </div>
