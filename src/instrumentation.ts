@@ -57,8 +57,8 @@ export async function register() {
     }
   };
 
-  // Start shortly after boot, then check every minute. With a 3-hour timeout,
-  // incomplete rows normally appear between 180 and 181 minutes after the
+  // Start shortly after boot, then check every minute. With a 5-minute timeout,
+  // incomplete rows normally appear between 5 and 6 minutes after the
   // last answer.
   const initial = setTimeout(() => void sweep(), 15_000);
   initial.unref();
