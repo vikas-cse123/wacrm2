@@ -47,6 +47,16 @@ function supabaseAdmin() {
   return _adminClient
 }
 
+function redactDisplayPhoneNumber(
+  phoneInfo: Awaited<ReturnType<typeof verifyPhoneNumber>>,
+) {
+  return {
+    id: phoneInfo.id,
+    verified_name: phoneInfo.verified_name,
+    quality_rating: phoneInfo.quality_rating,
+  }
+}
+
 /**
  * GET /api/whatsapp/config
  *
@@ -135,7 +145,10 @@ export async function GET() {
         phoneNumberId: config.phone_number_id,
         accessToken,
       })
-      return NextResponse.json({ connected: true, phone_info: phoneInfo })
+      return NextResponse.json({
+        connected: true,
+        phone_info: redactDisplayPhoneNumber(phoneInfo),
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown Meta API error'
       console.error('[whatsapp/config GET] Meta API verification failed:', message)
@@ -423,7 +436,7 @@ if (!existing && !app_secret) {
         saved: true,
         registered: false,
         registration_error: registrationError,
-        phone_info: phoneInfo,
+        phone_info: redactDisplayPhoneNumber(phoneInfo),
       })
     }
 
@@ -436,7 +449,7 @@ if (!existing && !app_secret) {
       // Meta test number). The UI shows the "Not registered" banner
       // rather than claiming the number is fully live.
       registration_skipped: registrationSkipped,
-      phone_info: phoneInfo,
+      phone_info: redactDisplayPhoneNumber(phoneInfo),
     })
   } catch (error) {
     console.error('Error in WhatsApp config POST:', error)
