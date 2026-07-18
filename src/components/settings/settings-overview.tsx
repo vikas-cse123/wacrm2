@@ -28,7 +28,6 @@ interface OverviewCounts {
 interface WhatsAppStatus {
   configured: boolean;
   connected: boolean;
-  phoneNumber: string | null;
 }
 
 export function SettingsOverview({
@@ -131,10 +130,6 @@ export function SettingsOverview({
       setWhatsapp({
         configured: row.status === 'fulfilled' && !!row.value.data?.phone_number_id,
         connected: health.status === 'fulfilled' && !!health.value?.connected,
-        phoneNumber:
-          health.status === 'fulfilled' && health.value?.connected
-            ? health.value.phone_info?.display_phone_number ?? null
-            : null,
       });
       setWhatsappLoading(false);
     })();
@@ -169,7 +164,6 @@ export function SettingsOverview({
       ) : whatsapp.connected ? (
         <>
           <StatusDot tone="ok" /> Connected
-          {whatsapp.phoneNumber ? ` · ${whatsapp.phoneNumber}` : null}
         </>
       ) : (
         <>

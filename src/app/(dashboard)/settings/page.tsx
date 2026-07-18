@@ -9,6 +9,7 @@ import { canEditSettings } from '@/lib/auth/roles';
 import { SettingsRail } from '@/components/settings/settings-rail';
 import { SettingsOverview } from '@/components/settings/settings-overview';
 import { ProfileForm } from '@/components/settings/profile-form';
+import { ConnectedNumberPanel } from '@/components/settings/connected-number-panel';
 import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { NotificationsPanel } from '@/components/settings/notifications-panel';
@@ -31,16 +32,18 @@ export default function SettingsPage() {
   const { defaultCurrency, accountRole } = useAuth();
   const { mode } = useTheme();
   const isAdmin = accountRole ? canEditSettings(accountRole) : false;
+  const isOwner = accountRole === 'owner';
 
   const visibleSections = useMemo(() => {
     const set = new Set<SettingsSection>();
     for (const s of SETTINGS_SECTIONS) {
       const group = SECTION_META[s].group;
+      if (s === 'connected-number' && !isOwner) continue;
       if (s === 'security' && !isAdmin) continue;
       if (group === 'top' || group === 'account' || isAdmin) set.add(s);
     }
     return set;
-  }, [isAdmin]);
+  }, [isAdmin, isOwner]);
 
   // The URL (`?tab=`) is the single source of truth for the active
   // section — deep-linkable, and it keeps the existing links in the
@@ -69,6 +72,7 @@ export default function SettingsPage() {
   const panel: Record<SettingsSection, ReactNode> = {
     overview: <SettingsOverview onSelect={go} visibleSections={visibleSections} />,
     profile: <ProfileForm />,
+    'connected-number': <ConnectedNumberPanel />,
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     notifications: <NotificationsPanel />,
