@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
+import { FONTS } from '@/lib/themes';
 import { canEditSettings } from '@/lib/auth/roles';
 import { SettingsRail } from '@/components/settings/settings-rail';
 import { SettingsOverview } from '@/components/settings/settings-overview';
@@ -30,7 +31,8 @@ export default function SettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { defaultCurrency, accountRole } = useAuth();
-  const { mode } = useTheme();
+  const { mode, font } = useTheme();
+  const fontName = FONTS.find((item) => item.id === font)?.name ?? font;
   const isAdmin = accountRole ? canEditSettings(accountRole) : false;
   const isOwner = accountRole === 'owner';
 
@@ -63,10 +65,10 @@ export default function SettingsPage() {
   // already in context.
   const hints: Partial<Record<SettingsSection, ReactNode>> = useMemo(
     () => ({
-      appearance: mode.charAt(0).toUpperCase() + mode.slice(1),
+      appearance: `${mode.charAt(0).toUpperCase() + mode.slice(1)} · ${fontName}`,
       deals: defaultCurrency,
     }),
-    [mode, defaultCurrency],
+    [mode, fontName, defaultCurrency],
   );
 
   const panel: Record<SettingsSection, ReactNode> = {
