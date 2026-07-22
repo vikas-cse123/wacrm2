@@ -164,6 +164,29 @@ export async function resumePendingExecution(pending: {
     return
   }
 
+  // A `tag_added` follow-up should only fire if the tag that triggered it is
+  // still on the contact when the wait elapses. If the tag was removed in the
+  // meantime — e.g. a flow's "Remove tag" node ran because the contact finished
+  // — the reason for the reminder no longer holds, so skip the remaining steps
+  // instead of sending. Catches every removal path (flow, automation, manual UI)
+  // because it checks at send time rather than at removal time.
+  const triggerTagId =
+    (automation as Automation).trigger_type === 'tag_added'
+      ? (pending.context?.tag_id ?? null)
+      : null
+  if (triggerTagId && pending.contact_id) {
+    const { count } = await db
+      .from('contact_tags')
+      .select('id', { count: 'exact', head: true })
+      .eq('contact_id', pending.contact_id)
+      .eq('tag_id', triggerTagId)
+    if ((count ?? 0) === 0) {
+      await finalizeLog(pending.log_id, 'success', null)
+      await markPending(pending.id, 'done')
+      return
+    }
+  }
+
   try {
     await executeStepsFrom({
       automation: automation as Automation,
