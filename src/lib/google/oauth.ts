@@ -18,12 +18,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { encrypt, decrypt } from "@/lib/whatsapp/encryption";
 
-// Narrow scopes (paste-a-link flow — no Drive listing needed):
-//   spreadsheets  — read/write the linked sheet
-//   drive.file    — create new spreadsheets + access ones the app opened
+// Non-sensitive scopes only. This keeps the app out of Google's
+// sensitive-scope verification entirely — no "unverified app" screen and
+// no 100-user cap, so anyone can use the Sheets feature immediately.
+//   drive.file    — create spreadsheets and read/write ONLY the sheets
+//                   this app creates (per-file access, non-sensitive)
 //   userinfo.email — show which Google account is connected
+// We deliberately do NOT request the sensitive `spreadsheets` scope. The
+// trade-off: we can only work with sheets the app itself creates, not an
+// arbitrary existing sheet a user pastes a link to.
 export const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/userinfo.email",
 ].join(" ");
