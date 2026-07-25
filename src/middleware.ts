@@ -61,6 +61,18 @@ export async function middleware(request: NextRequest) {
     user = null
   }
 
+  // Public pages - always accessible, signed in or not. These are the
+  // marketing homepage and the legal pages Google's OAuth reviewers must
+  // be able to open without logging in. They are not in `protectedPaths`
+  // below, so this is already the effective behaviour; listing them
+  // explicitly documents the contract and guards against a future change
+  // to the protected list accidentally gating them. We return the
+  // cookie-refreshed response so Supabase session rotation still works.
+  const publicPaths = ['/', '/privacy-policy', '/terms-and-conditions']
+  if (publicPaths.includes(request.nextUrl.pathname)) {
+    return supabaseResponse
+  }
+
   // Auth pages - redirect to dashboard if already logged in.
   // Exception: when an invite token is in the query string we
   // send the already-signed-in user to /join/<token> instead so

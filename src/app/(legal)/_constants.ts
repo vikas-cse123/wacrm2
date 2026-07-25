@@ -1,12 +1,13 @@
-// Shared, single-source-of-truth values for the public legal pages
-// (Privacy Policy + Terms and Conditions). Kept out of the route
-// group's page files so the effective date, contact email and brand
-// strings only ever need updating in one place.
-
-export const PRODUCT_NAME = "Interscale WhatsApp CRM";
-export const COMPANY_NAME = "Interscale Marketing";
-export const WEBSITE_DOMAIN = "https://interscalechat.co.in";
-export const SUPPORT_EMAIL = "interscalemarketing2324@gmail.com";
+// Brand identity is sourced from the site-wide single source of truth
+// (`@/lib/site`) so the homepage, legal pages, robots and sitemap stay
+// in lockstep. Re-exported here so existing imports from this module
+// keep working unchanged.
+export {
+  PRODUCT_NAME,
+  COMPANY_NAME,
+  WEBSITE_DOMAIN,
+  SUPPORT_EMAIL,
+} from "@/lib/site";
 
 // Human-readable effective date shown at the top of each document.
 // Update this whenever the policies materially change.
