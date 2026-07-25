@@ -38,6 +38,13 @@ export interface SendButtonsNodeConfig {
   text: string;
   /** Optional header / footer lines around the buttons. */
   header_text?: string;
+  /**
+   * Optional image shown as the message header, above the body text and
+   * buttons. Public URL (uploaded via the flow builder). When set it takes
+   * precedence over `header_text` — WhatsApp allows only ONE header per
+   * interactive message.
+   */
+  header_image_url?: string;
   footer_text?: string;
   /** 1-3 buttons; Meta cap enforced in meta-api validation. */
   buttons: Array<{

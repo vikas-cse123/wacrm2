@@ -285,6 +285,8 @@ function NodeSheetSettings({
 
 interface SendButtonsCfg {
   text?: string;
+  /** Optional image shown as the message header, above the body + buttons. */
+  header_image_url?: string;
   footer_text?: string;
   buttons?: Array<{ reply_id: string; title: string; next_node_key: string }>;
 }
@@ -303,6 +305,31 @@ function SendButtonsForm({
   showAdvanced: boolean;
 }) {
   const buttons = cfg.buttons ?? [];
+  const headerFileRef = useRef<HTMLInputElement>(null);
+  const [headerUploading, setHeaderUploading] = useState(false);
+
+  const handleHeaderImage = useCallback(
+    async (file: File) => {
+      if (file.size > MEDIA_MAX_BYTES) {
+        toast.error(
+          `Image is ${(file.size / 1024 / 1024).toFixed(1)} MB — limit is 16 MB.`,
+        );
+        return;
+      }
+      setHeaderUploading(true);
+      try {
+        const { publicUrl } = await uploadAccountMedia(FLOW_MEDIA_BUCKET, file);
+        onUpdateConfig({ header_image_url: publicUrl });
+        toast.success("Header image uploaded.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Upload failed.");
+      } finally {
+        setHeaderUploading(false);
+      }
+    },
+    [onUpdateConfig],
+  );
+
   const updateButton = (
     idx: number,
     patch: Partial<NonNullable<SendButtonsCfg["buttons"]>[number]>,
@@ -327,6 +354,64 @@ function SendButtonsForm({
 
   return (
     <>
+      <div>
+        <label className="mb-1 block text-xs text-muted-foreground">
+          Header image (optional) — shown above the text, with buttons below
+        </label>
+        {cfg.header_image_url ? (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
+            <a
+              href={cfg.header_image_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 flex-1 truncate text-foreground hover:text-cyan-300"
+              title={cfg.header_image_url}
+            >
+              {cfg.header_image_url.split("/").pop() ?? cfg.header_image_url}
+            </a>
+            <button
+              type="button"
+              onClick={() => onUpdateConfig({ header_image_url: "" })}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Remove header image"
+              disabled={headerUploading}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => headerFileRef.current?.click()}
+            disabled={headerUploading}
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border bg-card px-3 py-4 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {headerUploading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Uploading…
+              </>
+            ) : (
+              <>
+                <Upload className="h-3.5 w-3.5" />
+                Add an image header (PNG/JPEG/WebP, max 16 MB)
+              </>
+            )}
+          </button>
+        )}
+        <input
+          ref={headerFileRef}
+          type="file"
+          accept={MEDIA_ACCEPT.image}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleHeaderImage(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
       <TextRow
         label="Body text"
         value={cfg.text ?? ""}
