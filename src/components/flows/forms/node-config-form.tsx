@@ -1157,7 +1157,6 @@ function GoogleSheetsSyncForm({
   const [configured, setConfigured] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
   const [sheet, setSheet] = useState<SheetConfigRow | null>(null);
-  const [urlInput, setUrlInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
 
@@ -1203,27 +1202,6 @@ function GoogleSheetsSyncForm({
       );
     }
   }, [load]);
-
-  const linkExisting = async () => {
-    if (!urlInput.trim()) return;
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/flows/${flowId}/sheet`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlInput.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to link sheet");
-      setSheet(data.config);
-      setUrlInput("");
-      toast.success("Spreadsheet linked to this flow.");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to link sheet");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const createNew = async () => {
     setBusy(true);
@@ -1409,37 +1387,17 @@ function GoogleSheetsSyncForm({
             </div>
           )}
 
-          {/* Link / replace controls are always available so an author can
-              paste their own sheet URL without unlinking first. Linking a
-              new sheet replaces the current one. */}
+          {/* Sheets are always app-created (drive.file scope). Creating a
+              new sheet replaces the currently linked one. */}
           <div className="rounded-lg border border-border p-3">
             <p className="text-xs font-medium text-foreground">
-              {sheet ? "Use a different spreadsheet" : "Link a spreadsheet"}
+              {sheet ? "Use a different spreadsheet" : "Create a spreadsheet"}
             </p>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Paste a Google Sheets link (it must be owned by or shared with{" "}
-              {email ?? "the connected account"}), or create a fresh one.
+              We&apos;ll create a new Google Sheet in{" "}
+              {email ?? "the connected account"} and sync this flow&apos;s
+              responses into it as new rows.
             </p>
-            <div className="mt-2 flex gap-2">
-              <Input
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="https://docs.google.com/spreadsheets/d/…"
-                className="bg-muted text-xs"
-              />
-              <Button
-                size="sm"
-                onClick={linkExisting}
-                disabled={busy || !urlInput.trim()}
-              >
-                {sheet ? "Replace" : "Link"}
-              </Button>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
-              <div className="h-px flex-1 bg-border" />
-              <span className="text-[10px] text-muted-foreground">or</span>
-              <div className="h-px flex-1 bg-border" />
-            </div>
             <Button
               variant="outline"
               size="sm"
@@ -1448,7 +1406,7 @@ function GoogleSheetsSyncForm({
               disabled={busy}
             >
               {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
-              Create a new spreadsheet
+              {sheet ? "Create a new spreadsheet" : "Create a spreadsheet"}
             </Button>
           </div>
         </>

@@ -1,9 +1,12 @@
 // Per-flow Google Sheet link.
 //
 //   GET    — current sheet config for this flow + Google connection state
-//   PUT    — link an existing spreadsheet (pasted URL/id)
 //   POST   — create a new spreadsheet and link it
 //   DELETE — unlink (stops syncing; the sheet itself is untouched)
+//
+// Sheets are always app-created (drive.file scope) — there is no
+// link-an-existing-sheet path, since that would require the sensitive
+// `spreadsheets` scope and force Google verification.
 //
 // One row per flow ⇒ one sheet per flow. Mutations require admin+.
 
@@ -17,8 +20,6 @@ import {
 import { getValidAccessToken, googleOAuthConfigured } from "@/lib/google/oauth";
 import {
   createSpreadsheet,
-  getSpreadsheet,
-  parseSpreadsheetId,
   CURRENT_SHEET_SCHEMA_VERSION,
 } from "@/lib/google/sheets";
 import { deriveFlowColumns, type FlowNodeLite } from "@/lib/flows/sheet-columns";
@@ -148,61 +149,6 @@ async function linkSheet(
     .single();
   if (error) throw error;
   return data;
-}
-
-// PUT — link an existing spreadsheet by pasted URL or id.
-export async function PUT(
-  request: Request,
-  context: { params: Promise<{ id: string }> },
-) {
-  try {
-    const { id } = await context.params;
-    const ctx = await requireRole("admin");
-    if (!(await assertOwnedFlow(ctx.supabase, id, ctx.accountId))) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    const body = await request.json();
-    const spreadsheetId = parseSpreadsheetId(String(body.url ?? ""));
-    if (!spreadsheetId) {
-      return NextResponse.json(
-        { error: "Couldn't read a spreadsheet ID from that link." },
-        { status: 400 },
-      );
-    }
-
-    const token = await getValidAccessToken(ctx.supabase, ctx.accountId);
-    if (!token) {
-      return NextResponse.json(
-        { error: "Connect a Google account first." },
-        { status: 400 },
-      );
-    }
-
-    // Validate access + resolve the first tab.
-    let meta;
-    try {
-      meta = await getSpreadsheet(token, spreadsheetId);
-    } catch {
-      return NextResponse.json(
-        {
-          error:
-            "Couldn't open that spreadsheet. Make sure it's owned by (or shared with) the connected Google account.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const config = await linkSheet(ctx, id, {
-      spreadsheetId: meta.spreadsheetId,
-      url: meta.url,
-      title: meta.title,
-      tab: meta.firstSheetTitle,
-    });
-    return NextResponse.json({ config });
-  } catch (err) {
-    return toErrorResponse(err);
-  }
 }
 
 // POST — create a new spreadsheet and link it.
