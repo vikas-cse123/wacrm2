@@ -527,6 +527,7 @@ async function sendButtonsAndSuspend(
     headerText: cfg.header_text
       ? interpolateVars(cfg.header_text, run.vars)
       : cfg.header_text,
+    headerImageUrl: cfg.header_image_url,
     footerText: cfg.footer_text
       ? interpolateVars(cfg.footer_text, run.vars)
       : cfg.footer_text,
