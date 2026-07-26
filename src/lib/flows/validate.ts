@@ -328,6 +328,68 @@ function validateNode(
       break;
     }
 
+    case "send_cta_url": {
+      const cfg = node.config as {
+        text?: string;
+        button_text?: string;
+        button_url?: string;
+        next_node_key?: string;
+      };
+      if (!cfg.text?.trim()) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "text",
+          message: "Link-button node needs a text body.",
+        });
+      }
+      if (!cfg.button_text?.trim()) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "button_text",
+          message: "Link-button node needs button text.",
+        });
+      } else if (cfg.button_text.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "button_text",
+          message: `Button text exceeds ${INTERACTIVE_LIMITS.buttonTitleMaxLength} chars (WhatsApp limit).`,
+        });
+      }
+      if (!/^https?:\/\/\S+$/i.test(cfg.button_url?.trim() ?? "")) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "button_url",
+          message: "Link-button node needs a valid http(s) URL.",
+        });
+      }
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: "Link-button node must point to a next node.",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `Link-button points to non-existent node "${cfg.next_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "send_buttons": {
       const cfg = node.config as {
         text?: string;
@@ -799,6 +861,7 @@ function outgoingEdges(node: NodeInput): string[] {
     case "start":
     case "send_message":
     case "send_media":
+    case "send_cta_url":
     case "collect_input":
     case "set_tag":
     case "google_sheets_sync": {

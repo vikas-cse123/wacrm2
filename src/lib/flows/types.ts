@@ -96,6 +96,25 @@ export interface SendListNodeConfig {
  * the builder forms, engine cases, and add-menu entries for no
  * meaningful behavioural difference.
  */
+export interface SendCtaUrlNodeConfig {
+  /** Body text shown above the URL button. */
+  text: string;
+  /** Optional image shown as the message header. Public URL. */
+  header_image_url?: string;
+  /** Optional grey footer line under the button. */
+  footer_text?: string;
+  /** Visible button label, e.g. "Book a call" (Meta caps ~20 chars). */
+  button_text: string;
+  /** The https URL the button opens when tapped. */
+  button_url: string;
+  /**
+   * Auto-advance target after the send lands. A CTA-URL button opens a
+   * link in the browser rather than replying, so the flow can't branch
+   * on a tap — it simply continues here (like send_media).
+   */
+  next_node_key: string;
+}
+
 export interface SendMediaNodeConfig {
   media_type: "image" | "video" | "document";
   /** Public URL Meta will fetch. Uploaded via the builder's file picker. */
@@ -228,6 +247,7 @@ export type FlowNodeConfig =
   | { node_type: "send_buttons"; config: SendButtonsNodeConfig }
   | { node_type: "send_list"; config: SendListNodeConfig }
   | { node_type: "send_media"; config: SendMediaNodeConfig }
+  | { node_type: "send_cta_url"; config: SendCtaUrlNodeConfig }
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
