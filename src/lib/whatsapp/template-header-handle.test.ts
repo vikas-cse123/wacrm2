@@ -53,9 +53,17 @@ describe('ensureImageHeaderHandle', () => {
     expect(p.header_handle).toBe('existing');
   });
 
-  it('throws an actionable error when META_APP_ID is unset', async () => {
+  it('throws an actionable error when no Meta App ID is available', async () => {
     const p = payload();
-    await expect(ensureImageHeaderHandle(p, 'tok')).rejects.toThrow(/META_APP_ID/);
+    await expect(ensureImageHeaderHandle(p, 'tok')).rejects.toThrow(/Meta App ID/);
+  });
+
+  it('prefers the per-account App ID arg over the env var', async () => {
+    vi.stubEnv('META_APP_ID', '');
+    vi.stubGlobal('fetch', vi.fn(async () => imgResponse('image/jpeg', 2048)));
+    const p = payload();
+    await ensureImageHeaderHandle(p, 'tok', 'account-app-id');
+    expect(p.header_handle).toBeDefined();
   });
 
   it('derives + sets header_handle from a valid image URL', async () => {

@@ -198,7 +198,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin,app_secret } = body
+    const { phone_number_id, waba_id, access_token, verify_token, pin, app_secret, meta_app_id } = body
 
     if (!access_token || !phone_number_id) {
       return NextResponse.json(
@@ -384,6 +384,11 @@ if (!existing && !app_secret) {
   access_token: encryptedAccessToken,
   verify_token: encryptedVerifyToken,
   ...(encryptedAppSecret ? { app_secret: encryptedAppSecret } : {}),
+  // App ID is not a secret — stored plain. Only touch the column when the
+  // client sends the field, so an older client can't wipe it on save.
+  ...(meta_app_id !== undefined
+    ? { meta_app_id: typeof meta_app_id === 'string' && meta_app_id.trim() ? meta_app_id.trim() : null }
+    : {}),
   status: registrationError ? 'disconnected' : 'connected',
   connected_at: registrationError ? null : new Date().toISOString(),
   registered_at: registrationError ? null : registeredAt,

@@ -56,6 +56,7 @@ export function WhatsAppConfig() {
 
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [wabaId, setWabaId] = useState('');
+  const [metaAppId, setMetaAppId] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [verifyToken, setVerifyToken] = useState('');
   const [pin, setPin] = useState('');
@@ -112,6 +113,7 @@ export function WhatsAppConfig() {
         setConfig(data);
         setPhoneNumberId(data.phone_number_id || '');
         setWabaId(data.waba_id || '');
+        setMetaAppId(data.meta_app_id || '');
         setAccessToken(MASKED_TOKEN);
         setAppSecret(MASKED_TOKEN);
         setAppSecretEdited(false);
@@ -122,6 +124,7 @@ export function WhatsAppConfig() {
         setConfig(null);
         setPhoneNumberId('');
         setWabaId('');
+        setMetaAppId('');
         setAccessToken('');
         setVerifyToken('');
         setPin('');
@@ -204,6 +207,9 @@ if (!config && (!appSecret.trim() || !appSecretEdited)) {
       const payload: Record<string, unknown> = {
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
+        // Not a secret — sent plainly so it can pre-fill on reload. Used
+        // for image-header template uploads (Meta Resumable Upload).
+        meta_app_id: metaAppId.trim() || null,
         verify_token: verifyToken.trim() || null,
         // Optional — only sent when the user filled it in. The server
         // requires it on first save or when changing numbers; for a
@@ -490,6 +496,20 @@ setAppSecretEdited(false);
                 onChange={(e) => setWabaId(e.target.value)}
                 className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">Meta App ID</Label>
+              <Input
+                placeholder="e.g. 1234567890123456"
+                value={metaAppId}
+                onChange={(e) => setMetaAppId(e.target.value)}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+              />
+              <p className="text-xs text-muted-foreground">
+                Found in Meta App Dashboard → App Settings → Basic. Required only
+                to submit message templates that have an image header.
+              </p>
             </div>
 
             <div className="space-y-2">
