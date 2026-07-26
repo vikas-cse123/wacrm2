@@ -939,15 +939,11 @@ export async function sendCtaUrl(args: SendCtaUrlArgs): Promise<MetaSendResult> 
       parameters: { display_text: buttonText, url: buttonUrl },
     },
   }
+  // cta_url REQUIRES the header image as a LINK — Meta rejects a media id
+  // here with "(#131008) header image must contain link". This is the
+  // opposite of reply-button messages, which need an uploaded media id.
   if (headerImageUrl) {
-    const mediaId = await resolveHeaderImageMediaId(
-      phoneNumberId,
-      accessToken,
-      headerImageUrl,
-    )
-    interactive.header = mediaId
-      ? { type: 'image', image: { id: mediaId } }
-      : { type: 'image', image: { link: headerImageUrl } }
+    interactive.header = { type: 'image', image: { link: headerImageUrl } }
   }
   if (footerText) interactive.footer = { text: footerText }
 
