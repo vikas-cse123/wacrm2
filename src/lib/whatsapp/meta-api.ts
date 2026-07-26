@@ -760,6 +760,53 @@ export interface SendInteractiveButtonsArgs {
   contextMessageId?: string
 }
 
+// WhatsApp drops image headers on interactive messages when they're
+// passed by external `link` (unlike plain image messages, which Meta
+// fetches fine). The reliable path is to hand Meta the actual bytes and
+// reference the returned media id. We download the image server-side and
+// upload it to POST /{phone-number-id}/media.
+//
+// Uploaded media ids are reusable for ~30 days, so we cache them in
+// memory keyed by source URL to avoid re-uploading the same header on
+// every flow run. The cache is cleared on process restart — a miss just
+// re-uploads, which is safe.
+const headerMediaIdCache = new Map<string, { id: string; expiresAt: number }>()
+const HEADER_MEDIA_TTL_MS = 20 * 24 * 60 * 60 * 1000 // 20 days (< Meta's ~30)
+
+async function resolveHeaderImageMediaId(
+  phoneNumberId: string,
+  accessToken: string,
+  url: string,
+): Promise<string | null> {
+  const cached = headerMediaIdCache.get(url)
+  if (cached && cached.expiresAt > Date.now()) return cached.id
+  try {
+    const imgRes = await fetch(url)
+    if (!imgRes.ok) return null
+    const contentType = imgRes.headers.get('content-type') || 'image/png'
+    const bytes = await imgRes.arrayBuffer()
+    const form = new FormData()
+    form.append('messaging_product', 'whatsapp')
+    form.append('type', contentType)
+    form.append('file', new Blob([bytes], { type: contentType }), 'header')
+    const upRes = await fetch(`${META_API_BASE}/${phoneNumberId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    })
+    if (!upRes.ok) return null
+    const data = (await upRes.json()) as { id?: string }
+    if (!data.id) return null
+    headerMediaIdCache.set(url, {
+      id: data.id,
+      expiresAt: Date.now() + HEADER_MEDIA_TTL_MS,
+    })
+    return data.id
+  } catch {
+    return null
+  }
+}
+
 /**
  * Send an interactive message with up to 3 inline reply buttons. The
  * customer taps one and Meta delivers a webhook with
@@ -803,8 +850,18 @@ export async function sendInteractiveButtons(
     },
   }
   // WhatsApp allows only one header. An image header wins over text.
+  // Upload the image to Meta and reference it by id — interactive image
+  // headers passed by external link are silently dropped by Meta. Falls
+  // back to link if the upload fails (never worse than before).
   if (headerImageUrl) {
-    interactive.header = { type: 'image', image: { link: headerImageUrl } }
+    const mediaId = await resolveHeaderImageMediaId(
+      phoneNumberId,
+      accessToken,
+      headerImageUrl,
+    )
+    interactive.header = mediaId
+      ? { type: 'image', image: { id: mediaId } }
+      : { type: 'image', image: { link: headerImageUrl } }
   } else if (headerText) {
     interactive.header = { type: 'text', text: headerText }
   }
