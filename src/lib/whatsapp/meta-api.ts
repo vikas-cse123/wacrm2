@@ -892,6 +892,90 @@ export async function sendInteractiveButtons(
   return { messageId: data.messages[0].id }
 }
 
+export interface SendCtaUrlArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  /** Body text shown above the button. */
+  bodyText: string
+  /** Visible button label (≤ 20 chars). */
+  buttonText: string
+  /** The https URL the button opens. */
+  buttonUrl: string
+  /** Optional image header (uploaded to Meta, referenced by id). */
+  headerImageUrl?: string
+  /** Optional grey footer line (≤ 60 chars). */
+  footerText?: string
+  contextMessageId?: string
+}
+
+/**
+ * Send an interactive "CTA URL" message: body + a single button that
+ * opens `buttonUrl` when tapped. Unlike reply buttons, tapping this does
+ * NOT produce a webhook reply — it just opens the link — so the flow
+ * engine treats this as a fire-and-advance node.
+ */
+export async function sendCtaUrl(args: SendCtaUrlArgs): Promise<MetaSendResult> {
+  const {
+    phoneNumberId, accessToken, to,
+    bodyText, buttonText, buttonUrl, headerImageUrl, footerText, contextMessageId,
+  } = args
+  validateInteractiveBody(bodyText)
+  if (!buttonText?.trim()) throw new Error('CTA button needs display text.')
+  if (buttonText.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+    throw new Error(
+      `CTA button text "${buttonText}" exceeds ${INTERACTIVE_LIMITS.buttonTitleMaxLength} chars.`
+    )
+  }
+  if (!/^https?:\/\/\S+$/i.test(buttonUrl?.trim() ?? '')) {
+    throw new Error('CTA button needs a valid http(s) URL.')
+  }
+
+  const interactive: Record<string, unknown> = {
+    type: 'cta_url',
+    body: { text: bodyText },
+    action: {
+      name: 'cta_url',
+      parameters: { display_text: buttonText, url: buttonUrl },
+    },
+  }
+  if (headerImageUrl) {
+    const mediaId = await resolveHeaderImageMediaId(
+      phoneNumberId,
+      accessToken,
+      headerImageUrl,
+    )
+    interactive.header = mediaId
+      ? { type: 'image', image: { id: mediaId } }
+      : { type: 'image', image: { link: headerImageUrl } }
+  }
+  if (footerText) interactive.footer = { text: footerText }
+
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'interactive',
+    interactive,
+  }
+  if (contextMessageId) body.context = { message_id: contextMessageId }
+
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 export interface InteractiveListRow {
   /** Stable id sent back in the webhook when tapped (≤ 200 chars). */
   id: string

@@ -47,6 +47,7 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
       case "start":
       case "send_message":
       case "send_media":
+      case "send_cta_url":
       case "collect_input":
       case "set_tag":
       case "google_sheets_sync": {
@@ -178,6 +179,7 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
     case "start":
     case "send_message":
     case "send_media":
+    case "send_cta_url":
     case "collect_input":
     case "set_tag":
     case "google_sheets_sync":
@@ -253,6 +255,7 @@ export function applyEdgeConnection(
     case "start":
     case "send_message":
     case "send_media":
+    case "send_cta_url":
     case "collect_input":
     case "set_tag":
     case "google_sheets_sync":
@@ -348,6 +351,7 @@ function patchedConfigWithoutKey(
     case "start":
     case "send_message":
     case "send_media":
+    case "send_cta_url":
     case "collect_input":
     case "set_tag":
     case "google_sheets_sync": {

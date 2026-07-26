@@ -165,6 +165,13 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
         filename: "",
         next_node_key: "",
       };
+    case "send_cta_url":
+      return {
+        text: "",
+        button_text: "",
+        button_url: "",
+        next_node_key: "",
+      };
     case "collect_input":
       return {
         prompt_text: "",
