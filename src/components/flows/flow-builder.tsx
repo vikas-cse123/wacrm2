@@ -576,6 +576,7 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
     'send_list',
     'send_message',
     'send_media',
+    'send_cta_url',
     'collect_input',
     'condition',
     'set_tag',
