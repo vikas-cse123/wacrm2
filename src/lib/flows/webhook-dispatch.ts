@@ -2,6 +2,11 @@ import crypto from "crypto";
 import { supabaseAdmin } from "./admin-client";
 import type { FlowNodeRow, FlowRunRow } from "./types";
 
+// Only this WhatsApp client uses the Cal.com booking hand-off. Keeping the
+// special captured-name payload scoped here avoids changing other accounts'
+// webhook contracts.
+const CLID_BOOKING_PHONE_NUMBER_ID = "1237170136146543";
+
 /**
  * Fires the per-node webhook configured in node.config.webhook, if
  * enabled. Fire-and-forget: never awaited by the caller, so a slow
@@ -38,13 +43,16 @@ export function dispatchNodeWebhook(
     const capturedVars = (run.vars ?? {}) as Record<string, unknown>;
     const data = pickFields(capturedVars, cfg.fields ?? []);
 
-    // A Tag Contact webhook is commonly used to hand a qualified flow lead
-    // to another system. Include the flow's captured `name` even when the
-    // node's older saved field list did not explicitly contain it. The
-    // downstream booking service then receives the name the customer typed,
-    // rather than only their WhatsApp profile name.
+    // This client's Tag Contact webhook hands qualified leads to its Cal.com
+    // booking server. Include the flow's captured name so it receives what
+    // the customer typed instead of only their WhatsApp profile name.
     const capturedName = capturedVars.name;
-    if (node.node_type === "set_tag" && typeof capturedName === "string" && capturedName.trim()) {
+    if (
+      config?.phone_number_id === CLID_BOOKING_PHONE_NUMBER_ID &&
+      node.node_type === "set_tag" &&
+      typeof capturedName === "string" &&
+      capturedName.trim()
+    ) {
       data.name = capturedName.trim();
     }
 
