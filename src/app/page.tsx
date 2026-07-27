@@ -589,7 +589,6 @@ const COMPETITORS = [
   {
     name: 'Interakt',
     logo: '/logos/interakt.svg',
-    plan: 'Advanced plan',
     price: '₹3,799',
     per: '/ month',
     messaging: 'Meta message fees charged',
@@ -598,7 +597,6 @@ const COMPETITORS = [
   {
     name: 'AiSensy',
     logo: '/logos/aisensy.avif',
-    plan: 'Unlimited plan',
     price: '₹3,200',
     per: '/ month',
     messaging: 'Per-message fees charged',
@@ -607,7 +605,6 @@ const COMPETITORS = [
   {
     name: 'Wati',
     logo: '/logos/wati.svg',
-    plan: 'Business plan',
     price: '₹6,499',
     per: '/ month',
     messaging: 'Meta message fees charged',
@@ -718,9 +715,6 @@ function Pricing() {
                         className="h-5 max-w-24 object-contain"
                       />
                     </span>
-                    <p className="text-muted-foreground mt-2 text-xs">
-                      {c.plan}
-                    </p>
                   </div>
                   <div className="sm:text-right">
                     <div className="flex items-baseline gap-1 sm:justify-end">
@@ -758,11 +752,6 @@ function Pricing() {
           </div>
         </div>
 
-        <p className="text-muted-foreground/70 relative z-1 mx-auto mt-7 max-w-3xl text-center text-[11px] leading-relaxed">
-          Prices show the highest publicly listed standard monthly tier for each
-          provider and may change. Competitor names and logos belong to their
-          respective owners and are shown for comparison only.
-        </p>
       </div>
     </section>
   );
@@ -862,12 +851,6 @@ function Footer() {
         <div className="border-border mt-10 border-t pt-6">
           <p className="text-muted-foreground text-xs leading-relaxed">
             &copy; 2026 {COMPANY_NAME}. All rights reserved.
-          </p>
-          <p className="text-muted-foreground/80 mt-2 text-xs leading-relaxed">
-            WhatsApp is a trademark of Meta Platforms, Inc. Google Sheets is a
-            trademark of Google LLC. {PRODUCT_NAME} is an independent product
-            and is not affiliated with, endorsed by or sponsored by Meta or
-            Google.
           </p>
         </div>
       </div>
