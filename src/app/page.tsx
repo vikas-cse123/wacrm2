@@ -17,7 +17,6 @@ import {
   UserCheck,
   Users,
   Workflow,
-  X,
   Zap,
 } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
@@ -591,7 +590,7 @@ const COMPETITORS = [
     name: 'Interakt',
     logo: '/logos/interakt.svg',
     plan: 'Advanced plan',
-    price: '₹3,499',
+    price: '₹3,799',
     per: '/ month',
     messaging: 'Meta message fees charged',
     limitation: 'Webhooks not included on lower plans',
@@ -600,7 +599,7 @@ const COMPETITORS = [
     name: 'AiSensy',
     logo: '/logos/aisensy.avif',
     plan: 'Unlimited plan',
-    price: '₹45,000',
+    price: '₹3,200',
     per: '/ month',
     messaging: 'Per-message fees charged',
     limitation: 'Meta message fees charged separately',
@@ -609,7 +608,7 @@ const COMPETITORS = [
     name: 'Wati',
     logo: '/logos/wati.svg',
     plan: 'Business plan',
-    price: '₹9,999',
+    price: '₹6,499',
     per: '/ month',
     messaging: 'Meta message fees charged',
     limitation: 'Advanced features depend on plan',
@@ -732,8 +731,7 @@ function Pricing() {
                         {c.per}
                       </span>
                     </div>
-                    <p className="mt-1 flex items-center gap-1.5 text-xs text-red-500 sm:justify-end">
-                      <X className="size-3.5 shrink-0" />
+                    <p className="mt-1 text-xs text-red-500 sm:text-right">
                       {c.messaging}
                     </p>
                     <p className="text-muted-foreground mt-1 text-[11px]">
