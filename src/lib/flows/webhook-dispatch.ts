@@ -35,6 +35,19 @@ export function dispatchNodeWebhook(
         .single(),
     ]);
 
+    const capturedVars = (run.vars ?? {}) as Record<string, unknown>;
+    const data = pickFields(capturedVars, cfg.fields ?? []);
+
+    // A Tag Contact webhook is commonly used to hand a qualified flow lead
+    // to another system. Include the flow's captured `name` even when the
+    // node's older saved field list did not explicitly contain it. The
+    // downstream booking service then receives the name the customer typed,
+    // rather than only their WhatsApp profile name.
+    const capturedName = capturedVars.name;
+    if (node.node_type === "set_tag" && typeof capturedName === "string" && capturedName.trim()) {
+      data.name = capturedName.trim();
+    }
+
     const payload = {
       account_id: run.account_id,
       flow_id: run.flow_id,
@@ -48,7 +61,7 @@ export function dispatchNodeWebhook(
       business: {
         phone_number_id: config?.phone_number_id ?? null,
       },
-      data: pickFields((run.vars ?? {}) as Record<string, unknown>, cfg.fields ?? []),
+      data,
       timestamp: new Date().toISOString(),
     };
 
