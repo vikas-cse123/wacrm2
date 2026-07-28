@@ -159,6 +159,25 @@ export function validateSendMessageParams(params: {
   }
 }
 
+export function renderTemplateMessageText(
+  body: string,
+  structuredParams: unknown,
+  legacyParams: string[] = []
+): string {
+  const structuredBody =
+    structuredParams &&
+    typeof structuredParams === 'object' &&
+    Array.isArray((structuredParams as { body?: unknown }).body)
+      ? (structuredParams as { body: unknown[] }).body.map(String)
+      : [];
+  const values = structuredBody.length > 0 ? structuredBody : legacyParams;
+
+  return body.replace(/\{\{(\d+)\}\}/g, (placeholder, rawIndex: string) => {
+    const value = values[Number(rawIndex) - 1];
+    return value === undefined ? placeholder : value;
+  });
+}
+
 export async function sendMessageToConversation(
   db: SupabaseClient,
   accountId: string,
@@ -300,6 +319,15 @@ export async function sendMessageToConversation(
     }
     templateRow = data ?? null;
   }
+  const persistedContentText =
+    contentText ||
+    (messageType === 'template' && templateRow
+      ? renderTemplateMessageText(
+          templateRow.body_text,
+          templateMessageParams,
+          templateParams
+        )
+      : null);
 
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {
@@ -392,7 +420,7 @@ export async function sendMessageToConversation(
       conversation_id: conversationId,
       sender_type: 'agent',
       content_type: messageType,
-      content_text: contentText || null,
+      content_text: persistedContentText,
       media_url: mediaUrl || null,
       template_name: templateName || null,
       message_id: waMessageId,
@@ -414,7 +442,7 @@ export async function sendMessageToConversation(
   await db
     .from('conversations')
     .update({
-      last_message_text: contentText || `[${messageType}]`,
+      last_message_text: persistedContentText || `[${messageType}]`,
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
