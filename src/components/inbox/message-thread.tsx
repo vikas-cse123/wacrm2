@@ -278,14 +278,20 @@ export function MessageThread({
         .from("messages")
         .select("*")
         .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true });
+        // PostgREST caps a response at 1,000 rows. Fetching oldest-first
+        // caused long-running conversations to stop at row 1,000 and hide
+        // every newer message, even though the conversation preview had
+        // already advanced. Pull the newest window instead, then reverse it
+        // below so the thread still renders in chronological order.
+        .order("created_at", { ascending: false })
+        .limit(500);
 
       if (cancelled) return;
 
       if (error) {
         console.error("Failed to fetch messages:", error);
       } else {
-        onMessagesLoadedRef.current(data ?? []);
+        onMessagesLoadedRef.current((data ?? []).slice().reverse());
       }
 
       if (!cancelled) setLoading(false);
