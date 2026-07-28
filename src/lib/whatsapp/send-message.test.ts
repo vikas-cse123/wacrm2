@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  renderTemplateMessageText,
   sendMessageToConversation,
   SendMessageError,
   type SendMessageParams,
@@ -113,5 +114,27 @@ describe('SendMessageError', () => {
     expect(e.code).toBe('meta_error');
     expect(e.status).toBe(502);
     expect(e).toBeInstanceOf(Error);
+  });
+});
+
+describe('renderTemplateMessageText', () => {
+  it('renders structured body values for API-sent templates', () => {
+    expect(
+      renderTemplateMessageText(
+        'Hi {{1}}, your meeting is at {{2}}.',
+        { body: ['Pintu', '8:30 pm'] },
+        []
+      )
+    ).toBe('Hi Pintu, your meeting is at 8:30 pm.');
+  });
+
+  it('falls back to legacy body values and preserves missing placeholders', () => {
+    expect(
+      renderTemplateMessageText(
+        'Hi {{1}}, code {{2}}.',
+        undefined,
+        ['Pintu']
+      )
+    ).toBe('Hi Pintu, code {{2}}.');
   });
 });
