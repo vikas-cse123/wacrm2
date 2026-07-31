@@ -125,6 +125,10 @@ export const RATE_LIMITS = {
    *  fidget with reactions and a single "swap" is actually two calls
    *  (remove + add) under the hood. */
   react: { limit: 120, windowMs: 60_000 },
+  /** Pin / unpin an inbox chat, per user. A light toggle a user might
+   *  click a few times in a burst while curating their pinned list —
+   *  60/min is well above any human pace while bounding a stuck loop. */
+  pin: { limit: 60, windowMs: 60_000 },
   /** Invitation peek (public, per-IP). 30/min lets a forwarded link
    *  retry a handful of times under flaky connectivity without
    *  enabling brute-force token enumeration. With 256-bit tokens the

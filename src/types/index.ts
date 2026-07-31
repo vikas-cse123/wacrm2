@@ -168,6 +168,20 @@ export interface Conversation {
   contact?: Contact;
 }
 
+/**
+ * A per-user pinned chat (migration 054 `conversation_pins`). Pins are
+ * private to the member who created them — pinning never affects other
+ * teammates' inboxes. The Inbox holds these as a
+ * `conversation_id -> pinned_at` map; see `@/lib/inbox/pins`.
+ */
+export interface ConversationPin {
+  id: string;
+  user_id: string;
+  account_id: string;
+  conversation_id: string;
+  pinned_at: string;
+}
+
 // ============================================================
 // Notifications (migration 027)
 // ============================================================

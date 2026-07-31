@@ -7,9 +7,18 @@ import {
   matchesContactFilters,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
+import {
+  addPin,
+  canPinMore,
+  isConversationPinned,
+  partitionPinnedConversations,
+  pinnedAtMapFromRecords,
+  removePin,
+} from "@/lib/inbox/pins";
 import { cn } from "@/lib/utils";
 import type { AccountMember, Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, Users, X } from "lucide-react";
+import { Search, ChevronDown, Users, X, Pin, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,6 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ConversationListProps {
@@ -51,6 +61,10 @@ const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
   { label: "Closed", value: "closed" },
 ];
 
+const PIN_LIMIT_TITLE = "Pin limit reached";
+const PIN_LIMIT_DESCRIPTION =
+  "You can pin up to 30 chats at a time. Unpin an existing chat before pinning another one.";
+
 export function ConversationList({
   activeConversationId,
   onSelect,
@@ -69,6 +83,13 @@ export function ConversationList({
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
   const [members, setMembers] = useState<AccountMember[]>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+
+  // Pinned chats (migration 054). Per-user, held as a
+  // conversation_id -> pinned_at map. `pinBusyIds` tracks in-flight
+  // pin/unpin calls so a row can show a spinner and ignore double
+  // clicks. Both are pure UI state; the DB is the source of truth.
+  const [pinnedAt, setPinnedAt] = useState<Record<string, string>>({});
+  const [pinBusyIds, setPinBusyIds] = useState<Set<string>>(new Set());
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -121,6 +142,27 @@ export function ConversationList({
     // `resyncToken` is included so the parent can force a refetch when
     // the realtime channel reconnects or the tab regains focus — catches
     // up on any events sent while the WS was disconnected or throttled.
+  }, [resyncToken]);
+
+  // Load the caller's pinned chats. Runs on mount and on resync so the
+  // pin state stays correct after a reconnect / tab refocus, and so
+  // opening the inbox on another device reflects pins made elsewhere.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/inbox/pins");
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok && Array.isArray(data.pins)) {
+          setPinnedAt(pinnedAtMapFromRecords(data.pins));
+        }
+      } catch {
+        // Best-effort: a failed pin fetch just renders an unpinned inbox.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [resyncToken]);
 
   // Assignment is account-wide, so load the roster through the scoped API
@@ -206,6 +248,94 @@ useEffect(() => {
 
     return result;
   }, [conversations, filter, search, selectedTagIds, selectedCompany, selectedMemberIds]);
+
+  // Split the (already filtered/searched) list into pinned + regular.
+  // Partitioning AFTER filtering means the pinned section only shows
+  // pins that match the active search/filters, and the regular section
+  // keeps the existing last_message_at-desc order untouched.
+  const { pinned, regular } = useMemo(
+    () => partitionPinnedConversations(filtered, pinnedAt),
+    [filtered, pinnedAt],
+  );
+
+  const setPinBusy = useCallback((id: string, busy: boolean) => {
+    setPinBusyIds((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const handleTogglePin = useCallback(
+    async (conv: Conversation, nextPinned: boolean) => {
+      const id = conv.id;
+      if (pinBusyIds.has(id)) return;
+
+      // Client-side cap pre-empt so we don't even fire the request for
+      // the 31st pin — the backend enforces this too (source of truth).
+      if (
+        nextPinned &&
+        !isConversationPinned(id, pinnedAt) &&
+        !canPinMore(pinnedAt)
+      ) {
+        toast.error(PIN_LIMIT_TITLE, { description: PIN_LIMIT_DESCRIPTION });
+        return;
+      }
+
+      // Snapshot the previous pinned_at so an unpin can be rolled back
+      // to its exact prior value if the request fails.
+      const prevPinnedAtValue = pinnedAt[id];
+
+      // Optimistic flip (functional update so concurrent toggles on
+      // other rows don't clobber each other).
+      setPinnedAt((prev) =>
+        nextPinned ? addPin(prev, id, new Date().toISOString()) : removePin(prev, id),
+      );
+      setPinBusy(id, true);
+
+      try {
+        const res = nextPinned
+          ? await fetch("/api/inbox/pins", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ conversationId: id }),
+            })
+          : await fetch(`/api/inbox/pins/${id}`, { method: "DELETE" });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          // Roll back the optimistic change.
+          setPinnedAt((prev) =>
+            nextPinned
+              ? removePin(prev, id)
+              : addPin(prev, id, prevPinnedAtValue ?? new Date().toISOString()),
+          );
+          if (res.status === 409) {
+            toast.error(data.error ?? PIN_LIMIT_TITLE, {
+              description: data.message ?? PIN_LIMIT_DESCRIPTION,
+            });
+          } else {
+            toast.error("Unable to update pinned chat. Please try again.");
+          }
+          return;
+        }
+
+        toast.success(nextPinned ? "Chat pinned" : "Chat unpinned");
+      } catch {
+        setPinnedAt((prev) =>
+          nextPinned
+            ? removePin(prev, id)
+            : addPin(prev, id, prevPinnedAtValue ?? new Date().toISOString()),
+        );
+        toast.error("Unable to update pinned chat. Please try again.");
+      } finally {
+        setPinBusy(id, false);
+      }
+    },
+    [pinBusyIds, pinnedAt, setPinBusy],
+  );
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -470,12 +600,37 @@ useEffect(() => {
           </div>
         ) : (
           <div className="flex flex-col">
-            {filtered.map((conv) => (
+            {/* Pinned chats float to the top (only those matching the
+                current search/filters). No section labels — a thin
+                divider separates them from the rest, WhatsApp-style. */}
+            {pinned.length > 0 && (
+              <>
+                {pinned.map((conv) => (
+                  <ConversationItem
+                    key={conv.id}
+                    conversation={conv}
+                    isActive={conv.id === activeConversationId}
+                    onSelect={handleSelect}
+                    isPinned
+                    isPinBusy={pinBusyIds.has(conv.id)}
+                    onTogglePin={handleTogglePin}
+                  />
+                ))}
+                {regular.length > 0 && (
+                  <div className="border-b border-border" aria-hidden="true" />
+                )}
+              </>
+            )}
+
+            {regular.map((conv) => (
               <ConversationItem
                 key={conv.id}
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                isPinned={false}
+                isPinBusy={pinBusyIds.has(conv.id)}
+                onTogglePin={handleTogglePin}
               />
             ))}
           </div>
@@ -489,12 +644,18 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  isPinned: boolean;
+  isPinBusy: boolean;
+  onTogglePin: (conversation: Conversation, nextPinned: boolean) => void;
 }
 
 function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  isPinned,
+  isPinBusy,
+  onTogglePin,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || "Unknown";
@@ -503,6 +664,23 @@ function ConversationItem({
   const handleClick = useCallback(() => {
     onSelect(conversation);
   }, [onSelect, conversation]);
+
+  // The row is a div (not a button) so it can host the pin/menu controls
+  // — nesting buttons inside a button is invalid HTML. Re-implement the
+  // keyboard affordance a button gave us for free.
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onSelect(conversation);
+      }
+    },
+    [onSelect, conversation],
+  );
+
+  const handlePinClick = useCallback(() => {
+    onTogglePin(conversation, !isPinned);
+  }, [onTogglePin, conversation, isPinned]);
 
   const timeAgo = conversation.last_message_at
     ? formatDistanceToNow(new Date(conversation.last_message_at), {
@@ -515,11 +693,17 @@ function ConversationItem({
   // the filter-bar chips which start from raw selectedTagIds.
   const contactTags = contact?.tags ?? [];
 
+  const pinTooltip = isPinned ? "Unpin chat" : "Pin chat";
+
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={displayName}
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
       className={cn(
-        "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50",
+        "group relative flex w-full cursor-pointer items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50 focus:outline-none focus-visible:bg-muted/60",
         isActive && "border-l-2 border-primary bg-muted/70"
       )}
     >
@@ -561,6 +745,47 @@ function ConversationItem({
               )}
               title={conversation.status}
             />
+
+            {/* Pin toggle — WhatsApp-style: a filled pin sits in the
+                bottom-right of pinned chats; for unpinned chats it stays
+                hidden and reveals on hover/focus. Clicking it toggles the
+                pin without selecting the row. */}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePinClick();
+                    }}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    disabled={isPinBusy}
+                    aria-label={pinTooltip}
+                    aria-pressed={isPinned}
+                    className={cn(
+                      "flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-60",
+                      // Pinned: always shown (filled). Unpinned: always
+                      // tappable on touch (no hover there), but only
+                      // hover/focus-revealed on desktop to keep the list clean.
+                      isPinned
+                        ? "opacity-100"
+                        : "opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 lg:opacity-0",
+                    )}
+                  >
+                    {isPinBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Pin
+                        className={cn("h-3.5 w-3.5", isPinned && "fill-current")}
+                      />
+                    )}
+                  </button>
+                }
+              />
+              <TooltipContent>{pinTooltip}</TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -584,6 +809,6 @@ function ConversationItem({
           </div>
         )}
       </div>
-    </button>
+    </div>
   );
 }
