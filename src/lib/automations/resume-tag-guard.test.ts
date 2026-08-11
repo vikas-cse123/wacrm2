@@ -58,7 +58,7 @@ vi.mock("./admin-client", () => {
   };
 });
 
-const sendText = vi.fn(async () => ({ whatsapp_message_id: "m1" }));
+const sendText = vi.fn(async (..._args: unknown[]) => ({ whatsapp_message_id: "m1" }));
 vi.mock("./meta-send", () => ({
   engineSendText: (...args: unknown[]) => sendText(...args),
   engineSendTemplate: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
