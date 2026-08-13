@@ -31,16 +31,23 @@ import {
   PauseCircle,
   PlayCircle,
   Save,
+  Settings2,
   Trash2,
   Workflow,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
   useFlowEditor,
   type BuilderState,
 } from "./flow-editor-state";
+import { IncompleteFlowTiming } from "./flow-builder";
 
 export function EditorHeader() {
   const router = useRouter();
@@ -106,6 +113,19 @@ export function EditorHeader() {
               {flow.execution_count}
             </span>
           </Button>
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button variant="ghost" size="sm" aria-label="Flow settings">
+                  <Settings2 className="h-3.5 w-3.5" />
+                  Settings
+                </Button>
+              }
+            />
+            <PopoverContent align="end" className="w-80 p-4">
+              <IncompleteFlowTiming />
+            </PopoverContent>
+          </Popover>
           <Button
             variant="ghost"
             size="sm"

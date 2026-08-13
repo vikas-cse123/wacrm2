@@ -56,6 +56,12 @@ describe("resolveFallbackPolicy", () => {
       DEFAULT_FALLBACK_POLICY,
     );
   });
+
+  it("preserves minute-level timeout values", () => {
+    expect(resolveFallbackPolicy({ on_timeout_hours: 1 / 60 }).on_timeout_hours).toBe(
+      1 / 60,
+    );
+  });
 });
 
 const POLICY_REPROMPT_2_HANDOFF: FlowFallbackPolicy = {

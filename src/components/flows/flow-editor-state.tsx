@@ -50,7 +50,12 @@ import {
   type ValidationIssue,
 } from "@/lib/flows/validate";
 import { unlinkNodeReferences } from "@/lib/flows/edges";
-import type { FlowNodeRow, FlowRow } from "@/lib/flows/types";
+import {
+  DEFAULT_FALLBACK_POLICY,
+  type FlowFallbackPolicy,
+  type FlowNodeRow,
+  type FlowRow,
+} from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
 
 // ============================================================
@@ -63,6 +68,7 @@ export interface BuilderState {
   trigger_type: "keyword" | "first_inbound_message" | "manual";
   trigger_config: Record<string, unknown>;
   entry_node_id: string | null;
+  fallback_policy: FlowFallbackPolicy;
   status: FlowRow["status"];
   nodes: BuilderNode[];
 }
@@ -253,6 +259,10 @@ export function FlowEditorProvider({
     trigger_type: initialFlow.trigger_type,
     trigger_config: initialFlow.trigger_config as Record<string, unknown>,
     entry_node_id: initialFlow.entry_node_id,
+    fallback_policy: {
+      ...DEFAULT_FALLBACK_POLICY,
+      ...(initialFlow.fallback_policy ?? {}),
+    },
     status: initialFlow.status,
     nodes: initialNodes.map((n) => ({
       node_key: n.node_key,
@@ -348,6 +358,7 @@ export function FlowEditorProvider({
           trigger_type: state.trigger_type,
           trigger_config: state.trigger_config,
           entry_node_id: state.entry_node_id,
+          fallback_policy: state.fallback_policy,
           nodes: state.nodes,
         }),
       });

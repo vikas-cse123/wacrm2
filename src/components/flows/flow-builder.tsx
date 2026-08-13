@@ -203,6 +203,197 @@ export function FlowBuilder() {
   );
 }
 
+const INCOMPLETE_TIMEOUT_OPTIONS = [
+  { minutes: 2, label: "2 minutes" },
+  { minutes: 5, label: "5 minutes" },
+  { minutes: 10, label: "10 minutes" },
+  { minutes: 30, label: "30 minutes" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 120, label: "2 hours" },
+  { minutes: 240, label: "4 hours" },
+  { minutes: 300, label: "5 hours" },
+  { minutes: 720, label: "12 hours" },
+  { minutes: 1080, label: "18 hours" },
+  { minutes: 1440, label: "24 hours" },
+] as const;
+
+export function IncompleteFlowTiming() {
+  const { state, setState } = useFlowEditor();
+  const currentMinutes = Math.round(state.fallback_policy.on_timeout_hours * 60);
+  const currentOption = INCOMPLETE_TIMEOUT_OPTIONS.find(
+    (option) => option.minutes === currentMinutes,
+  );
+  const [customMode, setCustomMode] = useState(!currentOption);
+  const isCustom = customMode || !currentOption;
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-foreground">Incomplete flow timing</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+        Send unfinished flow data to the connected incomplete-runs Google Sheet after this period without a customer reply.
+        </p>
+      </div>
+      <div>
+        <label className="text-muted-foreground mb-1 block text-xs">
+          Mark as incomplete after
+        </label>
+        <Select
+          value={isCustom ? "custom" : String(currentOption.minutes)}
+          onValueChange={(value) => {
+            if (value === "custom") {
+              // Opening the custom controls must not itself modify the
+              // flow's saved timeout. The user chooses Hours/Minutes first.
+              setCustomMode(true);
+              return;
+            }
+            const minutes = Number(value);
+            if (!Number.isFinite(minutes) || minutes <= 0) return;
+            setState((previous) => ({
+              ...previous,
+              fallback_policy: {
+                ...previous.fallback_policy,
+                on_timeout_hours: minutes / 60,
+              },
+            }));
+            setCustomMode(false);
+          }}
+        >
+          <SelectTrigger className="w-full bg-muted">
+            <SelectValue>
+              {currentOption?.label ?? "Custom time"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {INCOMPLETE_TIMEOUT_OPTIONS.map((option) => (
+              <SelectItem key={option.minutes} value={String(option.minutes)}>
+                {option.label}
+              </SelectItem>
+            ))}
+            <SelectItem value="custom">Custom time…</SelectItem>
+          </SelectContent>
+        </Select>
+        {isCustom && (
+          <CustomTimeoutHours
+            hours={state.fallback_policy.on_timeout_hours}
+            onChange={(hours) =>
+              setState((previous) => ({
+                ...previous,
+                fallback_policy: {
+                  ...previous.fallback_policy,
+                  on_timeout_hours: hours,
+                },
+              }))
+            }
+          />
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        It is sent on the next flow check after the selected time.
+      </p>
+    </div>
+  );
+}
+
+function CustomTimeoutHours({
+  hours,
+  onChange,
+}: {
+  hours: number;
+  onChange: (hours: number) => void;
+}) {
+  const [draftHours, setDraftHours] = useState(String(Math.floor(hours)));
+  const [draftMinutes, setDraftMinutes] = useState(
+    String(Math.round((hours - Math.floor(hours)) * 60)),
+  );
+
+  useEffect(() => {
+    setDraftHours(String(Math.floor(hours)));
+    setDraftMinutes(String(Math.round((hours - Math.floor(hours)) * 60)));
+  }, [hours]);
+
+  const commit = () => {
+    const wholeHours = Number(draftHours);
+    const minutes = Number(draftMinutes);
+    const next = wholeHours + minutes / 60;
+    if (
+      !Number.isInteger(wholeHours) ||
+      !Number.isInteger(minutes) ||
+      wholeHours < 0 ||
+      minutes < 0 ||
+      minutes > 59 ||
+      next <= 0
+    ) {
+      setDraftHours(String(Math.floor(hours)));
+      setDraftMinutes(String(Math.round((hours - Math.floor(hours)) * 60)));
+      return;
+    }
+    onChange(next);
+  };
+
+  return (
+    <div className="mt-2">
+      <p className="mb-1 text-xs text-muted-foreground">
+        Custom time
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground" htmlFor="custom-timeout-hours">
+            Hours
+          </label>
+          <Input
+            id="custom-timeout-hours"
+            type="number"
+            min="0"
+            step="1"
+            inputMode="numeric"
+            value={draftHours}
+            onChange={(event) => setDraftHours(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commit();
+                event.currentTarget.blur();
+              }
+            }}
+            className="bg-muted"
+            placeholder="6"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground" htmlFor="custom-timeout-minutes">
+            Minutes
+          </label>
+          <Input
+            id="custom-timeout-minutes"
+            type="number"
+            min="0"
+            max="59"
+            step="1"
+            inputMode="numeric"
+            value={draftMinutes}
+            onChange={(event) => setDraftMinutes(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commit();
+                event.currentTarget.blur();
+              }
+            }}
+            className="bg-muted"
+            placeholder="30"
+          />
+        </div>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Example: 6 hours 30 minutes.
+      </p>
+    </div>
+  );
+}
+
 // ============================================================
 // Keyword trigger input
 // ============================================================
