@@ -57,9 +57,8 @@ export async function register() {
     }
   };
 
-  // Start shortly after boot, then check every minute. With a 3-hour timeout,
-  // incomplete rows normally appear between 180 and 181 minutes after the
-  // last answer.
+  // Start shortly after boot, then check every minute. A timed-out run is
+  // added to its incomplete sheet within roughly one check interval.
   const initial = setTimeout(() => void sweep(), 15_000);
   initial.unref();
   state.timer = setInterval(() => void sweep(), 60_000);

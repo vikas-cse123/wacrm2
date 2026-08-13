@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
+import { DEFAULT_FALLBACK_POLICY } from '@/lib/flows/types'
 
 /**
  * GET /api/flows — list the caller's flows.
@@ -108,6 +109,7 @@ export async function POST(request: Request) {
         trigger_type: template.trigger_type,
         trigger_config: template.trigger_config,
         entry_node_id: template.entry_node_id,
+        fallback_policy: DEFAULT_FALLBACK_POLICY,
       })
       .select()
       .single()
@@ -156,6 +158,7 @@ export async function POST(request: Request) {
       status: 'draft',
       trigger_type,
       trigger_config: body.trigger_config ?? {},
+      fallback_policy: DEFAULT_FALLBACK_POLICY,
     })
     .select()
     .single()

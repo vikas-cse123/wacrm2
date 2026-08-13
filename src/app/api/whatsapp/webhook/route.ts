@@ -8,6 +8,7 @@ import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { resolveAssignment } from '@/lib/assignment/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
+import { cleanupCompletedIncompleteRows } from '@/lib/flows/incomplete-sheet-cleanup'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import { sendPushToAccount, buildPreview } from '@/lib/push/send'
@@ -1056,6 +1057,21 @@ async function processMessage(
     isFirstInboundMessage,
   })
   const flowConsumed = flowResult.consumed
+
+  // A timed-out run can resume when the customer replies later. Once that
+  // same run reaches its completed Google Sheets node, remove its keyed row
+  // from the incomplete-runs sheet immediately. The flows cron performs the
+  // same cleanup as a retry safety net for temporary Google/token failures.
+  if (flowResult.outcome === 'completed') {
+    try {
+      await cleanupCompletedIncompleteRows(supabaseAdmin())
+    } catch (error) {
+      console.error(
+        '[flows] immediate incomplete-sheet cleanup failed:',
+        error instanceof Error ? error.message : error,
+      )
+    }
+  }
 
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
