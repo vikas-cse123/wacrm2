@@ -8,6 +8,7 @@ import {
   Plus,
   Trash2,
   Pencil,
+  Copy,
   Loader2,
   MessageSquare,
   PlayCircle,
@@ -89,6 +90,7 @@ export default function FlowsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [copyingId, setCopyingId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
 
   useEffect(() => {
@@ -191,6 +193,34 @@ export default function FlowsPage() {
     }
   }
 
+  async function handleCopy(flow: FlowRow) {
+    // Guard against double-clicks queuing multiple copies.
+    if (copyingId) return;
+    setCopyingId(flow.id);
+    try {
+      const res = await fetch(`/api/flows/${flow.id}/duplicate`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error ?? `Copy failed: ${res.status}`);
+      }
+      toast.success("Flow copied successfully.");
+      // Refresh the list in place (no full page reload).
+      const flowsRes = await fetch("/api/flows");
+      if (flowsRes.ok) {
+        const flowsJson = (await flowsRes.json()) as { flows: FlowRow[] };
+        setFlows(flowsJson.flows ?? []);
+      }
+    } catch (err) {
+      console.error(err);
+      const msg = err instanceof Error ? err.message : "Couldn't copy flow.";
+      toast.error(msg);
+    } finally {
+      setCopyingId(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -236,6 +266,8 @@ export default function FlowsPage() {
               key={flow.id}
               flow={flow}
               onEdit={() => router.push(`/flows/${flow.id}`)}
+              onCopy={() => handleCopy(flow)}
+              copying={copyingId === flow.id}
               onDelete={() => handleDelete(flow)}
             />
           ))}
@@ -358,10 +390,14 @@ function EmptyState({
 function FlowCard({
   flow,
   onEdit,
+  onCopy,
+  copying,
   onDelete,
 }: {
   flow: FlowRow;
   onEdit: () => void;
+  onCopy: () => void;
+  copying: boolean;
   onDelete: () => void;
 }) {
   const triggerSummary = describeTrigger(flow);
@@ -407,6 +443,19 @@ function FlowCard({
         <Button variant="ghost" size="sm" onClick={onEdit}>
           <Pencil className="h-3.5 w-3.5" />
           Edit
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onCopy}
+          disabled={copying}
+        >
+          {copying ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+          Copy
         </Button>
         <Button
           variant="ghost"
