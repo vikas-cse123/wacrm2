@@ -4,10 +4,6 @@ import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
 import {
-  Clock,
-  Check,
-  CheckCheck,
-  XCircle,
   FileText,
   MapPin,
   LayoutTemplate,
@@ -29,21 +25,11 @@ interface MessageBubbleProps {
   onToggleReaction?: (emoji: string) => void;
 }
 
-function StatusIcon({ status }: { status: Message["status"] }) {
-  switch (status) {
-    case "sending":
-      return <Clock className="h-3 w-3 text-muted-foreground" />;
-    case "sent":
-      return <Check className="h-3 w-3 text-muted-foreground" />;
-    case "delivered":
-      return <CheckCheck className="h-3 w-3 text-muted-foreground" />;
-    case "read":
-      return <CheckCheck className="h-3 w-3 text-blue-400" />;
-    case "failed":
-      return <XCircle className="h-3 w-3 text-red-400" />;
-    default:
-      return null;
-  }
+function displayMessageStatus(status: Message["status"]) {
+  if (status === "read") return "Seen";
+  if (status === "failed") return "Failed";
+  if (status === "sending") return "Sending";
+  return "Unseen";
 }
 
 function MediaUnavailable({ label }: { label: string }) {
@@ -315,7 +301,7 @@ export function MessageBubble({
   onToggleReaction,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
-  const time = format(new Date(message.created_at), "HH:mm");
+  const time = format(new Date(message.created_at), "h:mm a");
 
   // Row alignment + width cap are owned by <MessageActions> so its hover
   // group matches the bubble's content area, not the full row.
@@ -360,7 +346,14 @@ export function MessageBubble({
           >
             {time}
           </span>
-          {isAgent && <StatusIcon status={message.status} />}
+          {isAgent && (
+            <>
+              <span className="text-primary-foreground/50 text-[10px]">·</span>
+              <span className="text-primary-foreground/70 text-[10px]">
+                {displayMessageStatus(message.status)}
+              </span>
+            </>
+          )}
         </div>
       </div>
       {reactions && reactions.length > 0 && onToggleReaction && (

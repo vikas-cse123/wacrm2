@@ -4,7 +4,10 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
+  type ConversationDateFilter,
+  getConversationDateRange,
   matchesContactFilters,
+  matchesConversationDateFilter,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
 import {
@@ -16,11 +19,17 @@ import {
   removePin,
 } from "@/lib/inbox/pins";
 import { cn } from "@/lib/utils";
-import type { AccountMember, Conversation, ConversationStatus, Tag } from "@/types";
+import type {
+  AccountMember,
+  Conversation,
+  ConversationStatus,
+  Tag,
+} from "@/types";
 import { Search, ChevronDown, Users, X, Pin, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -28,7 +37,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ConversationListProps {
@@ -61,6 +79,14 @@ const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
   { label: "Closed", value: "closed" },
 ];
 
+const DATE_FILTER_OPTIONS: { label: string; value: ConversationDateFilter }[] =
+  [
+    { label: "All Chats", value: "all" },
+    { label: "Today", value: "today" },
+    { label: "Yesterday", value: "yesterday" },
+    { label: "Custom...", value: "custom" },
+  ];
+
 const PIN_LIMIT_TITLE = "Pin limit reached";
 const PIN_LIMIT_DESCRIPTION =
   "You can pin up to 30 chats at a time. Unpin an existing chat before pinning another one.";
@@ -74,6 +100,12 @@ export function ConversationList({
 }: ConversationListProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
+  const [dateFilter, setDateFilter] = useState<ConversationDateFilter>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [draftCustomFrom, setDraftCustomFrom] = useState("");
+  const [draftCustomTo, setDraftCustomTo] = useState("");
+  const [customDateOpen, setCustomDateOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
@@ -113,10 +145,24 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
+      setLoading(true);
+      const dateRange = getConversationDateRange({
+        filter: dateFilter,
+        customFrom,
+        customTo,
+      });
+      let query = supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
         .order("last_message_at", { ascending: false });
+
+      if (dateRange) {
+        query = query
+          .gte("last_message_at", dateRange.from.toISOString())
+          .lte("last_message_at", dateRange.to.toISOString());
+      }
+
+      const { data, error } = await query;
 
       if (cancelled) return;
 
@@ -142,7 +188,7 @@ export function ConversationList({
     // `resyncToken` is included so the parent can force a refetch when
     // the realtime channel reconnects or the tab regains focus — catches
     // up on any events sent while the WS was disconnected or throttled.
-  }, [resyncToken]);
+  }, [resyncToken, dateFilter, customFrom, customTo]);
 
   // Load the caller's pinned chats. Runs on mount and on resync so the
   // pin state stays correct after a reconnect / tab refocus, and so
@@ -176,12 +222,14 @@ export function ConversationList({
         setMembers(data.members as AccountMember[]);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [resyncToken]);
 
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
-useEffect(() => {
+  useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
     (async () => {
@@ -213,6 +261,17 @@ useEffect(() => {
 
   const filtered = useMemo(() => {
     let result = conversations;
+    const dateRange = getConversationDateRange({
+      filter: dateFilter,
+      customFrom,
+      customTo,
+    });
+
+    if (dateRange) {
+      result = result.filter((c) =>
+        matchesConversationDateFilter(c, dateRange)
+      );
+    }
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
@@ -232,7 +291,7 @@ useEffect(() => {
 
     if (selectedMemberIds.length > 0) {
       result = result.filter((c) =>
-        selectedMemberIds.includes(c.assigned_agent_id ?? "unassigned"),
+        selectedMemberIds.includes(c.assigned_agent_id ?? "unassigned")
       );
     }
 
@@ -247,7 +306,17 @@ useEffect(() => {
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany, selectedMemberIds]);
+  }, [
+    conversations,
+    dateFilter,
+    customFrom,
+    customTo,
+    filter,
+    search,
+    selectedTagIds,
+    selectedCompany,
+    selectedMemberIds,
+  ]);
 
   // Split the (already filtered/searched) list into pinned + regular.
   // Partitioning AFTER filtering means the pinned section only shows
@@ -255,7 +324,7 @@ useEffect(() => {
   // keeps the existing last_message_at-desc order untouched.
   const { pinned, regular } = useMemo(
     () => partitionPinnedConversations(filtered, pinnedAt),
-    [filtered, pinnedAt],
+    [filtered, pinnedAt]
   );
 
   const setPinBusy = useCallback((id: string, busy: boolean) => {
@@ -290,7 +359,9 @@ useEffect(() => {
       // Optimistic flip (functional update so concurrent toggles on
       // other rows don't clobber each other).
       setPinnedAt((prev) =>
-        nextPinned ? addPin(prev, id, new Date().toISOString()) : removePin(prev, id),
+        nextPinned
+          ? addPin(prev, id, new Date().toISOString())
+          : removePin(prev, id)
       );
       setPinBusy(id, true);
 
@@ -310,7 +381,7 @@ useEffect(() => {
           setPinnedAt((prev) =>
             nextPinned
               ? removePin(prev, id)
-              : addPin(prev, id, prevPinnedAtValue ?? new Date().toISOString()),
+              : addPin(prev, id, prevPinnedAtValue ?? new Date().toISOString())
           );
           if (res.status === 409) {
             toast.error(data.error ?? PIN_LIMIT_TITLE, {
@@ -327,14 +398,14 @@ useEffect(() => {
         setPinnedAt((prev) =>
           nextPinned
             ? removePin(prev, id)
-            : addPin(prev, id, prevPinnedAtValue ?? new Date().toISOString()),
+            : addPin(prev, id, prevPinnedAtValue ?? new Date().toISOString())
         );
         toast.error("Unable to update pinned chat. Please try again.");
       } finally {
         setPinBusy(id, false);
       }
     },
-    [pinBusyIds, pinnedAt, setPinBusy],
+    [pinBusyIds, pinnedAt, setPinBusy]
   );
 
   const toggleTag = useCallback((id: string) => {
@@ -351,11 +422,16 @@ useEffect(() => {
 
   const toggleMember = useCallback((id: string) => {
     setSelectedMemberIds((prev) =>
-      prev.includes(id) ? prev.filter((memberId) => memberId !== id) : [...prev, id],
+      prev.includes(id)
+        ? prev.filter((memberId) => memberId !== id)
+        : [...prev, id]
     );
   }, []);
 
-  const hasContactFilters = selectedTagIds.length > 0 || selectedCompany !== null || selectedMemberIds.length > 0;
+  const hasContactFilters =
+    selectedTagIds.length > 0 ||
+    selectedCompany !== null ||
+    selectedMemberIds.length > 0;
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -363,6 +439,45 @@ useEffect(() => {
     },
     []
   );
+
+  const handleDateFilterSelect = useCallback(
+    (next: ConversationDateFilter) => {
+      if (next === "custom") {
+        setDateFilter("custom");
+        setDraftCustomFrom(customFrom);
+        setDraftCustomTo(customTo);
+        setCustomDateOpen(true);
+        return;
+      }
+
+      setDateFilter(next);
+      setCustomDateOpen(false);
+      if (next === "all") {
+        setCustomFrom("");
+        setCustomTo("");
+        setDraftCustomFrom("");
+        setDraftCustomTo("");
+      }
+    },
+    [customFrom, customTo]
+  );
+
+  const applyCustomDateFilter = useCallback(() => {
+    if (!draftCustomFrom || !draftCustomTo) return;
+    setDateFilter("custom");
+    setCustomFrom(draftCustomFrom);
+    setCustomTo(draftCustomTo);
+    setCustomDateOpen(false);
+  }, [draftCustomFrom, draftCustomTo]);
+
+  const clearDateFilter = useCallback(() => {
+    setDateFilter("all");
+    setCustomFrom("");
+    setCustomTo("");
+    setDraftCustomFrom("");
+    setDraftCustomTo("");
+    setCustomDateOpen(false);
+  }, []);
 
   const handleSelect = useCallback(
     (conv: Conversation) => {
@@ -372,31 +487,39 @@ useEffect(() => {
   );
 
   const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const activeDateFilter = DATE_FILTER_OPTIONS.find(
+    (o) => o.value === dateFilter
+  );
+  const activeDateRange = getConversationDateRange({
+    filter: dateFilter,
+    customFrom,
+    customTo,
+  });
+  const hasDateFilter = activeDateRange !== null;
+  const customDateReady = draftCustomFrom !== "" && draftCustomTo !== "";
 
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
     // the single pane showing; fixed 320px on desktop where it shares the
     // row with the thread + contact sidebar.
-    <div
-      className="flex h-full w-full min-w-0 flex-col border-r border-border bg-card"
-    >
+    <div className="border-border bg-card flex h-full w-full min-w-0 flex-col border-r">
       {/* Search + Filter */}
-      <div className="space-y-2 border-b border-border p-3">
+      <div className="border-border space-y-2 border-b p-3">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
           <Input
             value={search}
             onChange={handleSearchChange}
             placeholder="Search conversations..."
-            className="border-border bg-muted pl-9 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
+            className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 pl-9 text-sm"
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-1">
           <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-                {activeFilter?.label ?? "All"}
-                <ChevronDown className="h-3 w-3" />
+            <DropdownMenuTrigger className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs">
+              {activeFilter?.label ?? "All"}
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
@@ -419,11 +542,100 @@ useEffect(() => {
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <div className="flex items-center gap-1">
+            <Popover open={customDateOpen} onOpenChange={setCustomDateOpen}>
+              <PopoverTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                      "h-7 max-w-36 gap-1 px-2 text-xs",
+                      hasDateFilter
+                        ? "text-primary"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  />
+                }
+              >
+                <span className="truncate">
+                  {activeDateFilter?.label ?? "All Chats"}
+                </span>
+                <ChevronDown className="h-3 w-3 shrink-0" />
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-64 gap-2 p-2">
+                <div className="grid gap-1">
+                  {DATE_FILTER_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => handleDateFilterSelect(opt.value)}
+                      className={cn(
+                        "hover:bg-muted rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                        dateFilter === opt.value
+                          ? "text-primary"
+                          : "text-popover-foreground"
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {dateFilter === "custom" && (
+                  <div className="border-border space-y-2 border-t pt-2">
+                    <div className="space-y-1">
+                      <label className="text-foreground text-xs font-medium">
+                        From Date
+                      </label>
+                      <Input
+                        type="date"
+                        value={draftCustomFrom}
+                        onChange={(e) => setDraftCustomFrom(e.target.value)}
+                        className="border-border bg-muted h-8 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-foreground text-xs font-medium">
+                        To Date
+                      </label>
+                      <Input
+                        type="date"
+                        value={draftCustomTo}
+                        onChange={(e) => setDraftCustomTo(e.target.value)}
+                        className="border-border bg-muted h-8 text-sm"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearDateFilter}
+                        className="text-muted-foreground"
+                      >
+                        Clear
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={applyCustomDateFilter}
+                        disabled={!customDateReady}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+          </div>
+
           {tags.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  "hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs",
                   selectedTagIds.length > 0
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground"
@@ -431,7 +643,7 @@ useEffect(() => {
               >
                 Tags
                 {selectedTagIds.length > 0 && (
-                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
                     {selectedTagIds.length}
                   </span>
                 )}
@@ -439,14 +651,14 @@ useEffect(() => {
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="border-border bg-popover max-h-64 w-56"
               >
                 {tags.map((t) => (
                   <DropdownMenuCheckboxItem
                     key={t.id}
                     checked={selectedTagIds.includes(t.id)}
                     onCheckedChange={() => toggleTag(t.id)}
-                    className="text-sm text-popover-foreground"
+                    className="text-popover-foreground text-sm"
                   >
                     <span className="flex items-center gap-2">
                       <span
@@ -465,7 +677,7 @@ useEffect(() => {
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex max-w-40 items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  "hover:bg-muted inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs",
                   selectedCompany
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground"
@@ -476,7 +688,7 @@ useEffect(() => {
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="border-border bg-popover max-h-64 w-56"
               >
                 <DropdownMenuItem
                   onClick={() => setSelectedCompany(null)}
@@ -511,23 +723,39 @@ useEffect(() => {
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
-                  selectedMemberIds.length > 0 ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                  "hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs",
+                  selectedMemberIds.length > 0
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 <Users className="h-3 w-3" />
                 Team
                 {selectedMemberIds.length > 0 && (
-                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{selectedMemberIds.length}</span>
+                  <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
+                    {selectedMemberIds.length}
+                  </span>
                 )}
                 <ChevronDown className="h-3 w-3" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="max-h-64 w-56 border-border bg-popover">
-                <DropdownMenuCheckboxItem checked={selectedMemberIds.includes("unassigned")} onCheckedChange={() => toggleMember("unassigned")} className="text-sm text-popover-foreground">
+              <DropdownMenuContent
+                align="start"
+                className="border-border bg-popover max-h-64 w-56"
+              >
+                <DropdownMenuCheckboxItem
+                  checked={selectedMemberIds.includes("unassigned")}
+                  onCheckedChange={() => toggleMember("unassigned")}
+                  className="text-popover-foreground text-sm"
+                >
                   Unassigned
                 </DropdownMenuCheckboxItem>
                 {members.map((member) => (
-                  <DropdownMenuCheckboxItem key={member.user_id} checked={selectedMemberIds.includes(member.user_id)} onCheckedChange={() => toggleMember(member.user_id)} className="text-sm text-popover-foreground">
+                  <DropdownMenuCheckboxItem
+                    key={member.user_id}
+                    checked={selectedMemberIds.includes(member.user_id)}
+                    onCheckedChange={() => toggleMember(member.user_id)}
+                    className="text-popover-foreground text-sm"
+                  >
                     {member.full_name || "Unnamed member"}
                   </DropdownMenuCheckboxItem>
                 ))}
@@ -544,13 +772,17 @@ useEffect(() => {
                 <button
                   key={id}
                   onClick={() => toggleTag(id)}
-                  className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70"
+                  className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
                 >
                   <span
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: tag?.color ?? "var(--muted-foreground)" }}
+                    style={{
+                      backgroundColor: tag?.color ?? "var(--muted-foreground)",
+                    }}
                   />
-                  <span className="max-w-24 truncate">{tag?.name ?? "Tag"}</span>
+                  <span className="max-w-24 truncate">
+                    {tag?.name ?? "Tag"}
+                  </span>
                   <X className="h-3 w-3" />
                 </button>
               );
@@ -558,7 +790,7 @@ useEffect(() => {
             {selectedCompany && (
               <button
                 onClick={() => setSelectedCompany(null)}
-                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70"
+                className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
               >
                 <span className="max-w-24 truncate">{selectedCompany}</span>
                 <X className="h-3 w-3" />
@@ -567,17 +799,40 @@ useEffect(() => {
             {selectedMemberIds.map((id) => {
               const member = members.find((item) => item.user_id === id);
               return (
-                <button key={id} onClick={() => toggleMember(id)} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70">
-                  <span className="max-w-24 truncate">{id === "unassigned" ? "Unassigned" : member?.full_name || "Team member"}</span>
+                <button
+                  key={id}
+                  onClick={() => toggleMember(id)}
+                  className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+                >
+                  <span className="max-w-24 truncate">
+                    {id === "unassigned"
+                      ? "Unassigned"
+                      : member?.full_name || "Team member"}
+                  </span>
                   <X className="h-3 w-3" />
                 </button>
               );
             })}
             <button
               onClick={clearContactFilters}
-              className="px-1 text-[11px] text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground px-1 text-[11px]"
             >
               Clear all
+            </button>
+          </div>
+        )}
+        {hasDateFilter && (
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              onClick={clearDateFilter}
+              className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+            >
+              <span className="max-w-40 truncate">
+                {dateFilter === "custom" && customFrom && customTo
+                  ? `${customFrom} to ${customTo}`
+                  : activeDateFilter?.label ?? "Date filter"}
+              </span>
+              <X className="h-3 w-3" />
             </button>
           </div>
         )}
@@ -592,11 +847,24 @@ useEffect(() => {
       <ScrollArea className="min-h-0 flex-1">
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
-            <p className="text-sm text-muted-foreground">No conversations found</p>
+            <p className="text-muted-foreground text-sm">
+              {hasDateFilter
+                ? "No chats found for this date."
+                : "No conversations found"}
+            </p>
+            {hasDateFilter && (
+              <button
+                type="button"
+                onClick={clearDateFilter}
+                className="text-primary mt-2 text-xs hover:underline"
+              >
+                Clear date filter
+              </button>
+            )}
           </div>
         ) : (
           <div className="flex flex-col">
@@ -617,7 +885,7 @@ useEffect(() => {
                   />
                 ))}
                 {regular.length > 0 && (
-                  <div className="border-b border-border" aria-hidden="true" />
+                  <div className="border-border border-b" aria-hidden="true" />
                 )}
               </>
             )}
@@ -675,7 +943,7 @@ function ConversationItem({
         onSelect(conversation);
       }
     },
-    [onSelect, conversation],
+    [onSelect, conversation]
   );
 
   const handlePinClick = useCallback(() => {
@@ -703,12 +971,12 @@ function ConversationItem({
       onClick={handleClick}
       onKeyDown={handleKeyDown}
       className={cn(
-        "group relative flex w-full cursor-pointer items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50 focus:outline-none focus-visible:bg-muted/60",
-        isActive && "border-l-2 border-primary bg-muted/70"
+        "group hover:bg-muted/50 focus-visible:bg-muted/60 relative flex w-full cursor-pointer items-start gap-3 px-3 py-3 text-left transition-colors focus:outline-none",
+        isActive && "border-primary bg-muted/70 border-l-2"
       )}
     >
       {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+      <div className="bg-muted text-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-medium">
         {contact?.avatar_url ? (
           <img
             src={contact.avatar_url}
@@ -723,18 +991,20 @@ function ConversationItem({
       {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-foreground">
+          <span className="text-foreground truncate text-sm font-medium">
             {displayName}
           </span>
-          <span className="shrink-0 pr-4 text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
+          <span className="text-muted-foreground shrink-0 pr-4 text-xs whitespace-nowrap">
+            {timeAgo}
+          </span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="truncate text-xs text-muted-foreground">
+          <p className="text-muted-foreground truncate text-xs">
             {conversation.last_message_text || "No messages yet"}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             {conversation.unread_count > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+              <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
                 {conversation.unread_count}
               </span>
             )}
@@ -765,20 +1035,23 @@ function ConversationItem({
                     aria-label={pinTooltip}
                     aria-pressed={isPinned}
                     className={cn(
-                      "flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-60",
+                      "text-muted-foreground hover:bg-muted flex h-5 w-5 items-center justify-center rounded transition-colors disabled:opacity-60",
                       // Pinned: always shown (filled). Unpinned: always
                       // tappable on touch (no hover there), but only
                       // hover/focus-revealed on desktop to keep the list clean.
                       isPinned
                         ? "opacity-100"
-                        : "opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 lg:opacity-0",
+                        : "opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 lg:opacity-0"
                     )}
                   >
                     {isPinBusy ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <Pin
-                        className={cn("h-3.5 w-3.5", isPinned && "fill-current")}
+                        className={cn(
+                          "h-3.5 w-3.5",
+                          isPinned && "fill-current"
+                        )}
                       />
                     )}
                   </button>

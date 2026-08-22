@@ -37,7 +37,7 @@ export function normalizeConversation(raw: RawConversation): Conversation {
 }
 
 export function normalizeConversations(
-  rows: RawConversation[],
+  rows: RawConversation[]
 ): Conversation[] {
   return rows.map(normalizeConversation);
 }
@@ -49,6 +49,107 @@ export interface ContactFilters {
   company: string | null;
 }
 
+export type ConversationDateFilter = "all" | "today" | "yesterday" | "custom";
+
+export interface ConversationDateRange {
+  from: Date;
+  to: Date;
+}
+
+export interface ConversationDateFilterState {
+  filter: ConversationDateFilter;
+  customFrom?: string;
+  customTo?: string;
+}
+
+function parseLocalDateInput(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(year, month - 1, day);
+
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function localDayRange(date: Date): ConversationDateRange {
+  return {
+    from: new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      0,
+      0,
+      0,
+      0
+    ),
+    to: new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      23,
+      59,
+      59,
+      999
+    ),
+  };
+}
+
+/**
+ * Builds inclusive local-day boundaries for Inbox date filters.
+ * The returned Date objects can be sent to Supabase as ISO strings:
+ * construction happens in the browser's local timezone, while
+ * `toISOString()` converts those exact instants to UTC for TIMESTAMPTZ.
+ */
+export function getConversationDateRange(
+  { filter, customFrom, customTo }: ConversationDateFilterState,
+  now = new Date()
+): ConversationDateRange | null {
+  if (filter === "all") return null;
+
+  if (filter === "today") {
+    return localDayRange(now);
+  }
+
+  if (filter === "yesterday") {
+    return localDayRange(
+      new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+    );
+  }
+
+  const fromDate = customFrom ? parseLocalDateInput(customFrom) : null;
+  const toDate = customTo ? parseLocalDateInput(customTo) : null;
+  if (!fromDate || !toDate) return null;
+
+  const fromRange = localDayRange(fromDate);
+  const toRange = localDayRange(toDate);
+
+  return fromRange.from <= toRange.to
+    ? { from: fromRange.from, to: toRange.to }
+    : { from: toRange.from, to: fromRange.to };
+}
+
+export function matchesConversationDateFilter(
+  conversation: Pick<Conversation, "last_message_at">,
+  range: ConversationDateRange | null
+): boolean {
+  if (!range) return true;
+  if (!conversation.last_message_at) return false;
+
+  const activity = new Date(conversation.last_message_at);
+  return activity >= range.from && activity <= range.to;
+}
+
 /**
  * Whether a conversation passes the contact-based Inbox filters (issue #272).
  * Empty `tagIds` and null `company` are no-ops, so the default (no filters)
@@ -56,7 +157,7 @@ export interface ContactFilters {
  */
 export function matchesContactFilters(
   conversation: Conversation,
-  { tagIds, company }: ContactFilters,
+  { tagIds, company }: ContactFilters
 ): boolean {
   if (tagIds.length > 0) {
     const contactTagIds = conversation.contact?.tags ?? [];
