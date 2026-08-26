@@ -30,11 +30,16 @@ export function AutoEnablePush() {
   const ran = useRef(false);
 
   useEffect(() => {
-    if (loading || !supported || subscribed || ran.current) return;
+    if (loading || !supported || ran.current) return;
     ran.current = true;
 
     if (permission === "granted") {
-      // Already allowed — subscribe silently (no prompt is shown).
+      // Already allowed — (re)sync the subscription to the server.
+      // This refreshes stale `push_subscriptions` rows (wrong account_id
+      // after invite/re-login, or VAPID rotation) even when
+      // `subscribed` is already true. Without this, the server's
+      // `sendPushToAccount` finds 0 rows and silently drops the push,
+      // which looks like "notifications stopped working".
       void enable();
       return;
     }

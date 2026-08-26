@@ -102,19 +102,45 @@ export async function sendPushToAccount(
       console.error('[push] failed to load subscriptions:', error.message)
       return
     }
-    if (!data || data.length === 0) {
-      console.warn('[push] no subscriptions found for account', accountId)
+    // Fallback for stale rows: subscriptions created before the admin-
+    // client fix (pre-2253029) or after an account switch may have a
+    // mismatched `account_id`. If the direct `account_id` lookup is
+    // empty, resolve current members and query by `user_id` instead.
+    // This restores delivery without requiring the user to toggle
+    // Settings off/on. Purely additive — the hot path (correct
+    // account_id) never hits the fallback.
+    let subs = data as (SubscriptionRow & { user_id: string })[] | null
+    if (!subs || subs.length === 0) {
+      console.warn('[push] no subscriptions found for account', accountId, '— trying member fallback')
+      const { data: members } = await supabaseAdmin()
+        .from('profiles')
+        .select('user_id')
+        .eq('account_id', accountId)
+      const memberIds = (members ?? []).map((m: { user_id: string }) => m.user_id)
+      if (memberIds.length > 0) {
+        const { data: fb, error: fbErr } = await supabaseAdmin()
+          .from('push_subscriptions')
+          .select('id, endpoint, p256dh, auth, user_id')
+          .in('user_id', memberIds)
+        if (!fbErr && fb && fb.length > 0) {
+          console.warn('[push] fallback found', fb.length, 'subscription(s) via member user_ids')
+          subs = fb as (SubscriptionRow & { user_id: string })[]
+        }
+      }
+    }
+    if (!subs || subs.length === 0) {
+      console.warn('[push] no subscriptions found for account', accountId, '(even after fallback)')
       return
     }
 
-    console.log('[push] found', data.length, 'subscription(s) for account', accountId)
+    console.log('[push] found', subs.length, 'subscription(s) for account', accountId)
 
     const body = JSON.stringify(payload)
     const deadIds: string[] = []
     let sentCount = 0
 
     await Promise.all(
-      (data as (SubscriptionRow & { user_id: string })[]).map(async (row) => {
+      (subs as (SubscriptionRow & { user_id: string })[]).map(async (row) => {
         try {
           await webpush.sendNotification(
             {
