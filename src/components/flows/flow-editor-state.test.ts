@@ -90,6 +90,8 @@ describe("defaultConfigFor", () => {
     "collect_input",
     "condition",
     "set_tag",
+    "google_sheets_sync",
+    "email_notification",
     "handoff",
     "end",
   ];

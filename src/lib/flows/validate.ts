@@ -24,6 +24,7 @@
  */
 
 import { INTERACTIVE_LIMITS } from "@/lib/whatsapp/meta-api";
+import { isValidEmail } from "@/lib/email/validate";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -812,6 +813,64 @@ function validateNode(
       break;
     }
 
+    case "email_notification": {
+      const cfg = node.config as {
+        recipient_mode?: "my_email" | "custom";
+        recipient_email?: string;
+        subject?: string;
+        body?: string;
+        next_node_key?: string;
+      };
+      if (cfg.recipient_mode === "custom") {
+        const email = (cfg.recipient_email ?? "").trim();
+        if (!isValidEmail(email)) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: "recipient_email",
+            message: "Custom recipient needs a valid email address.",
+          });
+        }
+      }
+      if (!cfg.subject?.trim()) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "subject",
+          message: "Email notification needs a subject.",
+        });
+      }
+      if (!cfg.body?.trim()) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "body",
+          message: "Email notification needs a body.",
+        });
+      }
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: "Email notification must point to a next node.",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `Email notification points to non-existent node "${cfg.next_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "handoff":
     case "end":
       // Terminal nodes have no outgoing edges; nothing to validate
@@ -864,7 +923,8 @@ function outgoingEdges(node: NodeInput): string[] {
     case "send_cta_url":
     case "collect_input":
     case "set_tag":
-    case "google_sheets_sync": {
+    case "google_sheets_sync":
+    case "email_notification": {
       const cfg = node.config as { next_node_key?: string };
       return cfg.next_node_key ? [cfg.next_node_key] : [];
     }

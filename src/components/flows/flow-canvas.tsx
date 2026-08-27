@@ -700,6 +700,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'condition',
   'set_tag',
   'google_sheets_sync',
+  'email_notification',
   'handoff',
   'end',
 ];

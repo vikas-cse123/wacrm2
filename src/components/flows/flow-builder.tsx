@@ -772,6 +772,7 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
     'condition',
     'set_tag',
     'google_sheets_sync',
+    'email_notification',
     'handoff',
     'end',
   ];

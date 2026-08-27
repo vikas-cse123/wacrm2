@@ -43,7 +43,10 @@ export async function register() {
         result.incompleteRemoved > 0 ||
         result.sweepErrors > 0 ||
         result.incompleteErrors > 0 ||
-        result.incompleteRemovalErrors > 0
+        result.incompleteRemovalErrors > 0 ||
+        result.emailsSent > 0 ||
+        result.emailsFailed > 0 ||
+        result.emailsFinalFailures > 0
       ) {
         console.info('[flows-cron] internal sweep:', result);
       }

@@ -32,6 +32,22 @@ self.addEventListener('push', (event) => {
     payload = { title: 'New message', body: event.data ? event.data.text() : '' };
   }
 
+  // Timing diagnostics: log when the device received the push and how
+  // long after the server sent it. The server stamps every payload with
+  // `sentAt` (see src/lib/push/send.ts). A large gap here means the push
+  // was delivered late by the provider/OS — NOT a service-worker delay,
+  // because showNotification runs immediately below. Visible in the
+  // browser's service-worker console.
+  const receivedAt = Date.now();
+  const sentAt = payload.sentAt ? Date.parse(payload.sentAt) : NaN;
+  if (Number.isFinite(sentAt)) {
+    console.log(
+      `[sw] push received at ${new Date(receivedAt).toISOString()} — ${receivedAt - sentAt}ms after server send`
+    );
+  } else {
+    console.log(`[sw] push received at ${new Date(receivedAt).toISOString()}`);
+  }
+
   const title = payload.title || 'New message';
   const options = {
     body: payload.body || '',

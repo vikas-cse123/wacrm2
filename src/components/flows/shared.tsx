@@ -23,6 +23,7 @@ import {
   Inbox,
   ListChecks,
   ListPlus,
+  Mail,
   MessageCircle,
   Paperclip,
   PlayCircle,
@@ -53,6 +54,7 @@ export type NodeType =
   | 'condition'
   | 'set_tag'
   | 'google_sheets_sync'
+  | 'email_notification'
   | 'handoff'
   | 'end';
 
@@ -170,6 +172,13 @@ export const NODE_META: Record<
     blurb: 'Appends the collected answers to a Google Sheet',
     category: 'logic',
   },
+  email_notification: {
+    label: 'Notify by email',
+    icon: Mail,
+    color: 'text-orange-400',
+    blurb: 'Send an email notification when a contact reaches this step',
+    category: 'logic',
+  },
   handoff: {
     label: 'Handoff to agent',
     icon: UserPlus,
@@ -225,6 +234,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
   google_sheets_sync: { l: 0.62, c: 0.15, h: 152 }, // sheets green
+  email_notification: { l: 0.66, c: 0.17, h: 48 }, // mailbox orange
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -451,5 +461,16 @@ export function summarizeNode(node: BuilderNode): string | null {
     }
     case 'google_sheets_sync':
       return 'Appends answers to the linked Google Sheet';
+    case 'email_notification': {
+      const customEmail =
+        typeof cfg.recipient_email === 'string' && cfg.recipient_email.trim()
+          ? cfg.recipient_email.trim()
+          : '';
+      const recipient =
+        cfg.recipient_mode === 'custom' && customEmail ? customEmail : 'my email';
+      const subject = typeof cfg.subject === 'string' ? cfg.subject : '';
+      if (!subject && cfg.recipient_mode !== 'custom') return null;
+      return subject ? `${recipient} · ${truncate(subject, 50)}` : recipient;
+    }
   }
 }

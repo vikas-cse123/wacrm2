@@ -39,6 +39,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -210,6 +215,16 @@ export function NodeConfigForm({
       return (
         <GoogleSheetsSyncForm
           cfg={cfg as { next_node_key?: string }}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      );
+
+    case "email_notification":
+      return (
+        <EmailNotificationForm
+          cfg={cfg as EmailNotificationCfg}
           allNodes={allNodes}
           currentKey={node.node_key}
           onUpdateConfig={onUpdateConfig}
@@ -1676,5 +1691,120 @@ function GoogleSheetsSyncForm({
         label="After syncing, advance to"
       />
     </div>
+  );
+}
+
+// ============================================================
+// email_notification
+//
+// Internal notification — nothing is sent to the WhatsApp contact.
+// The email is queued as a background job when the contact reaches
+// this node and sent by the server-side cron; the flow never waits
+// on it, and an email failure can never block or fail the flow.
+// ============================================================
+
+interface EmailNotificationCfg {
+  recipient_mode?: "my_email" | "custom";
+  recipient_email?: string;
+  subject?: string;
+  body?: string;
+  next_node_key?: string;
+}
+
+function EmailNotificationForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: EmailNotificationCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const mode = cfg.recipient_mode === "custom" ? "custom" : "my_email";
+  return (
+    <>
+      <div>
+        <label className="mb-1 block text-xs text-muted-foreground">
+          Send email to
+        </label>
+        <RadioGroup
+          value={mode}
+          onValueChange={(v) =>
+            onUpdateConfig({ recipient_mode: v as "my_email" | "custom" })
+          }
+        >
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+            <RadioGroupItem value="my_email" id="email-recipient-my" />
+            <Label htmlFor="email-recipient-my" className="text-xs font-normal">
+              My email (the account&apos;s email)
+            </Label>
+          </div>
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+            <RadioGroupItem value="custom" id="email-recipient-custom" />
+            <Label
+              htmlFor="email-recipient-custom"
+              className="text-xs font-normal"
+            >
+              Custom email
+            </Label>
+          </div>
+        </RadioGroup>
+      </div>
+
+      {mode === "custom" && (
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">
+            Email
+          </label>
+          <Input
+            type="email"
+            value={cfg.recipient_email ?? ""}
+            onChange={(e) =>
+              onUpdateConfig({ recipient_email: e.target.value })
+            }
+            placeholder="sales@agency.com"
+            className="bg-muted text-xs"
+          />
+        </div>
+      )}
+
+      <TextRow
+        label="Subject"
+        value={cfg.subject ?? ""}
+        onChange={(v) => onUpdateConfig({ subject: v })}
+      />
+
+      <TextRow
+        label="Body"
+        value={cfg.body ?? ""}
+        onChange={(v) => onUpdateConfig({ body: v })}
+        rows={5}
+      />
+
+      <p className="text-[11px] text-muted-foreground">
+        Use{" "}
+        <code className="rounded bg-muted px-1">{"{{vars.name}}"}</code>,{" "}
+        <code className="rounded bg-muted px-1">{"{{contact.name}}"}</code>,{" "}
+        <code className="rounded bg-muted px-1">{"{{contact.phone}}"}</code> and{" "}
+        <code className="rounded bg-muted px-1">{"{{flow.name}}"}</code> for
+        contact / flow values.
+      </p>
+
+      <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+        <p className="text-[11px] text-amber-400/90">
+          Sent in the background — email failures won&apos;t stop the flow.
+        </p>
+      </div>
+
+      <NextNodeRow
+        value={cfg.next_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ next_node_key: v })}
+        label="After notifying, advance to"
+      />
+    </>
   );
 }

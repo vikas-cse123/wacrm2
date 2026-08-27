@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildPreview } from "./send";
+import { buildPreview, shortDeviceId } from "./send";
 
 describe("buildPreview", () => {
   it("returns an empty string for nullish input", () => {
@@ -42,5 +42,21 @@ describe("buildPreview", () => {
 
   it("respects a custom max length", () => {
     expect(buildPreview("hello world", 5)).toBe("hello…");
+  });
+});
+
+describe("shortDeviceId", () => {
+  it("returns a short stable prefix of the subscription row id", () => {
+    expect(shortDeviceId("a1b2c3d4-e5f6-7890-abcd-ef1234567890")).toBe(
+      "a1b2c3d4",
+    );
+    expect(shortDeviceId("a1b2c3d4-e5f6-7890-abcd-ef1234567890")).toBe(
+      shortDeviceId("a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
+    );
+  });
+
+  it("never leaks the full endpoint in the short form", () => {
+    const full = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    expect(shortDeviceId(full).length).toBeLessThan(full.length);
   });
 });
