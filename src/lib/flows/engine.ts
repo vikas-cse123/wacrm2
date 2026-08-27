@@ -52,6 +52,7 @@ import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import { dispatchNodeWebhook } from "./webhook-dispatch";
 import { dispatchTagAdded } from "@/lib/automations/engine";
 import { enqueueFlowEmailNotification } from "@/lib/email/queue";
+import { isEmailConfigured } from "@/lib/email/send";
 import type { EmailNotificationNodeConfig } from "@/lib/email/types";
 
 import {
@@ -977,20 +978,38 @@ async function advanceFromNodeKey(
       // flows cron (drainFlowEmailNotifications) — never here. Neither
       // an enqueue failure nor any later delivery failure can affect
       // the run: enqueue errors are logged and the flow continues.
+      const mode = cfg.recipient_mode === "custom" ? "custom" : "my_email";
+      const recipientSet = mode === "custom"
+        ? Boolean((cfg.recipient_email ?? "").trim())
+        : true;
+      console.log(
+        `[email-node] EXECUTING flow=${run.flow_id} execution=${run.id} node=${node.node_key} contact=${run.contact_id ?? "?"} providerConfigured=${isEmailConfigured()}`,
+      );
+      console.log(
+        `[email-node] recipient mode=${mode} configured=${recipientSet}`,
+      );
+      console.log(`[email-node] queueing email (subject="${cfg.subject ?? ""}")`);
       const enqueued = await enqueueFlowEmailNotification(db, run, node);
       if (enqueued.ok) {
+        console.log(`[email-node] email queued job=${enqueued.jobId}`);
         await logEvent(db, run.id, "node_entered", node.node_key, {
           node_type: "email_notification",
           email_queued: true,
           email_job_id: enqueued.jobId,
         });
       } else {
+        console.error(
+          `[email-node] email queue FAILED flow=${run.flow_id} execution=${run.id} node=${node.node_key}: ${enqueued.error ?? "unknown"}`,
+        );
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "email_notification_enqueue_failed",
           detail: enqueued.error ?? null,
         });
       }
       currentKey = cfg.next_node_key;
+      console.log(
+        `[email-node] continuing to next node=${currentKey} — flow NOT waiting on email delivery`,
+      );
       continue;
     }
     if (node.node_type === "send_buttons") {

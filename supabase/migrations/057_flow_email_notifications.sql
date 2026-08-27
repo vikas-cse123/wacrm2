@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS flow_email_notifications (
   -- Defaults to NOW() on insert so a queued job is immediately due.
   next_attempt_at TIMESTAMPTZ DEFAULT NOW(),
   sent_at TIMESTAMPTZ,
+  -- Provider message id when the email was accepted (Resend id / SMTP Message-Id).
+  sent_message_id TEXT,
   failed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
