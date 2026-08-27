@@ -9,14 +9,14 @@ import {
   resolveRecipient,
   renderEmailContent,
 } from "./queue";
-import { sendEmailViaSmtp } from "./send";
+import { sendEmail } from "./send";
 
 vi.mock("./send", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./send")>();
-  return { ...actual, sendEmailViaSmtp: vi.fn() };
+  return { ...actual, sendEmail: vi.fn() };
 });
 
-const sendMock = vi.mocked(sendEmailViaSmtp);
+const sendMock = vi.mocked(sendEmail);
 
 // ------------------------------------------------------------
 // Minimal chainable Supabase fake — records operations, returns
@@ -241,6 +241,7 @@ function jobRow(over: Partial<FlowEmailNotificationRow> = {}): FlowEmailNotifica
     queued_at: "2026-01-01T00:00:00.000Z",
     next_attempt_at: "2026-01-01T00:00:00.000Z",
     sent_at: null,
+    sent_message_id: null,
     failed_at: null,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
@@ -250,7 +251,7 @@ function jobRow(over: Partial<FlowEmailNotificationRow> = {}): FlowEmailNotifica
 
 beforeEach(() => {
   sendMock.mockReset();
-  sendMock.mockResolvedValue(undefined);
+  sendMock.mockResolvedValue({ messageId: "test-message-id" });
 });
 
 // ------------------------------------------------------------

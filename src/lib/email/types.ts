@@ -56,6 +56,8 @@ export interface FlowEmailNotificationRow {
   queued_at: string;
   next_attempt_at: string;
   sent_at: string | null;
+  /** Provider message id when the email was accepted (Resend id / SMTP Message-Id). */
+  sent_message_id: string | null;
   failed_at: string | null;
   created_at: string;
   updated_at: string;

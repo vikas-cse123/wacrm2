@@ -26,7 +26,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { FlowNodeRow, FlowRunRow } from "@/lib/flows/types";
 import { interpolateEmail } from "./interpolate";
-import { sendEmailViaSmtp } from "./send";
+import { sendEmail } from "./send";
 import { isValidEmail } from "./validate";
 import type {
   EmailNotificationNodeConfig,
@@ -215,6 +215,26 @@ export async function renderEmailContent(
 
 const STALE_SENDING_CUTOFF_MS = 10 * 60_000;
 
+// Cached probe: does `flow_email_notifications.sent_message_id` exist in
+// the connected database? Migration 058 adds it; deployments that apply
+// the new code before the migration must NOT fail their `sent` status
+// write on a missing column. Probed once (cheap REST call), cached for
+// the process lifetime — the column, once present, stays present.
+let sentMessageIdAvailable: boolean | null = null;
+
+async function hasSentMessageIdColumn(db: SupabaseClient): Promise<boolean> {
+  if (sentMessageIdAvailable !== null) return sentMessageIdAvailable;
+  // A projection on the missing column makes PostgREST return an error;
+  // `limit(0)` means no rows are actually fetched. Any error (column
+  // missing, network blip) → treat as absent and omit the field.
+  const { error } = await db
+    .from("flow_email_notifications")
+    .select("sent_message_id")
+    .limit(0);
+  sentMessageIdAvailable = !error;
+  return sentMessageIdAvailable;
+}
+
 /**
  * Sweep due email jobs: claim → send (bounded) → sent / schedule retry.
  * Never throws for per-job failures — each job's outcome is recorded on
@@ -274,21 +294,26 @@ export async function drainFlowEmailNotifications(
         throw new Error("no valid recipient resolved");
       }
       const { subject, body } = await renderEmailContent(db, row);
-      await sendEmailViaSmtp({ to: recipient, subject, text: body });
+      const { messageId, response } = await sendEmail({ to: recipient, subject, text: body });
+
+      const patch: Record<string, unknown> = {
+        status: "sent",
+        sent_at: nowIso,
+        last_error: null,
+        next_attempt_at: null,
+        updated_at: nowIso,
+      };
+      if (await hasSentMessageIdColumn(db)) {
+        patch.sent_message_id = messageId ?? null;
+      }
 
       await db
         .from("flow_email_notifications")
-        .update({
-          status: "sent",
-          sent_at: nowIso,
-          last_error: null,
-          next_attempt_at: null,
-          updated_at: nowIso,
-        })
+        .update(patch)
         .eq("id", row.id);
       result.sent += 1;
       console.log(
-        `[email-cron] sent job ${row.id} → ${recipient} (flow ${row.flow_id}, contact ${row.contact_id ?? "?"})`,
+        `[email-cron] sent job ${row.id} → ${recipient} (flow ${row.flow_id}, contact ${row.contact_id ?? "?"}) messageId=${messageId ?? "n/a"}${response ? ` response="${response}"` : ""}`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
