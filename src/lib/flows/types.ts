@@ -18,6 +18,8 @@
  * references in JSONB.
  */
 
+import type { EmailNotificationNodeConfig } from "@/lib/email/types";
+
 // ============================================================
 // Node configs (discriminated union by node_type)
 // ============================================================
@@ -252,6 +254,7 @@ export type FlowNodeConfig =
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
   | { node_type: "google_sheets_sync"; config: GoogleSheetsSyncNodeConfig }
+  | { node_type: "email_notification"; config: EmailNotificationNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

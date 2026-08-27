@@ -144,12 +144,14 @@ describe("matchesKeywordTrigger", () => {
 });
 
 describe("node classification helpers", () => {
-  it("isAutoAdvancing covers start + send_message + send_media + condition + set_tag", () => {
+  it("isAutoAdvancing covers start + send_message + send_media + condition + set_tag + google_sheets_sync + email_notification", () => {
     expect(isAutoAdvancing("start")).toBe(true);
     expect(isAutoAdvancing("send_message")).toBe(true);
     expect(isAutoAdvancing("send_media")).toBe(true);
     expect(isAutoAdvancing("condition")).toBe(true);
     expect(isAutoAdvancing("set_tag")).toBe(true);
+    expect(isAutoAdvancing("google_sheets_sync")).toBe(true);
+    expect(isAutoAdvancing("email_notification")).toBe(true);
     expect(isAutoAdvancing("send_buttons")).toBe(false);
     expect(isAutoAdvancing("send_list")).toBe(false);
     expect(isAutoAdvancing("collect_input")).toBe(false);
@@ -165,6 +167,7 @@ describe("node classification helpers", () => {
     expect(isSuspending("send_message")).toBe(false);
     expect(isSuspending("condition")).toBe(false);
     expect(isSuspending("set_tag")).toBe(false);
+    expect(isSuspending("email_notification")).toBe(false);
     expect(isSuspending("handoff")).toBe(false);
     expect(isSuspending("end")).toBe(false);
   });
@@ -175,6 +178,7 @@ describe("node classification helpers", () => {
     expect(isTerminal("start")).toBe(false);
     expect(isTerminal("send_buttons")).toBe(false);
     expect(isTerminal("condition")).toBe(false);
+    expect(isTerminal("email_notification")).toBe(false);
   });
 
   it("the three classifications are mutually exclusive for known node types", () => {
@@ -187,6 +191,8 @@ describe("node classification helpers", () => {
       "collect_input",
       "condition",
       "set_tag",
+      "google_sheets_sync",
+      "email_notification",
       "handoff",
       "end",
     ];

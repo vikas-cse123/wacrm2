@@ -1002,10 +1002,15 @@ async function processMessage(
   }
 
   // Web Push fan-out — notify account members who enabled notifications.
-  // Fire-and-forget: a slow/failing push service must not block the
-  // webhook's 200 OK to Meta.
+  // Awaited (inside the route's `after()` block) rather than fire-and-
+  // forget: on serverless, an un-awaited promise can be frozen when the
+  // `after()` callback resolves, aborting in-flight push requests before
+  // they reach the slower push services — which shows up as "one device
+  // gets it minutes later". `sendPushToAccount` is internally bounded
+  // (per-subscription timeout) and never throws, so awaiting it can't
+  // block the webhook or push a failure into the message pipeline.
   const senderPhoneDisplay = senderPhone ? `+${senderPhone}` : 'Unknown number'
-  void sendPushToAccount(accountId, {
+  await sendPushToAccount(accountId, {
     title: senderPhoneDisplay,
     body: buildPreview(contentText) || `[${message.type}]`,
     url: `/inbox?c=${conversation.id}`,

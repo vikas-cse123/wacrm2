@@ -197,6 +197,14 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
       return { mode: "add", tag_id: "", next_node_key: "" };
     case "google_sheets_sync":
       return { next_node_key: "" };
+    case "email_notification":
+      return {
+        recipient_mode: "my_email",
+        recipient_email: "",
+        subject: "",
+        body: "",
+        next_node_key: "",
+      };
     case "handoff":
       return { note: "" };
     case "end":

@@ -51,6 +51,8 @@ import {
 import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import { dispatchNodeWebhook } from "./webhook-dispatch";
 import { dispatchTagAdded } from "@/lib/automations/engine";
+import { enqueueFlowEmailNotification } from "@/lib/email/queue";
+import type { EmailNotificationNodeConfig } from "@/lib/email/types";
 
 import {
   type CollectInputNodeConfig,
@@ -132,7 +134,8 @@ export function isAutoAdvancing(node_type: string): boolean {
     node_type === "send_cta_url" ||
     node_type === "condition" ||
     node_type === "set_tag" ||
-    node_type === "google_sheets_sync"
+    node_type === "google_sheets_sync" ||
+    node_type === "email_notification"
   );
 }
 
@@ -962,6 +965,29 @@ async function advanceFromNodeKey(
         await logEvent(db, run.id, "error", node.node_key, {
           reason: "google_sheets_sync_failed",
           detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "email_notification") {
+      const cfg = node.config as unknown as EmailNotificationNodeConfig;
+      // Non-blocking by design: enqueue a durable background job and
+      // advance immediately. The actual SMTP call happens later in the
+      // flows cron (drainFlowEmailNotifications) — never here. Neither
+      // an enqueue failure nor any later delivery failure can affect
+      // the run: enqueue errors are logged and the flow continues.
+      const enqueued = await enqueueFlowEmailNotification(db, run, node);
+      if (enqueued.ok) {
+        await logEvent(db, run.id, "node_entered", node.node_key, {
+          node_type: "email_notification",
+          email_queued: true,
+          email_job_id: enqueued.jobId,
+        });
+      } else {
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "email_notification_enqueue_failed",
+          detail: enqueued.error ?? null,
         });
       }
       currentKey = cfg.next_node_key;

@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { resolveFallbackPolicy } from '@/lib/flows/fallback';
 import { cleanupCompletedIncompleteRows } from '@/lib/flows/incomplete-sheet-cleanup';
 import { syncAllIncompleteSheets } from '@/lib/flows/incomplete-sheet-sync';
+import { drainFlowEmailNotifications } from '@/lib/email/queue';
 
 export interface FlowCronResult {
   swept: number;
@@ -10,6 +11,9 @@ export interface FlowCronResult {
   incompleteErrors: number;
   incompleteRemoved: number;
   incompleteRemovalErrors: number;
+  emailsSent: number;
+  emailsFailed: number;
+  emailsFinalFailures: number;
 }
 
 /**
@@ -95,6 +99,10 @@ export async function runFlowCron(): Promise<FlowCronResult> {
 
   const incomplete = await syncAllIncompleteSheets(admin);
   const cleanup = await cleanupCompletedIncompleteRows(admin);
+  // Email notifications are queued by the flow engine and sent here,
+  // fully off the flow's synchronous path. Failures are recorded on the
+  // job row and retried with backoff; they never affect flow execution.
+  const email = await drainFlowEmailNotifications(admin);
   return {
     swept,
     sweepErrors,
@@ -102,5 +110,8 @@ export async function runFlowCron(): Promise<FlowCronResult> {
     incompleteErrors: incomplete.errors,
     incompleteRemoved: cleanup.removed,
     incompleteRemovalErrors: cleanup.errors,
+    emailsSent: email.sent,
+    emailsFailed: email.failed,
+    emailsFinalFailures: email.finalFailures,
   };
 }
