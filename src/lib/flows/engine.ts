@@ -931,6 +931,7 @@ async function advanceFromNodeKey(
               run.contact_id,
               cfg.tag_id,
               run.conversation_id ?? undefined,
+              run.vars,
             );
           }
         } else {

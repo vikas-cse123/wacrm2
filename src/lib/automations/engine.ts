@@ -130,12 +130,13 @@ export function dispatchTagAdded(
   contactId: string,
   tagId: string,
   conversationId?: string,
+  vars?: Record<string, unknown>,
 ): void {
   void runAutomationsForTrigger({
     accountId,
     triggerType: 'tag_added',
     contactId,
-    context: { tag_id: tagId, conversation_id: conversationId },
+    context: { tag_id: tagId, conversation_id: conversationId, ...(vars ? { vars } : {}) },
   }).catch((err) => console.error('[automations] tag_added dispatch failed:', err))
 }
 
