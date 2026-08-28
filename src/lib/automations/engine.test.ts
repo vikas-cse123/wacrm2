@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
     fromCalls: [] as string[],
     updateCalls: [] as { table: string; filters: [string, string, unknown][] }[],
     upsertCalls: [] as { table: string; payload: unknown }[],
+    pendingInserts: [] as { context?: unknown }[],
+    contactTagCount: 1 as number | null,
   },
 }));
 
@@ -50,6 +52,18 @@ vi.mock("./admin-client", () => {
       return { data: { steps_executed: [], status: "success" }, error: null };
     }
     if (table === "automation_steps") return { data: state.steps, error: null };
+    if (table === "automation_pending_executions") {
+      if (type === "insert") {
+        state.pendingInserts.push({ context: (ops.payload as { context?: unknown })?.context });
+        return { data: null, error: null };
+      }
+      if (type === "update") return { data: null, error: null };
+      return { data: null, error: null };
+    }
+    if (table === "contact_tags") {
+      // count query for the resume tag guard: `select('id', { count, head })`
+      return { count: state.contactTagCount ?? 0, error: null };
+    }
     return { data: null, error: null };
   }
 
@@ -99,7 +113,7 @@ vi.mock("../flows/meta-send", () => ({
   engineSendMedia: vi.fn(async () => ({ whatsapp_message_id: "media-1" })),
 }));
 
-import { runAutomationsForTrigger } from "./engine";
+import { runAutomationsForTrigger, resumePendingExecution } from "./engine";
 
 const ACCOUNT = "acct-1";
 
@@ -333,5 +347,176 @@ describe("send_media", () => {
 
     const sendMedia = await engineSendMediaMock();
     expect(sendMedia.mock.calls[0][0].caption).toBe("Order ORD-7 ready");
+  });
+});
+
+// ------------------------------------------------------------
+// Flow → tag_added vars bridge
+//
+// `dispatchTagAdded` now forwards the Flow run's `vars` into the
+// automation context (`context.vars`), so a Tag Added automation can
+// resolve `{{vars.Name}}` captured earlier by the Flow's Collect Input.
+// These tests drive the same `runAutomationsForTrigger(tag_added, {vars})`
+// path that `dispatchTagAdded` invokes.
+// ------------------------------------------------------------
+
+describe("flow → tag_added vars bridge", () => {
+  function tagAddedAutomation() {
+    return {
+      id: "a1",
+      account_id: ACCOUNT,
+      user_id: "u1",
+      trigger_type: "tag_added",
+      trigger_config: { tag_id: "tag-1" },
+      is_active: true,
+    };
+  }
+
+  function sendMessageStep(text: string) {
+    return {
+      id: "s1",
+      automation_id: "a1",
+      step_type: "send_message",
+      position: 0,
+      parent_step_id: null,
+      step_config: { text },
+    };
+  }
+
+  const engineSendTextMock = async () =>
+    import("./meta-send").then((m) =>
+      (m as unknown as { engineSendText: ReturnType<typeof vi.fn> }).engineSendText,
+    )
+
+  it("TEST 1 — resolves {{vars.Name}} from a Flow's vars into a Tag Added send_message", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [tagAddedAutomation()];
+    h.state.steps = [sendMessageStep("Hello {{vars.Name}}")];
+
+    // dispatchTagAdded now passes vars: run.vars from the Flow's set_tag.
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "tag_added",
+      contactId: "c1",
+      context: { tag_id: "tag-1", conversation_id: "conv-1", vars: { Name: "Tarun" } },
+    });
+
+    const sendText = await engineSendTextMock();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0][0].text).toBe("Hello Tarun");
+  });
+
+  it("TEST 3 — no flow vars: {{vars.Name}} stays empty without error", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [tagAddedAutomation()];
+    h.state.steps = [sendMessageStep("Hello {{vars.Name}}")];
+
+    // A direct/manual Tag Added trigger carries no vars (dispatchTagAdded
+    // omits `vars` when the caller passes none — backward compatible).
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "tag_added",
+      contactId: "c1",
+      context: { tag_id: "tag-1", conversation_id: "conv-1" },
+    });
+
+    const sendText = await engineSendTextMock();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0][0].text).toBe("Hello ");
+  });
+
+  it("TEST 4 — no {{vars.*}} in the message: unchanged plain text", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [tagAddedAutomation()];
+    h.state.steps = [sendMessageStep("Thanks for reaching out")];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "tag_added",
+      contactId: "c1",
+      context: { tag_id: "tag-1", conversation_id: "conv-1", vars: { Name: "Tarun" } },
+    });
+
+    const sendText = await engineSendTextMock();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0][0].text).toBe("Thanks for reaching out");
+  });
+
+  it("TEST 5 — resolves {{vars.Name}} into a Send Media caption", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [tagAddedAutomation()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_media",
+        position: 0,
+        parent_step_id: null,
+        step_config: {
+          media_type: "image",
+          media_url: "https://x.supabase.co/storage/v1/object/public/flow-media/account-acct-1/img.png",
+          caption: "🎉 Great News, {{vars.Name}}",
+        },
+      },
+    ];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "tag_added",
+      contactId: "c1",
+      context: { tag_id: "tag-1", conversation_id: "conv-1", vars: { Name: "Tarun" } },
+    });
+
+    const sendMedia = await (async () =>
+      import("../flows/meta-send").then((m) =>
+        (m as unknown as { engineSendMedia: ReturnType<typeof vi.fn> }).engineSendMedia,
+      ))();
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(sendMedia.mock.calls[0][0].caption).toBe("🎉 Great News, Tarun");
+  });
+
+  it("TEST 2 — vars survive the Wait/Resume scheduler", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.contactTagCount = 1;
+    h.state.automations = [tagAddedAutomation()];
+    h.state.steps = [
+      { id: "s1", automation_id: "a1", step_type: "wait", position: 0, parent_step_id: null, step_config: { amount: 2, unit: "minutes" } },
+      { id: "s2", automation_id: "a1", step_type: "send_message", position: 1, parent_step_id: null, step_config: { text: "Hello {{vars.Name}}" } },
+    ];
+
+    // dispatch with vars: the wait step parks `context: args.context` (incl. vars).
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "tag_added",
+      contactId: "c1",
+      context: { tag_id: "tag-1", conversation_id: "conv-1", vars: { Name: "Tarun" } },
+    });
+
+    // The pending row must carry the vars so the scheduler can restore them.
+    expect(h.state.pendingInserts).toHaveLength(1);
+    const parked = h.state.pendingInserts[0]!.context as { vars?: Record<string, unknown> };
+    expect(parked.vars).toEqual({ Name: "Tarun" });
+
+    // Resume the parked run (cron path) — context restored from pending.context.
+    h.state.steps = [h.state.steps[1]!]; // resume fetches steps at position >= 1
+    await resumePendingExecution({
+      id: "pending-1",
+      automation_id: "a1",
+      account_id: ACCOUNT,
+      user_id: "u1",
+      contact_id: "c1",
+      log_id: "log1",
+      parent_step_id: null,
+      branch: null,
+      next_step_position: 1,
+      context: parked,
+    });
+
+    const sendText = await (async () =>
+      import("./meta-send").then((m) =>
+        (m as unknown as { engineSendText: ReturnType<typeof vi.fn> }).engineSendText,
+      ))();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0][0].text).toBe("Hello Tarun");
   });
 });
