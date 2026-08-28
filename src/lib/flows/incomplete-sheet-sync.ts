@@ -246,7 +246,49 @@ export async function syncIncompleteRunsForFlow(
  * Groups configs by account so each account's Google token is resolved
  * once; accounts without a valid token are skipped (their runs stay
  * unsynced and are picked up once the token is back).
+ *
+ * Permanent-failure backoff: a config whose spreadsheet/tab was deleted
+ * (or whose access was revoked) fails identically every minute forever,
+ * wasting worker time and spamming the logs. After `MAX_CONSECUTIVE_FAILURES`
+ * consecutive failures we stop retrying that config for a cooldown period,
+ * so a permanently-broken sheet can never consume the cron indefinitely.
+ * Once the cooldown passes (or the process restarts) it is retried once
+ * more, so re-linking the sheet recovers automatically.
  */
+
+const MAX_CONSECUTIVE_FAILURES = 3;
+const CONFIG_FAILURE_BACKOFF_MS = 30 * 60_000;
+
+interface FailureState {
+  count: number;
+  lastFailedAt: number;
+}
+
+const failureByFlow = new Map<string, FailureState>();
+
+function inBackoff(flowId: string): boolean {
+  const state = failureByFlow.get(flowId);
+  if (!state) return false;
+  return (
+    state.count >= MAX_CONSECUTIVE_FAILURES &&
+    Date.now() - state.lastFailedAt < CONFIG_FAILURE_BACKOFF_MS
+  );
+}
+
+function recordFailure(flowId: string): void {
+  const state = failureByFlow.get(flowId);
+  if (state) {
+    state.count += 1;
+    state.lastFailedAt = Date.now();
+  } else {
+    failureByFlow.set(flowId, { count: 1, lastFailedAt: Date.now() });
+  }
+}
+
+function recordSuccess(flowId: string): void {
+  failureByFlow.delete(flowId);
+}
+
 export async function syncAllIncompleteSheets(
   db: SupabaseClient,
 ): Promise<{ synced: number; errors: number }> {
@@ -275,10 +317,18 @@ export async function syncAllIncompleteSheets(
     if (!token) continue;
 
     for (const config of accountConfigs) {
+      if (inBackoff(config.flow_id)) {
+        console.warn(
+          `[incomplete-sheet-sync] flow ${config.flow_id} is in permanent-failure backoff — skipping until cooldown passes`,
+        );
+        continue;
+      }
       try {
         synced += await syncIncompleteRunsForFlow(db, config, token);
+        recordSuccess(config.flow_id);
       } catch (err) {
         errors += 1;
+        recordFailure(config.flow_id);
         console.error(
           `[incomplete-sheet-sync] flow ${config.flow_id} failed:`,
           err instanceof Error ? err.message : err,

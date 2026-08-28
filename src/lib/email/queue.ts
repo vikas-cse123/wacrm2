@@ -215,6 +215,12 @@ export async function renderEmailContent(
 
 const STALE_SENDING_CUTOFF_MS = 10 * 60_000;
 
+// Per-sweep bounds so the email drain can never monopolize the cron /
+// event loop. A retry storm (provider down + many due jobs × 10s
+// timeout each) could otherwise hold the sweep for minutes on end.
+const EMAIL_MAX_PER_SWEEP = 20;
+const EMAIL_SWEEP_TIME_BUDGET_MS = 25_000;
+
 // Cached probe: does `flow_email_notifications.sent_message_id` exist in
 // the connected database? Migration 058 adds it; deployments that apply
 // the new code before the migration must NOT fail their `sent` status
@@ -262,7 +268,7 @@ export async function drainFlowEmailNotifications(
     .in("status", ["queued", "failed"])
     .lte("next_attempt_at", nowIso)
     .order("next_attempt_at", { ascending: true })
-    .limit(50);
+    .limit(EMAIL_MAX_PER_SWEEP);
 
   if (error) {
     console.error("[email-cron] due-jobs scan failed:", error.message);
@@ -271,8 +277,19 @@ export async function drainFlowEmailNotifications(
 
   const rows = (due as FlowEmailNotificationRow[] | null) ?? [];
   const result: EmailDrainResult = { sent: 0, failed: 0, finalFailures: 0 };
+  const sweepStartedAt = Date.now();
 
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i]!;
+    // Stop claiming once the sweep's wall-clock budget is spent. Rows
+    // left behind stay 'queued'/'failed' and are picked up on the next
+    // tick — the cron runs every minute, so nothing is starved.
+    if (Date.now() - sweepStartedAt > EMAIL_SWEEP_TIME_BUDGET_MS) {
+      console.warn(
+        `[email-cron] sweep time budget (${EMAIL_SWEEP_TIME_BUDGET_MS}ms) reached — deferring ${rows.length - i} remaining job(s) to the next tick`,
+      );
+      break;
+    }
     const attempt = row.attempt + 1;
 
     // Claim — the status flip is the lock. Overlapping cron invocations
