@@ -63,6 +63,17 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         issues.push({ path: `${path}.template_name`, message: 'template name is required' })
       }
       break
+    case 'send_media':
+      if (!['image', 'video', 'document'].includes(String(c.media_type))) {
+        issues.push({
+          path: `${path}.media_type`,
+          message: 'media type must be image, video, or document',
+        })
+      }
+      if (!nonEmpty(c.media_url)) {
+        issues.push({ path: `${path}.media_url`, message: 'media file is required' })
+      }
+      break
     case 'add_tag':
     case 'remove_tag':
       if (!nonEmpty(c.tag_id)) {

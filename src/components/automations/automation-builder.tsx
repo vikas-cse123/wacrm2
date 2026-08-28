@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -17,6 +18,11 @@ import {
   GripVertical,
   MessageSquare,
   FileText,
+  Image as ImageIcon,
+  Paperclip,
+  Upload,
+  Loader2,
+  X,
   Tag,
   TagIcon,
   UserCheck,
@@ -27,7 +33,6 @@ import {
   Webhook,
   CircleSlash,
   Zap,
-  Loader2,
   ArrowDown,
   ArrowUp,
 } from "lucide-react"
@@ -52,6 +57,7 @@ import type {
   Tag as TagRecord,
 } from "@/types"
 import { createClient } from "@/lib/supabase/client"
+import { uploadAccountMedia, MEDIA_MAX_BYTES } from "@/lib/storage/upload-media"
 import { cn } from "@/lib/utils"
 
 // ------------------------------------------------------------
@@ -90,6 +96,7 @@ interface StepMeta {
 const STEP_META: Record<AutomationStepType, StepMeta> = {
   send_message: { label: "Send Message", icon: MessageSquare, border: "border-l-primary" },
   send_template: { label: "Send Template", icon: FileText, border: "border-l-primary" },
+  send_media: { label: "Send Media", icon: ImageIcon, border: "border-l-primary" },
   add_tag: { label: "Add Tag", icon: Tag, border: "border-l-primary" },
   remove_tag: { label: "Remove Tag", icon: TagIcon, border: "border-l-primary" },
   assign_conversation: { label: "Assign Conversation", icon: UserCheck, border: "border-l-primary" },
@@ -104,6 +111,7 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
 const ADDABLE_STEPS: AutomationStepType[] = [
   "send_message",
   "send_template",
+  "send_media",
   "add_tag",
   "remove_tag",
   "assign_conversation",
@@ -144,6 +152,8 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { text: "" }
     case "send_template":
       return { template_name: "", language: "en_US" }
+    case "send_media":
+      return { media_type: "image", media_url: "", caption: "", filename: "" }
     case "add_tag":
     case "remove_tag":
       return { tag_id: "" }
@@ -579,6 +589,161 @@ function SendTemplateFields({
         )}
       </select>
     </FieldBlock>
+  )
+}
+
+// ------------------------------------------------------------
+// Send Media
+//
+// Reuses the shared account-scoped upload helper + `flow-media` bucket
+// from the Flows builder (`uploadAccountMedia`), so a media file chosen
+// here lands in storage exactly like a Flows `send_media` node's file,
+// and the automation engine sends it through the same
+// `engineSendMedia` / `sendMediaMessage` path at runtime.
+// ------------------------------------------------------------
+
+const AUTOMATION_MEDIA_BUCKET = "flow-media"
+
+const AUTOMATION_MEDIA_ACCEPT: Record<string, string> = {
+  image: "image/png,image/jpeg,image/webp",
+  video: "video/mp4,video/3gpp",
+  document:
+    "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
+}
+
+function SendMediaFields({
+  mediaType,
+  mediaUrl,
+  caption,
+  filename,
+  onChange,
+}: {
+  mediaType: string
+  mediaUrl: string
+  caption: string
+  filename: string
+  onChange: (patch: Record<string, unknown>) => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+
+  const isDocument = mediaType === "document"
+  const displayName =
+    filename || (mediaUrl ? mediaUrl.split("/").pop() ?? "" : "")
+
+  const handleFile = async (file: File) => {
+    if (file.size > MEDIA_MAX_BYTES) {
+      toast.error(
+        `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — limit is 16 MB.`,
+      )
+      return
+    }
+    setUploading(true)
+    try {
+      const { publicUrl } = await uploadAccountMedia(AUTOMATION_MEDIA_BUCKET, file)
+      onChange({ media_url: publicUrl, filename: file.name })
+      toast.success("File uploaded.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed.")
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <>
+      <FieldBlock label="Media type">
+        <select
+          value={mediaType}
+          onChange={(e) => {
+            // Changing type clears the file — the bucket accepts
+            // different MIME sets per type (mirrors the Flows node).
+            onChange({ media_type: e.target.value, media_url: "", filename: "" })
+          }}
+          className={SELECT_CLASS}
+        >
+          <option value="image">Image (PNG, JPEG, WebP)</option>
+          <option value="video">Video (MP4, 3GP)</option>
+          <option value="document">Document (PDF, Word, Excel, PowerPoint, TXT)</option>
+        </select>
+      </FieldBlock>
+
+      <FieldBlock label="File">
+        {mediaUrl ? (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
+            <a
+              href={mediaUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 flex-1 truncate text-foreground hover:text-cyan-300"
+              title={displayName || mediaUrl}
+            >
+              {displayName || mediaUrl}
+            </a>
+            <button
+              type="button"
+              onClick={() => onChange({ media_url: "", filename: "" })}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Remove file"
+              disabled={uploading}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border bg-card px-3 py-4 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {uploading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Uploading…
+              </>
+            ) : (
+              <>
+                <Upload className="h-3.5 w-3.5" />
+                Click to upload (max 16 MB)
+              </>
+            )}
+          </button>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={AUTOMATION_MEDIA_ACCEPT[mediaType]}
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) void handleFile(f)
+            e.target.value = ""
+          }}
+        />
+      </FieldBlock>
+
+      <FieldBlock label="Caption (optional, shown under the media)">
+        <Textarea
+          value={caption}
+          onChange={(e) => onChange({ caption: e.target.value })}
+          rows={2}
+          className="min-h-12 bg-muted text-foreground"
+        />
+      </FieldBlock>
+
+      {isDocument && (
+        <FieldBlock label="Filename shown to the customer (documents only)">
+          <Input
+            value={filename}
+            onChange={(e) => onChange({ filename: e.target.value })}
+            placeholder="invoice.pdf"
+            className="bg-muted text-xs"
+          />
+        </FieldBlock>
+      )}
+    </>
   )
 }
 
@@ -1194,6 +1359,16 @@ function StepEditor({
           onChange={(patch) => set(patch)}
         />
       )
+    case "send_media":
+      return (
+        <SendMediaFields
+          mediaType={(cfg.media_type as string) ?? "image"}
+          mediaUrl={(cfg.media_url as string) ?? ""}
+          caption={(cfg.caption as string) ?? ""}
+          filename={(cfg.filename as string) ?? ""}
+          onChange={(patch) => set(patch)}
+        />
+      )
     case "add_tag":
     case "remove_tag":
       return (
@@ -1389,6 +1564,14 @@ function previewFor(step: BuilderStep): string {
       return (step.step_config.text as string) || "no text yet"
     case "send_template":
       return (step.step_config.template_name as string) || "pick a template"
+    case "send_media": {
+      const mt = step.step_config.media_type as string
+      const name =
+        (step.step_config.filename as string) ||
+        ((step.step_config.media_url as string) ?? "").split("/").pop() ||
+        ""
+      return `send ${mt || "media"}${name ? `: ${name}` : ""}`
+    }
     case "wait":
       return `${step.step_config.amount ?? "?"} ${step.step_config.unit ?? ""}`
     case "condition":

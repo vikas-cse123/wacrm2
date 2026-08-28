@@ -5,6 +5,7 @@ import type {
   AutomationTriggerType,
   ConditionStepConfig,
   KeywordMatchTriggerConfig,
+  SendMediaStepConfig,
   SendMessageStepConfig,
   SendTemplateStepConfig,
   SendWebhookStepConfig,
@@ -17,6 +18,13 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+// The Flows engine's media sender is fully shared: it performs the same
+// account-scoped contact/config lookup, phone-variant retry, Meta send,
+// message-row persistence, and conversation preview update that the
+// automation text/template senders do. Reusing it here (rather than
+// re-implementing a second media path) keeps image/video/document sends
+// identical to the Flows `send_media` node.
+import { engineSendMedia } from '../flows/meta-send'
 
 // ------------------------------------------------------------
 // Public API
@@ -436,6 +444,28 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         params,
       })
       return `template sent via Meta (${whatsapp_message_id})`
+    }
+
+    case 'send_media': {
+      const cfg = step.step_config as SendMediaStepConfig
+      if (!args.contactId) throw new Error('send_media needs a contact')
+      if (!cfg.media_url?.trim()) throw new Error('send_media needs media_url')
+      const conversationId = await resolveConversationId(args)
+      // Caption supports the same {{ vars.* }} / {{ message.text }}
+      // interpolation as send_message text. media_url stays static (the
+      // file was uploaded when the automation was authored) — matching
+      // the Flows send_media node, which does not interpolate the URL.
+      const { whatsapp_message_id } = await engineSendMedia({
+        accountId: args.automation.account_id,
+        userId: args.automation.user_id,
+        conversationId,
+        contactId: args.contactId,
+        kind: cfg.media_type,
+        link: cfg.media_url,
+        caption: cfg.caption ? interpolate(cfg.caption, args) : undefined,
+        filename: cfg.filename,
+      })
+      return `media sent via Meta (${whatsapp_message_id})`
     }
 
     case 'add_tag': {

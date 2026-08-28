@@ -29,6 +29,33 @@ describe("validateStepsForActivation", () => {
     expect(issues).toEqual([]);
   });
 
+  it("accepts a fully-configured send_media step", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          media_type: "document",
+          media_url: "https://x.supabase.co/storage/v1/object/public/flow-media/account-acct-1/invoice.pdf",
+          caption: "Invoice",
+          filename: "invoice.pdf",
+        },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it("flags send_media when media_type or media_url is missing", () => {
+    const issues = validateStepsForActivation([
+      { step_type: "send_media", step_config: { media_type: "", media_url: "" } },
+      { step_type: "send_media", step_config: { media_type: "audio", media_url: "x" } },
+    ]);
+    expect(issues.map((i) => i.path)).toEqual([
+      "steps[0].media_type",
+      "steps[0].media_url",
+      "steps[1].media_type",
+    ]);
+  });
+
   it("flags every required field that is missing", () => {
     const issues = validateStepsForActivation([
       { step_type: "send_message", step_config: { text: "  " } },

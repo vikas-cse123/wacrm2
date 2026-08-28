@@ -426,6 +426,7 @@ export type AutomationTriggerType =
 export type AutomationStepType =
   | 'send_message'
   | 'send_template'
+  | 'send_media'
   | 'add_tag'
   | 'remove_tag'
   | 'assign_conversation'
@@ -469,6 +470,23 @@ export interface SendTemplateStepConfig {
   template_name: string;
   language?: string;
   variables?: Record<string, string>;
+}
+
+/**
+ * Sends a single image / video / document via WhatsApp, then auto-advances.
+ * Mirrors the Flows `send_media` node (SendMediaNodeConfig): the file is
+ * uploaded to the account-scoped `flow-media` Storage bucket by the builder,
+ * and `media_url` is the public URL Meta fetches at send time. Caption and
+ * document filename match the Flow node's fields.
+ */
+export interface SendMediaStepConfig {
+  media_type: 'image' | 'video' | 'document';
+  /** Public URL Meta will fetch. Uploaded via the builder's file picker. */
+  media_url: string;
+  /** Optional caption shown under the media (Meta caps at 1024 chars). */
+  caption?: string;
+  /** Filename shown in the recipient's chat. Documents only. */
+  filename?: string;
 }
 
 export interface TagStepConfig {
@@ -528,6 +546,7 @@ export interface SendWebhookStepConfig {
 export type AutomationStepConfig =
   | SendMessageStepConfig
   | SendTemplateStepConfig
+  | SendMediaStepConfig
   | TagStepConfig
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
