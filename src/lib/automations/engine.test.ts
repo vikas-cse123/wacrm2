@@ -95,6 +95,10 @@ vi.mock("./meta-send", () => ({
   engineSendTemplate: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
 }));
 
+vi.mock("../flows/meta-send", () => ({
+  engineSendMedia: vi.fn(async () => ({ whatsapp_message_id: "media-1" })),
+}));
+
 import { runAutomationsForTrigger } from "./engine";
 
 const ACCOUNT = "acct-1";
@@ -256,3 +260,78 @@ function customStep(field: string, value: string) {
     step_config: { field, value },
   };
 }
+
+describe("send_media", () => {
+  const engineSendMediaMock = async () =>
+    import("../flows/meta-send").then((m) =>
+      (m as unknown as { engineSendMedia: ReturnType<typeof vi.fn> }).engineSendMedia,
+    )
+
+  it("sends media and logs a success detail", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_media",
+        position: 0,
+        parent_step_id: null,
+        step_config: {
+          media_type: "document",
+          media_url: "https://x.supabase.co/storage/v1/object/public/flow-media/account-acct-1/invoice.pdf",
+          caption: "Here is your invoice",
+          filename: "invoice.pdf",
+        },
+      },
+    ];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { conversation_id: "conv-1" },
+    });
+
+    const sendMedia = await engineSendMediaMock();
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(sendMedia.mock.calls[0][0]).toMatchObject({
+      accountId: ACCOUNT,
+      contactId: "c1",
+      conversationId: "conv-1",
+      kind: "document",
+      link: "https://x.supabase.co/storage/v1/object/public/flow-media/account-acct-1/invoice.pdf",
+      caption: "Here is your invoice",
+      filename: "invoice.pdf",
+    });
+  });
+
+  it("interpolates {{ vars.* }} into the caption", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [automationWithUpdateStep()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_media",
+        position: 0,
+        parent_step_id: null,
+        step_config: {
+          media_type: "image",
+          media_url: "https://x.supabase.co/storage/v1/object/public/flow-media/account-acct-1/img.png",
+          caption: "Order {{ vars.order_id }} ready",
+        },
+      },
+    ];
+
+    await runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId: "c1",
+      context: { conversation_id: "conv-1", vars: { order_id: "ORD-7" } },
+    });
+
+    const sendMedia = await engineSendMediaMock();
+    expect(sendMedia.mock.calls[0][0].caption).toBe("Order ORD-7 ready");
+  });
+});
