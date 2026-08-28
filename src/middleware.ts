@@ -2,6 +2,18 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
+  // Public pages - always accessible, signed in or not. This check MUST
+  // run before any Supabase call: previously `supabase.auth.getUser()`
+  // ran for every request (including the homepage) and only then was the
+  // public-path fast path taken. When Supabase auth is slow/unreachable,
+  // that awaited network call hangs past Nginx's proxy_read_timeout and
+  // every page — including the homepage — returns 504 on every device.
+  // Public pages never need auth, so they must never block on it.
+  const publicPaths = ['/', '/privacy-policy', '/terms-and-conditions']
+  if (publicPaths.includes(request.nextUrl.pathname)) {
+    return NextResponse.next({ request })
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -55,22 +67,21 @@ export async function middleware(request: NextRequest) {
   // the new cookies normally.
   let user = null
   try {
-    const { data } = await supabase.auth.getUser()
-    user = data.user
+    // Bound the auth round-trip. When Supabase auth is slow or the
+    // VPS→Supabase path is degraded, `getUser()` can hang (the Edge
+    // sandbox's fetch has no built-in timeout) and wedge the request
+    // past Nginx's proxy_read_timeout → 504 on every page. Failing fast
+    // to "not authenticated" lets protected pages redirect to /login
+    // (which loads without auth) instead of hanging the site.
+    const userOrTimeout = await Promise.race([
+      supabase.auth.getUser(),
+      new Promise<{ data: { user: null } }>((_, reject) =>
+        setTimeout(() => reject(new Error('auth lookup timed out')), 5_000)
+      ),
+    ])
+    user = userOrTimeout.data.user
   } catch {
     user = null
-  }
-
-  // Public pages - always accessible, signed in or not. These are the
-  // marketing homepage and the legal pages Google's OAuth reviewers must
-  // be able to open without logging in. They are not in `protectedPaths`
-  // below, so this is already the effective behaviour; listing them
-  // explicitly documents the contract and guards against a future change
-  // to the protected list accidentally gating them. We return the
-  // cookie-refreshed response so Supabase session rotation still works.
-  const publicPaths = ['/', '/privacy-policy', '/terms-and-conditions']
-  if (publicPaths.includes(request.nextUrl.pathname)) {
-    return supabaseResponse
   }
 
   // Auth pages - redirect to dashboard if already logged in.

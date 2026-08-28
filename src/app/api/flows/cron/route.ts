@@ -52,7 +52,16 @@ export async function GET(request: Request) {
   }
 
   try {
-    return NextResponse.json(await runFlowCron());
+    const result = await runFlowCron();
+    if (result.skipped) {
+      // Another sweep (internal timer, or a previous OS cron hit) is
+      // already running — report it rather than running overlapping work.
+      return NextResponse.json(
+        { ...result, error: 'sweep already in progress' },
+        { status: 200 }
+      );
+    }
+    return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[flows-cron] sweep failed:', message);

@@ -37,6 +37,12 @@ export async function register() {
     try {
       const { runFlowCron } = await import('@/lib/flows/cron-runner');
       const result = await runFlowCron();
+      if (result.skipped) {
+        // Another trigger (OS cron HTTP call or a previous timer tick)
+        // is already sweeping — do nothing. This is the overlap guard
+        // doing its job; keep it quiet so it doesn't spam logs.
+        return;
+      }
       if (
         result.swept > 0 ||
         result.incompleteSynced > 0 ||

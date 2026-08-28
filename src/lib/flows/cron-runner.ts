@@ -14,6 +14,28 @@ export interface FlowCronResult {
   emailsSent: number;
   emailsFailed: number;
   emailsFinalFailures: number;
+  /**
+   * True when this call was skipped because another sweep was already
+   * in flight. The cron MUST NOT pile up overlapping runs: the OS
+   * crontab and the instrumentation.ts internal timer can both fire
+   * `runFlowCron()` on the same 60s cadence, and a slow sweep (Google
+   * Sheets / Resend / Supabase network I/O) can otherwise saturate the
+   * Node event loop and make every request time out at Nginx.
+   */
+  skipped: boolean;
+}
+
+// Module-level re-entrancy guard. A sweep that is still running when
+// another trigger fires is dropped immediately rather than queued, so
+// overlapping cron runs can never accumulate and starve the event loop.
+// Production runs a single PM2 fork instance (`wacrm:0`), so a
+// process-local mutex is sufficient here; the DB-level claim flips in
+// the sweep steps themselves (run status transitions, email job status)
+// also make each sweep idempotent if two processes ever share the box.
+let sweepInFlight = false;
+
+export function isFlowCronRunning(): boolean {
+  return sweepInFlight;
 }
 
 /**
@@ -22,6 +44,32 @@ export interface FlowCronResult {
  * Node server can run it internally as well as through the cron endpoint.
  */
 export async function runFlowCron(): Promise<FlowCronResult> {
+  if (sweepInFlight) {
+    // Another sweep (OS cron, internal timer, or a retry) is still
+    // running. Never start a second overlapping sweep — skip cleanly.
+    return {
+      swept: 0,
+      sweepErrors: 0,
+      incompleteSynced: 0,
+      incompleteErrors: 0,
+      incompleteRemoved: 0,
+      incompleteRemovalErrors: 0,
+      emailsSent: 0,
+      emailsFailed: 0,
+      emailsFinalFailures: 0,
+      skipped: true,
+    };
+  }
+
+  sweepInFlight = true;
+  try {
+    return await runFlowCronUnlocked();
+  } finally {
+    sweepInFlight = false;
+  }
+}
+
+async function runFlowCronUnlocked(): Promise<FlowCronResult> {
   const admin = supabaseAdmin();
   const now = new Date();
 
@@ -113,5 +161,6 @@ export async function runFlowCron(): Promise<FlowCronResult> {
     emailsSent: email.sent,
     emailsFailed: email.failed,
     emailsFinalFailures: email.finalFailures,
+    skipped: false,
   };
 }
