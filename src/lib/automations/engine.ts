@@ -469,7 +469,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // interpolation as send_message text. media_url stays static (the
       // file was uploaded when the automation was authored) — matching
       // the Flows send_media node, which does not interpolate the URL.
-      let claimed: { stepKey: string; count: number } | null = null
+      let claimed: { stepKey: string; count: number; global: boolean } | null = null
       let sendCfg: SendMediaStepConfig = cfg
       if (rotation) {
         // rotation_key is a stable id persisted inside step_config
@@ -477,15 +477,23 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         // Legacy/hand-edited rotate configs without a key fall back to
         // the step row id, which still scopes per node within a run.
         const stepKey = cfg.rotation_key?.trim() || step.id
-        const { data: claimedIndex, error: claimErr } = await db.rpc(
-          'claim_automation_media_index',
-          {
-            p_automation_id: args.automation.id,
-            p_contact_id: args.contactId,
-            p_step_key: stepKey,
-            p_message_count: rotation.length,
-          },
-        )
+        // rotation_scope 'global' shares ONE counter across all contacts
+        // of the automation (consecutive contacts get different messages);
+        // the default 'contact' scope gives every contact its own sequence
+        // starting at Message 1. Absent scope on legacy rows = 'contact'.
+        const globalScope = cfg.rotation_scope === 'global'
+        const { data: claimedIndex, error: claimErr } = globalScope
+          ? await db.rpc('claim_automation_media_index_global', {
+              p_automation_id: args.automation.id,
+              p_step_key: stepKey,
+              p_message_count: rotation.length,
+            })
+          : await db.rpc('claim_automation_media_index', {
+              p_automation_id: args.automation.id,
+              p_contact_id: args.contactId,
+              p_step_key: stepKey,
+              p_message_count: rotation.length,
+            })
         if (claimErr) {
           throw new Error(`send_media rotation claim failed: ${claimErr.message}`)
         }
@@ -497,7 +505,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         if (!message?.media_url?.trim()) {
           throw new Error(`send_media rotation message ${idx + 1} needs media_url`)
         }
-        claimed = { stepKey, count: rotation.length }
+        claimed = { stepKey, count: rotation.length, global: globalScope }
         sendCfg = {
           ...cfg,
           media_type: message.media_type,
@@ -525,12 +533,18 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         // skipped. Best-effort — a release failure must not mask the
         // original send error.
         if (claimed) {
-          const { error: releaseErr } = await db.rpc('release_automation_media_index', {
-            p_automation_id: args.automation.id,
-            p_contact_id: args.contactId,
-            p_step_key: claimed.stepKey,
-            p_message_count: claimed.count,
-          })
+          const { error: releaseErr } = claimed.global
+            ? await db.rpc('release_automation_media_index_global', {
+                p_automation_id: args.automation.id,
+                p_step_key: claimed.stepKey,
+                p_message_count: claimed.count,
+              })
+            : await db.rpc('release_automation_media_index', {
+                p_automation_id: args.automation.id,
+                p_contact_id: args.contactId,
+                p_step_key: claimed.stepKey,
+                p_message_count: claimed.count,
+              })
           if (releaseErr) {
             console.error('[automations] send_media rotation release failed:', releaseErr)
           }

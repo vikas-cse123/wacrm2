@@ -490,6 +490,14 @@ export interface SendTemplateStepConfig {
 export type SendMediaSelectionMode = 'fixed' | 'rotate';
 
 /**
+ * Who the rotation counter belongs to. 'contact' (default, legacy) gives
+ * every contact its own sequence starting at Message 1; 'global' shares
+ * one counter across all contacts of the automation, so consecutive
+ * contacts receive different messages (A→1, B→2, C→3, wrapping).
+ */
+export type SendMediaRotationScope = 'contact' | 'global';
+
+/**
  * One entry in a `send_media` rotation list. Carries the same fields as the
  * single-message config so every rotated message keeps the full Send Media
  * capability (media type, file, caption, document filename).
@@ -533,6 +541,9 @@ export interface SendMediaStepConfig {
   messages?: SendMediaRotationMessage[];
   /** Stable node identity for rotation scoping (survives step re-inserts). */
   rotation_key?: string;
+  /** Who the rotation counter belongs to. Absent/'contact' = per contact
+   *  (legacy behaviour); 'global' = one shared counter across contacts. */
+  rotation_scope?: SendMediaRotationScope;
 }
 
 export interface TagStepConfig {
