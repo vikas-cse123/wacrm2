@@ -56,6 +56,69 @@ describe("validateStepsForActivation", () => {
     ]);
   });
 
+  it("accepts a fully-configured rotate send_media step", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          selection_mode: "rotate",
+          rotation_key: "rk-1",
+          messages: [
+            { media_type: "image", media_url: "https://x.example/a.png" },
+            { media_type: "document", media_url: "https://x.example/b.pdf", caption: "B" },
+          ],
+        },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it("flags rotate send_media with fewer than 2 messages", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          selection_mode: "rotate",
+          messages: [{ media_type: "image", media_url: "https://x.example/a.png" }],
+        },
+      },
+      { step_type: "send_media", step_config: { selection_mode: "rotate", messages: [] } },
+    ]);
+    expect(issues.map((i) => i.path)).toEqual([
+      "steps[0].messages",
+      "steps[1].messages",
+    ]);
+  });
+
+  it("flags a rotate entry missing its media file or type", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          selection_mode: "rotate",
+          messages: [
+            { media_type: "image", media_url: "https://x.example/a.png" },
+            { media_type: "", media_url: "" },
+          ],
+        },
+      },
+    ]);
+    expect(issues.map((i) => i.path)).toEqual([
+      "steps[0].messages[1].media_type",
+      "steps[0].messages[1].media_url",
+    ]);
+  });
+
+  it("treats a legacy send_media without selection_mode as fixed (backward compatible)", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: { media_type: "image", media_url: "https://x.example/a.png" },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
   it("flags every required field that is missing", () => {
     const issues = validateStepsForActivation([
       { step_type: "send_message", step_config: { text: "  " } },

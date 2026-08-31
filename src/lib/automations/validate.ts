@@ -63,7 +63,34 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         issues.push({ path: `${path}.template_name`, message: 'template name is required' })
       }
       break
-    case 'send_media':
+    case 'send_media': {
+      // Rotation mode carries its own ordered message list; every entry
+      // must pass the same media checks as a fixed message. Absent
+      // selection_mode (all legacy configs) is fixed — no migration.
+      if (c.selection_mode === 'rotate' || Array.isArray(c.messages)) {
+        const msgs = Array.isArray(c.messages) ? c.messages : []
+        if (msgs.length < 2) {
+          issues.push({
+            path: `${path}.messages`,
+            message: 'rotate messages needs at least 2 messages',
+          })
+        }
+        msgs.forEach((m, i) => {
+          if (!['image', 'video', 'document'].includes(String(m?.media_type))) {
+            issues.push({
+              path: `${path}.messages[${i}].media_type`,
+              message: `message ${i + 1}: media type must be image, video, or document`,
+            })
+          }
+          if (!nonEmpty(m?.media_url)) {
+            issues.push({
+              path: `${path}.messages[${i}].media_url`,
+              message: `message ${i + 1}: media file is required`,
+            })
+          }
+        })
+        break
+      }
       if (!['image', 'video', 'document'].includes(String(c.media_type))) {
         issues.push({
           path: `${path}.media_type`,
@@ -74,6 +101,7 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         issues.push({ path: `${path}.media_url`, message: 'media file is required' })
       }
       break
+    }
     case 'add_tag':
     case 'remove_tag':
       if (!nonEmpty(c.tag_id)) {
