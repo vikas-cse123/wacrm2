@@ -15,12 +15,18 @@ import {
   Tag as TagIcon,
   DollarSign,
   StickyNote,
+  Workflow,
   Plus,
   X,
   Loader2,
   ChevronDown,
   ExternalLink,
 } from "lucide-react";
+import {
+  contactFlowRunsQuery,
+  pickContactFlow,
+  type ContactFlowRun,
+} from "@/lib/inbox/contact-flow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,6 +61,7 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
+  const [flowName, setFlowName] = useState<string | null>(null);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [newNote, setNewNote] = useState("");
@@ -72,8 +79,8 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
 
     const supabase = createClient();
 
-    // Fetch deals, notes, and tags in parallel
-    const [dealsRes, notesRes, tagsRes] = await Promise.all([
+    // Fetch deals, notes, tags, and the contact's flow in parallel
+    const [dealsRes, notesRes, tagsRes, flowRes] = await Promise.all([
       supabase
         .from("deals")
         .select("*, stage:pipeline_stages(*)")
@@ -88,6 +95,7 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
         .from("contact_tags")
         .select("id, tag_id, tags(*)")
         .eq("contact_id", contact.id),
+      contactFlowRunsQuery(supabase, accountId, contact.id),
     ]);
 
     if (dealsRes.data) setDeals(dealsRes.data);
@@ -101,7 +109,13 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
         }));
       setTags(mapped);
     }
-  }, [contact]);
+    // Flow name for the selected contact (null → "No flow" empty state).
+    // Cast via unknown: the untyped supabase client infers the embedded
+    // `flow` relation as an array.
+    setFlowName(
+      pickContactFlow((flowRes.data ?? []) as unknown as ContactFlowRun[]),
+    );
+  }, [contact, accountId]);
 
   // Load on contact change. setContactData/setTags run inside async
   // Supabase callbacks, not synchronously in the effect body.
@@ -601,6 +615,27 @@ export function ContactSidebar({ contact, onTagsChanged,className }: ContactSide
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="my-4 border-t border-border" />
+
+          {/* Flow — the flow associated with this contact, resolved from
+              its flow_runs (active run first, else most recent run). */}
+          <div>
+            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <Workflow className="h-3 w-3" />
+              Flow
+            </div>
+            <div className="mt-2">
+              {flowName ? (
+                <p className="break-words px-1 text-sm font-medium text-foreground" title={flowName}>
+                  {flowName}
+                </p>
+              ) : (
+                <p className="px-1 text-xs text-muted-foreground">No flow</p>
+              )}
             </div>
           </div>
         </div>
