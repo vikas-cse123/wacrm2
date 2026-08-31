@@ -472,12 +472,38 @@ export interface SendTemplateStepConfig {
   variables?: Record<string, string>;
 }
 
+/** How a `send_media` step picks which media message to send. */
+export type SendMediaSelectionMode = 'fixed' | 'rotate';
+
+/**
+ * One entry in a `send_media` rotation list. Carries the same fields as the
+ * single-message config so every rotated message keeps the full Send Media
+ * capability (media type, file, caption, document filename).
+ */
+export interface SendMediaRotationMessage {
+  media_type: 'image' | 'video' | 'document';
+  /** Public URL Meta will fetch. Uploaded via the builder's file picker. */
+  media_url: string;
+  /** Optional caption shown under the media (Meta caps at 1024 chars). */
+  caption?: string;
+  /** Filename shown in the recipient's chat. Documents only. */
+  filename?: string;
+}
+
 /**
  * Sends a single image / video / document via WhatsApp, then auto-advances.
  * Mirrors the Flows `send_media` node (SendMediaNodeConfig): the file is
  * uploaded to the account-scoped `flow-media` Storage bucket by the builder,
  * and `media_url` is the public URL Meta fetches at send time. Caption and
  * document filename match the Flow node's fields.
+ *
+ * Rotation (`selection_mode: 'rotate'`): the step carries an ordered
+ * `messages` list and sends them one per execution, per contact
+ * (execution N for a contact sends messages[N % messages.length]). The
+ * per-contact index lives in `automation_media_rotation`, keyed by
+ * `rotation_key` — a stable id persisted here because step rows are
+ * re-inserted with fresh UUIDs on every save. Legacy configs have no
+ * `selection_mode`, which the engine treats as 'fixed'.
  */
 export interface SendMediaStepConfig {
   media_type: 'image' | 'video' | 'document';
@@ -487,6 +513,12 @@ export interface SendMediaStepConfig {
   caption?: string;
   /** Filename shown in the recipient's chat. Documents only. */
   filename?: string;
+  /** Message selection strategy. Absent = 'fixed' (legacy rows). */
+  selection_mode?: SendMediaSelectionMode;
+  /** Ordered rotation list. Only read when selection_mode is 'rotate'. */
+  messages?: SendMediaRotationMessage[];
+  /** Stable node identity for rotation scoping (survives step re-inserts). */
+  rotation_key?: string;
 }
 
 export interface TagStepConfig {

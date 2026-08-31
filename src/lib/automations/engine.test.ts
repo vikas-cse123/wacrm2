@@ -13,6 +13,11 @@ const h = vi.hoisted(() => ({
     upsertCalls: [] as { table: string; payload: unknown }[],
     pendingInserts: [] as { context?: unknown }[],
     contactTagCount: 1 as number | null,
+    // Simulated automation_media_rotation counters, keyed
+    // `${automation_id}:${contact_id}:${step_key}` — mirrors the claim /
+    // release RPC behaviour the real DB provides.
+    mediaRotation: new Map<string, number>(),
+    mediaRotationReleases: 0,
   },
 }));
 
@@ -99,7 +104,25 @@ vi.mock("./admin-client", () => {
         state.fromCalls.push(t);
         return builder(t);
       },
-      rpc: () => Promise.resolve({ error: null }),
+      rpc: (fn: string, args?: Record<string, unknown>) => {
+        if (fn === "claim_automation_media_index") {
+          const key = `${args?.p_automation_id}:${args?.p_contact_id}:${args?.p_step_key}`;
+          const count = Math.max(Number(args?.p_message_count) || 1, 1);
+          const current = state.mediaRotation.get(key) ?? 0;
+          const claimed = ((current % count) + count) % count;
+          state.mediaRotation.set(key, (current + 1) % count);
+          return Promise.resolve({ data: claimed, error: null });
+        }
+        if (fn === "release_automation_media_index") {
+          const key = `${args?.p_automation_id}:${args?.p_contact_id}:${args?.p_step_key}`;
+          const count = Math.max(Number(args?.p_message_count) || 1, 1);
+          const current = state.mediaRotation.get(key) ?? 0;
+          state.mediaRotation.set(key, (((current - 1) % count) + count) % count);
+          state.mediaRotationReleases += 1;
+          return Promise.resolve({ error: null });
+        }
+        return Promise.resolve({ error: null });
+      },
     }),
   };
 });
@@ -125,6 +148,8 @@ beforeEach(() => {
   h.state.fromCalls = [];
   h.state.updateCalls = [];
   h.state.upsertCalls = [];
+  h.state.mediaRotation = new Map();
+  h.state.mediaRotationReleases = 0;
 });
 
 describe("runAutomationsForTrigger — tenant isolation", () => {
@@ -347,6 +372,172 @@ describe("send_media", () => {
 
     const sendMedia = await engineSendMediaMock();
     expect(sendMedia.mock.calls[0][0].caption).toBe("Order ORD-7 ready");
+  });
+});
+
+describe("send_media rotation", () => {
+  const engineSendMediaMock = async () =>
+    import("../flows/meta-send").then((m) =>
+      (m as unknown as { engineSendMedia: ReturnType<typeof vi.fn> }).engineSendMedia,
+    );
+
+  function rotateAutomation() {
+    return {
+      id: "a1",
+      account_id: ACCOUNT,
+      user_id: "u1",
+      trigger_type: "new_message_received",
+      trigger_config: {},
+      is_active: true,
+    };
+  }
+
+  function rotateStep(rotationKey = "rk-1") {
+    return {
+      id: "s1",
+      automation_id: "a1",
+      step_type: "send_media",
+      position: 0,
+      parent_step_id: null,
+      step_config: {
+        media_type: "image",
+        media_url: "",
+        selection_mode: "rotate",
+        rotation_key: rotationKey,
+        messages: [
+          {
+            media_type: "image",
+            media_url: "https://x.example/flow-media/a.png",
+            caption: "Message A",
+          },
+          {
+            media_type: "document",
+            media_url: "https://x.example/flow-media/b.pdf",
+            caption: "Message B",
+            filename: "b.pdf",
+          },
+        ],
+      },
+    };
+  }
+
+  const trigger = (contactId: string) =>
+    runAutomationsForTrigger({
+      accountId: ACCOUNT,
+      triggerType: "new_message_received",
+      contactId,
+      context: { conversation_id: "conv-1" },
+    });
+
+  it("rotates messages sequentially for the same contact (A, B, A)", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep()];
+
+    await trigger("c1");
+    await trigger("c1");
+    await trigger("c1");
+
+    const sendMedia = await engineSendMediaMock();
+    expect(sendMedia).toHaveBeenCalledTimes(3);
+    expect(sendMedia.mock.calls[0][0]).toMatchObject({
+      contactId: "c1",
+      link: "https://x.example/flow-media/a.png",
+      caption: "Message A",
+    });
+    expect(sendMedia.mock.calls[1][0]).toMatchObject({
+      contactId: "c1",
+      link: "https://x.example/flow-media/b.pdf",
+      caption: "Message B",
+      filename: "b.pdf",
+    });
+    expect(sendMedia.mock.calls[2][0].link).toBe("https://x.example/flow-media/a.png");
+  });
+
+  it("keeps rotation independent per contact (contact 2 starts at message 1)", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep()];
+
+    await trigger("c1");
+    await trigger("c2");
+
+    const sendMedia = await engineSendMediaMock();
+    expect(sendMedia.mock.calls[0][0].contactId).toBe("c1");
+    expect(sendMedia.mock.calls[0][0].link).toBe("https://x.example/flow-media/a.png");
+    expect(sendMedia.mock.calls[1][0].contactId).toBe("c2");
+    // NOT B — each contact's rotation starts from its own counter.
+    expect(sendMedia.mock.calls[1][0].link).toBe("https://x.example/flow-media/a.png");
+  });
+
+  it("rolls the counter back after a failed send (failed message is retried)", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep()];
+
+    const sendMedia = await engineSendMediaMock();
+    sendMedia.mockImplementationOnce(async () => {
+      throw new Error("Meta 500");
+    });
+
+    await trigger("c1"); // fails — index must stay on message 1
+    await trigger("c1"); // must retry message 1, not skip to message 2
+
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(sendMedia.mock.calls[0][0].link).toBe("https://x.example/flow-media/a.png");
+    expect(sendMedia.mock.calls[1][0].link).toBe("https://x.example/flow-media/a.png");
+    expect(h.state.mediaRotationReleases).toBe(1);
+  });
+
+  it("keeps two rotate nodes independent via distinct rotation keys", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep("node-a"), { ...rotateStep("node-b"), id: "s2", position: 1 }];
+
+    await trigger("c1");
+    await trigger("c1");
+
+    const sendMedia = await engineSendMediaMock();
+    // Both nodes claim from their own counter: each run sends A from
+    // node-a AND A from node-b (0-indexed claims per key).
+    expect(sendMedia.mock.calls.map((c) => c[0].link)).toEqual([
+      "https://x.example/flow-media/a.png",
+      "https://x.example/flow-media/a.png",
+      "https://x.example/flow-media/b.pdf",
+      "https://x.example/flow-media/b.pdf",
+    ]);
+  });
+
+  it("fixed mode never touches rotation state", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [
+      {
+        id: "s1",
+        automation_id: "a1",
+        step_type: "send_media",
+        position: 0,
+        parent_step_id: null,
+        step_config: {
+          media_type: "image",
+          media_url: "https://x.example/flow-media/a.png",
+          caption: "Message A",
+        },
+      },
+    ];
+
+    await trigger("c1");
+    await trigger("c1");
+    await trigger("c1");
+
+    const sendMedia = await engineSendMediaMock();
+    expect(sendMedia).toHaveBeenCalledTimes(3);
+    for (const call of sendMedia.mock.calls) {
+      expect(call[0].link).toBe("https://x.example/flow-media/a.png");
+    }
+    // No claim / release RPC traffic for fixed mode.
+    expect(h.state.mediaRotation.size).toBe(0);
+    expect(h.state.mediaRotationReleases).toBe(0);
   });
 });
 

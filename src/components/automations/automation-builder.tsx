@@ -54,6 +54,8 @@ import type {
   CustomField,
   KeywordMatchTriggerConfig,
   MessageTemplate,
+  SendMediaRotationMessage,
+  SendMediaSelectionMode,
   Tag as TagRecord,
 } from "@/types"
 import { createClient } from "@/lib/supabase/client"
@@ -612,6 +614,193 @@ const AUTOMATION_MEDIA_ACCEPT: Record<string, string> = {
 }
 
 function SendMediaFields({
+  mode,
+  groupName,
+  mediaType,
+  mediaUrl,
+  caption,
+  filename,
+  messages,
+  onChange,
+}: {
+  mode: SendMediaSelectionMode
+  /** Unique per step instance so radio groups don't collide when two
+   *  Send Media steps are expanded at once. */
+  groupName: string
+  mediaType: string
+  mediaUrl: string
+  caption: string
+  filename: string
+  messages: SendMediaRotationMessage[]
+  onChange: (patch: Record<string, unknown>) => void
+}) {
+  // Toggling rotation on seeds the list with the existing fixed config
+  // (so nothing already uploaded/captured is lost) plus one blank entry;
+  // toggling back off keeps the list around so an accidental click never
+  // destroys authored messages. The engine ignores `messages` unless
+  // selection_mode is 'rotate', so a saved list next to fixed mode is inert.
+  const setMode = (next: SendMediaSelectionMode) => {
+    if (next === mode) return
+    if (next === "rotate") {
+      const seeded: SendMediaRotationMessage[] =
+        messages.length >= 2
+          ? messages
+          : [
+              {
+                media_type: (mediaType as SendMediaRotationMessage["media_type"]) || "image",
+                media_url: mediaUrl,
+                caption,
+                filename,
+              },
+              {
+                media_type: (mediaType as SendMediaRotationMessage["media_type"]) || "image",
+                media_url: "",
+                caption: "",
+                filename: "",
+              },
+            ]
+      onChange({
+        selection_mode: "rotate",
+        rotation_key: cid(),
+        messages: seeded,
+      })
+    } else {
+      onChange({ selection_mode: "fixed" })
+    }
+  }
+
+  const setMessage = (index: number, patch: Record<string, unknown>) => {
+    const next = messages.map((m, i) => (i === index ? { ...m, ...patch } : m))
+    onChange({ messages: next })
+  }
+
+  const addMessage = () => {
+    const last = messages[messages.length - 1]
+    onChange({
+      messages: [
+        ...messages,
+        {
+          media_type: last?.media_type ?? "image",
+          media_url: "",
+          caption: "",
+          filename: "",
+        },
+      ],
+    })
+  }
+
+  const removeMessage = (index: number) => {
+    onChange({ messages: messages.filter((_, i) => i !== index) })
+  }
+
+  const moveMessage = (index: number, direction: -1 | 1) => {
+    const j = index + direction
+    if (j < 0 || j >= messages.length) return
+    const copy = [...messages]
+    ;[copy[index], copy[j]] = [copy[j], copy[index]]
+    onChange({ messages: copy })
+  }
+
+  return (
+    <>
+      <FieldBlock label="Message selection">
+        <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-muted px-3 py-2">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
+            <input
+              type="radio"
+              name={groupName}
+              checked={mode === "fixed"}
+              onChange={() => setMode("fixed")}
+              className="accent-[var(--primary)]"
+            />
+            Fixed Message
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
+            <input
+              type="radio"
+              name={groupName}
+              checked={mode === "rotate"}
+              onChange={() => setMode("rotate")}
+              className="accent-[var(--primary)]"
+            />
+            Rotate Messages
+          </label>
+        </div>
+      </FieldBlock>
+
+      {mode === "rotate" ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Each contact receives the messages in order, one per automation run, then the cycle
+            repeats. The rotation restarts from Message 1 for every new contact.
+          </p>
+          {messages.map((m, i) => (
+            <div key={i} className="rounded-md border border-border bg-card/50 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-semibold text-foreground">Message {i + 1}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => moveMessage(i, -1)}
+                    disabled={i === 0}
+                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label={`Move message ${i + 1} up`}
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveMessage(i, 1)}
+                    disabled={i === messages.length - 1}
+                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label={`Move message ${i + 1} down`}
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeMessage(i)}
+                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label={`Remove message ${i + 1}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <SendMediaMessageFields
+                mediaType={m.media_type ?? "image"}
+                mediaUrl={m.media_url ?? ""}
+                caption={m.caption ?? ""}
+                filename={m.filename ?? ""}
+                onChange={(patch) => setMessage(i, patch)}
+              />
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addMessage}
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:bg-muted hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Message
+          </button>
+        </>
+      ) : (
+        <SendMediaMessageFields
+          mediaType={mediaType}
+          mediaUrl={mediaUrl}
+          caption={caption}
+          filename={filename}
+          onChange={onChange}
+        />
+      )}
+    </>
+  )
+}
+
+// The single-message editor shared by fixed mode and every rotation
+// entry — same fields, same validation, same upload path.
+function SendMediaMessageFields({
   mediaType,
   mediaUrl,
   caption,
@@ -1362,10 +1551,13 @@ function StepEditor({
     case "send_media":
       return (
         <SendMediaFields
+          mode={(cfg.selection_mode as SendMediaSelectionMode) ?? "fixed"}
+          groupName={step.cid}
           mediaType={(cfg.media_type as string) ?? "image"}
           mediaUrl={(cfg.media_url as string) ?? ""}
           caption={(cfg.caption as string) ?? ""}
           filename={(cfg.filename as string) ?? ""}
+          messages={(cfg.messages as SendMediaRotationMessage[]) ?? []}
           onChange={(patch) => set(patch)}
         />
       )
@@ -1565,6 +1757,12 @@ function previewFor(step: BuilderStep): string {
     case "send_template":
       return (step.step_config.template_name as string) || "pick a template"
     case "send_media": {
+      if (step.step_config.selection_mode === "rotate") {
+        const n = Array.isArray(step.step_config.messages)
+          ? (step.step_config.messages as SendMediaRotationMessage[]).length
+          : 0
+        return `rotate ${n} message${n === 1 ? "" : "s"}`
+      }
       const mt = step.step_config.media_type as string
       const name =
         (step.step_config.filename as string) ||

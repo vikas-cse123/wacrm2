@@ -5,6 +5,7 @@ import type {
   AutomationTriggerType,
   ConditionStepConfig,
   KeywordMatchTriggerConfig,
+  SendMediaRotationMessage,
   SendMediaStepConfig,
   SendMessageStepConfig,
   SendTemplateStepConfig,
@@ -450,23 +451,92 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'send_media': {
       const cfg = step.step_config as SendMediaStepConfig
       if (!args.contactId) throw new Error('send_media needs a contact')
-      if (!cfg.media_url?.trim()) throw new Error('send_media needs media_url')
+      // Rotation: when the step is configured with selection_mode
+      // 'rotate', claim the next index for THIS contact + node first.
+      // The claim RPC is atomic (row-locked upsert), so concurrent runs
+      // for the same contact can't grab the same index. The claimed
+      // message's fields are overlaid onto the step config so the send
+      // below is byte-for-byte the fixed-mode path.
+      const rotation = rotationMessages(cfg)
+      if (!rotation && !cfg.media_url?.trim()) {
+        // Fixed mode keeps the original guard, in the original position,
+        // before the conversation lookup. Rotate mode validates the
+        // chosen entry below instead.
+        throw new Error('send_media needs media_url')
+      }
       const conversationId = await resolveConversationId(args)
       // Caption supports the same {{ vars.* }} / {{ message.text }}
       // interpolation as send_message text. media_url stays static (the
       // file was uploaded when the automation was authored) — matching
       // the Flows send_media node, which does not interpolate the URL.
-      const { whatsapp_message_id } = await engineSendMedia({
-        accountId: args.automation.account_id,
-        userId: args.automation.user_id,
-        conversationId,
-        contactId: args.contactId,
-        kind: cfg.media_type,
-        link: cfg.media_url,
-        caption: cfg.caption ? interpolate(cfg.caption, args) : undefined,
-        filename: cfg.filename,
-      })
-      return `media sent via Meta (${whatsapp_message_id})`
+      let claimed: { stepKey: string; count: number } | null = null
+      let sendCfg: SendMediaStepConfig = cfg
+      if (rotation) {
+        // rotation_key is a stable id persisted inside step_config
+        // (step row UUIDs change on every save — see steps-tree.ts).
+        // Legacy/hand-edited rotate configs without a key fall back to
+        // the step row id, which still scopes per node within a run.
+        const stepKey = cfg.rotation_key?.trim() || step.id
+        const { data: claimedIndex, error: claimErr } = await db.rpc(
+          'claim_automation_media_index',
+          {
+            p_automation_id: args.automation.id,
+            p_contact_id: args.contactId,
+            p_step_key: stepKey,
+            p_message_count: rotation.length,
+          },
+        )
+        if (claimErr) {
+          throw new Error(`send_media rotation claim failed: ${claimErr.message}`)
+        }
+        const idx = Number(claimedIndex)
+        if (!Number.isInteger(idx)) {
+          throw new Error('send_media rotation claim returned no index')
+        }
+        const message = rotation[((idx % rotation.length) + rotation.length) % rotation.length]
+        if (!message?.media_url?.trim()) {
+          throw new Error(`send_media rotation message ${idx + 1} needs media_url`)
+        }
+        claimed = { stepKey, count: rotation.length }
+        sendCfg = {
+          ...cfg,
+          media_type: message.media_type,
+          media_url: message.media_url,
+          caption: message.caption,
+          filename: message.filename,
+        }
+      }
+
+      try {
+        const { whatsapp_message_id } = await engineSendMedia({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          kind: sendCfg.media_type,
+          link: sendCfg.media_url,
+          caption: sendCfg.caption ? interpolate(sendCfg.caption, args) : undefined,
+          filename: sendCfg.filename,
+        })
+        return `media sent via Meta (${whatsapp_message_id})`
+      } catch (err) {
+        // Failed send: roll the rotation counter back so the SAME
+        // message is retried on the next execution instead of being
+        // skipped. Best-effort — a release failure must not mask the
+        // original send error.
+        if (claimed) {
+          const { error: releaseErr } = await db.rpc('release_automation_media_index', {
+            p_automation_id: args.automation.id,
+            p_contact_id: args.contactId,
+            p_step_key: claimed.stepKey,
+            p_message_count: claimed.count,
+          })
+          if (releaseErr) {
+            console.error('[automations] send_media rotation release failed:', releaseErr)
+          }
+        }
+        throw err
+      }
     }
 
     case 'add_tag': {
@@ -737,6 +807,18 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
 function waitMs(cfg: WaitStepConfig): number {
   const unitMs = cfg.unit === 'days' ? 86_400_000 : cfg.unit === 'hours' ? 3_600_000 : 60_000
   return Math.max(1_000, cfg.amount * unitMs)
+}
+
+/**
+ * The ordered rotation list for a `send_media` step, or null when the
+ * step is fixed-mode. A missing/absent selection_mode (every legacy
+ * config) is fixed — backward compatibility without migration.
+ */
+function rotationMessages(cfg: SendMediaStepConfig): SendMediaRotationMessage[] | null {
+  if (cfg.selection_mode !== 'rotate') return null
+  const msgs = cfg.messages
+  if (!Array.isArray(msgs) || msgs.length === 0) return null
+  return msgs
 }
 
 function interpolate(s: string, args: ExecuteArgs): string {
