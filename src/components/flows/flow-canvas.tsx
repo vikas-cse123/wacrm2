@@ -137,7 +137,9 @@ function FlowNodeCard({ data, selected }: NodeProps) {
   const { node, isEntry, isFlashed } = data as NodeData;
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
-  const summary = summarizeNode(node);
+  // Full-text canvas preview: no "…" cap, newlines preserved. The
+  // list view (flow-builder.tsx) keeps the short flavor.
+  const summary = summarizeNode(node, { full: true });
   const slots = outgoingSlots(node);
   // Start nodes are entry-only; nothing ever targets them, so they
   // don't need an incoming Handle. Every other node type accepts
@@ -205,7 +207,7 @@ function FlowNodeCard({ data, selected }: NodeProps) {
         {node.node_key}
       </div>
       {summary && (
-        <div className="text-muted-foreground mt-1 line-clamp-2 text-xs leading-relaxed">
+        <div className="text-muted-foreground mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed">
           {summary}
         </div>
       )}
@@ -538,9 +540,8 @@ function FlowCanvasInner() {
           nodesConnectable={true}
           edgesFocusable={true}
           elementsSelectable={true}
-          // Lower default min/max zoom than the lib's defaults; the
-          // tiles already truncate their summary at a reasonable
-          // size, so we don't need to zoom past 1.5x.
+          // Lower default min/max zoom than the lib's defaults;
+          // there's no need to zoom past 1.5x.
           minZoom={0.2}
           maxZoom={1.5}
         >

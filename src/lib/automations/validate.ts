@@ -67,7 +67,12 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       // Rotation mode carries its own ordered message list; every entry
       // must pass the same media checks as a fixed message. Absent
       // selection_mode (all legacy configs) is fixed — no migration.
-      if (c.selection_mode === 'rotate' || Array.isArray(c.messages)) {
+      // Only an explicit 'rotate' mode enters this branch: the builder
+      // keeps a stale `messages` array on the config when a user toggles
+      // back to Fixed, and the engine ignores that array in fixed mode
+      // (see rotationMessages in engine.ts) — so validating it there
+      // would block saves the engine considers valid.
+      if (c.selection_mode === 'rotate') {
         const msgs = Array.isArray(c.messages) ? c.messages : []
         if (msgs.length < 2) {
           issues.push({

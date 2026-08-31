@@ -323,8 +323,15 @@ export function slugify(s: string, fallback: string): string {
 }
 
 // ============================================================
-// Summary helpers — short, single-line content previews used in
-// collapsed node cards (list view) and node tiles (canvas view).
+// Summary helpers — content previews for node tiles. Two flavors:
+//  - summarizeNode(node): short, single-line preview used in
+//    collapsed node cards (list view). Caps each part with
+//    truncate() and collapses all whitespace including newlines.
+//  - summarizeNode(node, { full: true }): full-text preview used in
+//    canvas node tiles. No character cap; horizontal whitespace is
+//    collapsed but newlines are preserved so multi-line message
+//    bodies render as authored. Presentation-only — the underlying
+//    config values are never modified.
 // Returns null when there's nothing meaningful to show (start/end,
 // or a freshly-added node with no fields filled in).
 // ============================================================
@@ -335,29 +342,49 @@ export function truncate(s: string, max = 80): string {
   return clean.slice(0, max - 1) + '…';
 }
 
-export function summarizeNode(node: BuilderNode): string | null {
+/** No-cap variant of truncate that keeps newlines intact. */
+function fullText(s: string): string {
+  return s.replace(/[^\S\n]+/g, ' ').trim();
+}
+
+export function summarizeNode(
+  node: BuilderNode,
+  opts?: { full?: boolean },
+): string | null {
   const cfg = node.config;
+  // Shared text-picker so both flavors stay in sync: `full` swaps the
+  // character-capped slice for the newline-preserving full text, and
+  // every case below stays identical for either flavor.
+  const t: (s: string, max?: number) => string = opts?.full
+    ? (s) => fullText(s)
+    : truncate;
   switch (node.node_type) {
     case 'start':
     case 'end':
       return null;
     case 'send_message': {
       const text = typeof cfg.text === 'string' ? cfg.text : '';
-      return text.length > 0 ? truncate(text) : null;
+      return text.length > 0 ? t(text) : null;
     }
     case 'send_buttons': {
       const text = typeof cfg.text === 'string' ? cfg.text : '';
       const buttons = Array.isArray(cfg.buttons)
         ? (cfg.buttons as Array<Record<string, unknown>>)
         : [];
+      // Canvas tiles render every button label in the slot list below
+      // the body (see outgoingSlots), so the full-text preview shows
+      // ONLY the body — appending the titles here would duplicate them.
+      if (opts?.full) {
+        return text.length > 0 ? t(text) : null;
+      }
       const titles = buttons
         .map((b) => (typeof b.title === 'string' ? b.title : ''))
         .filter(Boolean)
         .join(' / ');
       if (text.length > 0) {
         return titles
-          ? `${truncate(text, 40)} · ${truncate(titles, 35)}`
-          : truncate(text);
+          ? `${t(text, 40)} · ${t(titles, 35)}`
+          : t(text);
       }
       return titles || null;
     }
@@ -372,8 +399,8 @@ export function summarizeNode(node: BuilderNode): string | null {
       }, 0);
       if (text.length > 0) {
         return rowCount > 0
-          ? `${truncate(text, 50)} · ${rowCount} option${rowCount === 1 ? '' : 's'}`
-          : truncate(text);
+          ? `${t(text, 50)} · ${rowCount} option${rowCount === 1 ? '' : 's'}`
+          : t(text);
       }
       return rowCount > 0
         ? `${rowCount} option${rowCount === 1 ? '' : 's'} across ${sections.length} section${sections.length === 1 ? '' : 's'}`
@@ -391,16 +418,16 @@ export function summarizeNode(node: BuilderNode): string | null {
       if (!url) return `${label} (no file uploaded)`;
       const name = filename || url.split('/').pop() || 'file';
       return caption
-        ? `${label}: ${truncate(name, 30)} · ${truncate(caption, 40)}`
-        : `${label}: ${truncate(name, 60)}`;
+        ? `${label}: ${t(name, 30)} · ${t(caption, 40)}`
+        : `${label}: ${t(name, 60)}`;
     }
     case 'send_cta_url': {
       const text = typeof cfg.text === 'string' ? cfg.text : '';
       const btn = typeof cfg.button_text === 'string' ? cfg.button_text : '';
       const link = typeof cfg.button_url === 'string' ? cfg.button_url : '';
-      const btnLabel = btn ? `[${truncate(btn, 24)}]` : link ? '[link]' : '';
+      const btnLabel = btn ? `[${t(btn, 24)}]` : link ? '[link]' : '';
       if (text.length > 0) {
-        return btnLabel ? `${truncate(text, 45)} · ${btnLabel}` : truncate(text);
+        return btnLabel ? `${t(text, 45)} · ${btnLabel}` : t(text);
       }
       return btnLabel || null;
     }
@@ -409,8 +436,8 @@ export function summarizeNode(node: BuilderNode): string | null {
       const varKey = typeof cfg.var_key === 'string' ? cfg.var_key : '';
       if (prompt.length > 0) {
         return varKey
-          ? `${truncate(prompt, 50)} → vars.${varKey}`
-          : truncate(prompt);
+          ? `${t(prompt, 50)} → vars.${varKey}`
+          : t(prompt);
       }
       return varKey ? `→ vars.${varKey}` : null;
     }
@@ -426,7 +453,7 @@ export function summarizeNode(node: BuilderNode): string | null {
             : 'var';
       const subjectStr =
         subject === 'tag'
-          ? `has tag ${truncate(subjectKey, 24)}`
+          ? `has tag ${t(subjectKey, 24)}`
           : `${subject}.${subjectKey}`;
       const op =
         cfg.operator === 'equals'
@@ -441,7 +468,7 @@ export function summarizeNode(node: BuilderNode): string | null {
       const value = typeof cfg.value === 'string' ? cfg.value : '';
       const valStr =
         (cfg.operator === 'equals' || cfg.operator === 'contains') && value
-          ? ` "${truncate(value, 20)}"`
+          ? ` "${t(value, 20)}"`
           : '';
       return subject === 'tag' ? subjectStr : `${subjectStr} ${op}${valStr}`;
     }
@@ -457,7 +484,7 @@ export function summarizeNode(node: BuilderNode): string | null {
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';
-      return note.length > 0 ? truncate(note) : null;
+      return note.length > 0 ? t(note) : null;
     }
     case 'google_sheets_sync':
       return 'Appends answers to the linked Google Sheet';
@@ -470,7 +497,7 @@ export function summarizeNode(node: BuilderNode): string | null {
         cfg.recipient_mode === 'custom' && customEmail ? customEmail : 'my email';
       const subject = typeof cfg.subject === 'string' ? cfg.subject : '';
       if (!subject && cfg.recipient_mode !== 'custom') return null;
-      return subject ? `${recipient} · ${truncate(subject, 50)}` : recipient;
+      return subject ? `${recipient} · ${t(subject, 50)}` : recipient;
     }
   }
 }

@@ -119,6 +119,54 @@ describe("validateStepsForActivation", () => {
     expect(issues).toEqual([]);
   });
 
+  it("accepts explicit fixed mode with no messages array", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          selection_mode: "fixed",
+          media_type: "image",
+          media_url: "https://x.example/a.png",
+        },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it("accepts fixed mode with a stale 1-message array (builder keeps it on toggle back)", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          selection_mode: "fixed",
+          media_type: "image",
+          media_url: "https://x.example/a.png",
+          messages: [{ media_type: "image", media_url: "" }],
+        },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
+  it("accepts fixed mode with a stale multi-message array", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "send_media",
+        step_config: {
+          selection_mode: "fixed",
+          media_type: "image",
+          media_url: "https://x.example/a.png",
+          messages: [
+            { media_type: "image", media_url: "https://x.example/a.png" },
+            { media_type: "", media_url: "" },
+            { media_type: "video", media_url: "" },
+          ],
+        },
+      },
+    ]);
+    expect(issues).toEqual([]);
+  });
+
   it("flags every required field that is missing", () => {
     const issues = validateStepsForActivation([
       { step_type: "send_message", step_config: { text: "  " } },

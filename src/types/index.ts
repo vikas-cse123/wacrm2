@@ -237,6 +237,15 @@ export interface Message {
    * cue (renders with a "↩ button reply" affordance).
    */
   interactive_reply_id?: string;
+  /**
+   * Only set on OUTGOING interactive button prompts (`sender_type ===
+   * 'bot'`, sent by the Flows Send Buttons node) — the buttons that
+   * were offered, exactly as sent to Meta (same ids, titles, order).
+   * NULL for inbound taps, interactive list prompts, and all
+   * historical rows. Display-only in the Inbox; never used for
+   * routing (that's `interactive_reply_id`).
+   */
+  interactive_buttons?: Array<{ id: string; title: string }>;
 }
 
 export type ReactionActor = 'customer' | 'agent';
