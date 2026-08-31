@@ -1,0 +1,383 @@
+
+> wacrm@0.7.0 dev
+> next dev
+
+▲ Next.js 16.2.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.11:3000
+- Environments: .env.local
+✓ Ready in 672ms
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+
+ GET / 200 in 1071ms (next.js: 385ms, proxy.ts: 80ms, application-code: 607ms)
+ GET /manifest.webmanifest 200 in 137ms (next.js: 118ms, proxy.ts: 8ms, application-code: 11ms)
+AuthApiError: Invalid Refresh Token: Refresh Token Not Found
+    at ignore-listed frames {
+  __isAuthError: true,
+  status: 400,
+  code: 'refresh_token_not_found'
+}
+AuthApiError: Invalid Refresh Token: Refresh Token Not Found
+    at ignore-listed frames {
+  __isAuthError: true,
+  status: 400,
+  code: 'refresh_token_not_found'
+}
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <HotReload globalError={[...]} webSocket={WebSocket} staticIndicatorState={{pathname:null, ...}}>
+      <AppDevOverlayErrorBoundary globalError={[...]}>
+        <ReplaySsrOnlyErrors>
+        <DevRootHTTPAccessFallbackBoundary>
+          <HTTPAccessFallbackBoundary notFound={<NotAllowedRootHTTPFallbackError>}>
+            <HTTPAccessFallbackErrorBoundary pathname="/" notFound={<NotAllowedRootHTTPFallbackError>} ...>
+              <RedirectBoundary>
+                <RedirectErrorBoundary router={{...}}>
+                  <Head>
+                  <__next_root_layout_boundary__>
+                    <SegmentViewNode type="layout" pagePath="layout.tsx">
+                      <SegmentTrieNode>
+                      <link>
+                      <script>
+                      <script>
+                      <RootLayout>
+                        <html lang="en" data-theme="cobalt" data-mode="dark" data-font="inter" className="inter_fe8b..." ...>
+                          <head>
+                            <Script id="theme-boot" strategy="beforeInte..." dangerouslySetInnerHTML={{__html:"\n..."}}>
+                              <script
+                                nonce={undefined}
+                                dangerouslySetInnerHTML={{
++                                 __html: "(self.__next_s=self.__next_s||[]).push([0,{\"children\":\"\\n(function(){\\..."
+-                                 __html: ""
+                                }}
+-                               src="chrome-extension://elfaihghhjjoknimpccccmkioofjjfkf/assets/youtube-hulu-vast-ads.js"
+                              >
+                          ...
+                  ...
+ 
+ GET /login 200 in 58ms (next.js: 29ms, proxy.ts: 5ms, application-code: 23ms)
+ GET /manifest.webmanifest 200 in 14ms (next.js: 4ms, proxy.ts: 5ms, application-code: 5ms)
+ GET /dashboard 200 in 248ms (next.js: 32ms, proxy.ts: 203ms, application-code: 14ms)
+ GET /manifest.webmanifest 200 in 16ms (next.js: 7ms, proxy.ts: 4ms, application-code: 5ms)
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+ GET /flows 200 in 238ms (next.js: 4ms, proxy.ts: 223ms, application-code: 11ms)
+ GET /flows 200 in 2.0s (next.js: 699ms, proxy.ts: 183ms, application-code: 1135ms)
+ GET /manifest.webmanifest 200 in 15ms (next.js: 7ms, proxy.ts: 4ms, application-code: 4ms)
+ GET /flows 200 in 439ms (next.js: 6ms, proxy.ts: 245ms, application-code: 188ms)
+ GET /manifest.webmanifest 200 in 13ms (next.js: 4ms, proxy.ts: 4ms, application-code: 5ms)
+ GET /api/flows/templates 200 in 701ms (next.js: 202ms, proxy.ts: 215ms, application-code: 284ms)
+ GET /api/flows 200 in 862ms (next.js: 244ms, proxy.ts: 212ms, application-code: 405ms)
+ GET /api/flows/templates 200 in 400ms (next.js: 3ms, proxy.ts: 185ms, application-code: 212ms)
+ GET /api/flows 200 in 572ms (next.js: 6ms, proxy.ts: 191ms, application-code: 375ms)
+ GET /flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 1572ms (next.js: 1347ms, proxy.ts: 200ms, application-code: 26ms)
+ GET /manifest.webmanifest 200 in 11ms (next.js: 3ms, proxy.ts: 3ms, application-code: 5ms)
+ GET /flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 234ms (next.js: 16ms, proxy.ts: 198ms, application-code: 20ms)
+ GET /manifest.webmanifest 200 in 11ms (next.js: 3ms, proxy.ts: 3ms, application-code: 5ms)
+ GET /api/flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 1583ms (next.js: 671ms, proxy.ts: 230ms, application-code: 681ms)
+ GET /api/flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 801ms (next.js: 14ms, proxy.ts: 202ms, application-code: 585ms)
+ GET /login 200 in 42ms (next.js: 6ms, proxy.ts: 2ms, application-code: 34ms)
+ GET /manifest.webmanifest 200 in 13ms (next.js: 4ms, proxy.ts: 5ms, application-code: 3ms)
+ GET /dashboard 200 in 214ms (next.js: 4ms, proxy.ts: 184ms, application-code: 25ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /inbox 200 in 266ms (next.js: 36ms, proxy.ts: 206ms, application-code: 24ms)
+ GET /inbox 200 in 222ms (next.js: 4ms, proxy.ts: 191ms, application-code: 27ms)
+ GET /manifest.webmanifest 200 in 12ms (next.js: 4ms, proxy.ts: 3ms, application-code: 5ms)
+ GET /api/account/members 200 in 1219ms (next.js: 33ms, proxy.ts: 249ms, application-code: 937ms)
+ GET /api/inbox/pins 200 in 1290ms (next.js: 25ms, proxy.ts: 196ms, application-code: 1069ms)
+ GET /api/account/members 200 in 990ms (next.js: 6ms, proxy.ts: 207ms, application-code: 777ms)
+ GET /api/inbox/pins 200 in 994ms (next.js: 6ms, proxy.ts: 190ms, application-code: 799ms)
+ GET /inbox?c=3a77fab5-8e23-46c8-8a2a-3e438ad2c887 200 in 213ms (next.js: 5ms, proxy.ts: 198ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 17ms (next.js: 6ms, proxy.ts: 5ms, application-code: 7ms)
+✓ Compiled in 143ms
+ GET /inbox?c=3a77fab5-8e23-46c8-8a2a-3e438ad2c887 200 in 456ms (next.js: 65ms, proxy.ts: 352ms, application-code: 40ms)
+ GET /manifest.webmanifest 200 in 55ms (next.js: 36ms, proxy.ts: 4ms, application-code: 14ms)
+ GET /api/account/members 200 in 999ms (next.js: 35ms, proxy.ts: 226ms, application-code: 738ms)
+ GET /api/inbox/pins 200 in 1050ms (next.js: 21ms, proxy.ts: 228ms, application-code: 801ms)
+ GET /flows 200 in 799ms (next.js: 25ms, proxy.ts: 202ms, application-code: 573ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1546µs, application-code: 4ms)
+ GET /api/flows/templates 200 in 417ms (next.js: 16ms, proxy.ts: 200ms, application-code: 201ms)
+ GET /api/flows 200 in 585ms (next.js: 15ms, proxy.ts: 180ms, application-code: 389ms)
+ GET /api/flows/templates 200 in 382ms (next.js: 2ms, proxy.ts: 186ms, application-code: 194ms)
+ GET /api/flows 200 in 585ms (next.js: 2ms, proxy.ts: 186ms, application-code: 396ms)
+ GET /flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 293ms (next.js: 82ms, proxy.ts: 189ms, application-code: 23ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1876µs, application-code: 3ms)
+ GET /api/flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 836ms (next.js: 21ms, proxy.ts: 182ms, application-code: 634ms)
+ GET /api/flows/da65c6d7-a8c2-4d31-9957-8cc2f569a0c2 200 in 778ms (next.js: 7ms, proxy.ts: 192ms, application-code: 580ms)
+ GET /dashboard 200 in 211ms (next.js: 8ms, proxy.ts: 190ms, application-code: 13ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+ GET /dashboard 200 in 391ms (next.js: 4ms, proxy.ts: 225ms, application-code: 162ms)
+ GET /manifest.webmanifest 200 in 13ms (next.js: 4ms, proxy.ts: 4ms, application-code: 6ms)
+ GET /inbox 200 in 240ms (next.js: 3ms, proxy.ts: 225ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1904µs, application-code: 3ms)
+ GET /inbox 200 in 265ms (next.js: 4ms, proxy.ts: 251ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1759µs, application-code: 3ms)
+ GET /api/inbox/pins 200 in 1038ms (next.js: 3ms, proxy.ts: 192ms, application-code: 843ms)
+ GET /api/account/members 200 in 1072ms (next.js: 2ms, proxy.ts: 248ms, application-code: 822ms)
+ GET /api/inbox/pins 200 in 978ms (next.js: 3ms, proxy.ts: 189ms, application-code: 786ms)
+ GET /api/account/members 200 in 978ms (next.js: 2ms, proxy.ts: 190ms, application-code: 785ms)
+ GET /notifications 200 in 607ms (next.js: 308ms, proxy.ts: 280ms, application-code: 19ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /inbox 200 in 235ms (next.js: 4ms, proxy.ts: 220ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 1924µs, application-code: 4ms)
+ GET /api/inbox/pins 200 in 941ms (next.js: 3ms, proxy.ts: 191ms, application-code: 747ms)
+ GET /api/account/members 200 in 1009ms (next.js: 2ms, proxy.ts: 243ms, application-code: 763ms)
+ GET /api/inbox/pins 200 in 939ms (next.js: 3ms, proxy.ts: 198ms, application-code: 738ms)
+ GET /api/account/members 200 in 933ms (next.js: 3ms, proxy.ts: 180ms, application-code: 751ms)
+ GET /notifications 200 in 243ms (next.js: 4ms, proxy.ts: 228ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /contacts 200 in 639ms (next.js: 391ms, proxy.ts: 234ms, application-code: 14ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 3ms, proxy.ts: 2ms, application-code: 3ms)
+ GET /inbox 200 in 272ms (next.js: 4ms, proxy.ts: 256ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 3ms, proxy.ts: 1732µs, application-code: 3ms)
+ GET /api/inbox/pins 200 in 999ms (next.js: 2ms, proxy.ts: 195ms, application-code: 801ms)
+ GET /api/account/members 200 in 1020ms (next.js: 2ms, proxy.ts: 234ms, application-code: 783ms)
+ GET /api/inbox/pins 200 in 999ms (next.js: 3ms, proxy.ts: 188ms, application-code: 808ms)
+ GET /api/account/members 200 in 998ms (next.js: 3ms, proxy.ts: 192ms, application-code: 803ms)
+ GET /inbox?c=67651953-2a4a-44b0-9ff7-e458ab98cfed 200 in 259ms (next.js: 4ms, proxy.ts: 242ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 1852µs, application-code: 4ms)
+ GET /api/inbox/pins 200 in 1126ms (next.js: 4ms, proxy.ts: 354ms, application-code: 769ms)
+ GET /api/account/members 200 in 1142ms (next.js: 7ms, proxy.ts: 354ms, application-code: 780ms)
+ GET /inbox?c=67651953-2a4a-44b0-9ff7-e458ab98cfed 200 in 280ms (next.js: 6ms, proxy.ts: 227ms, application-code: 48ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /api/inbox/pins 200 in 1000ms (next.js: 3ms, proxy.ts: 209ms, application-code: 788ms)
+ GET /api/account/members 200 in 1030ms (next.js: 3ms, proxy.ts: 258ms, application-code: 770ms)
+ GET /api/account/members 200 in 938ms (next.js: 3ms, proxy.ts: 188ms, application-code: 747ms)
+ GET /api/inbox/pins 200 in 987ms (next.js: 4ms, proxy.ts: 193ms, application-code: 790ms)
+✓ Compiled in 60ms
+ GET /inbox?c=67651953-2a4a-44b0-9ff7-e458ab98cfed 200 in 391ms (next.js: 57ms, proxy.ts: 312ms, application-code: 22ms)
+ GET /manifest.webmanifest 200 in 27ms (next.js: 20ms, proxy.ts: 2ms, application-code: 5ms)
+✓ Compiled in 97ms
+ GET /inbox?c=67651953-2a4a-44b0-9ff7-e458ab98cfed 200 in 362ms (next.js: 57ms, proxy.ts: 281ms, application-code: 24ms)
+ GET /manifest.webmanifest 200 in 25ms (next.js: 18ms, proxy.ts: 1979µs, application-code: 5ms)
+ GET /api/account/members 200 in 1065ms (next.js: 31ms, proxy.ts: 246ms, application-code: 787ms)
+ GET /api/inbox/pins 200 in 1133ms (next.js: 17ms, proxy.ts: 321ms, application-code: 795ms)
+ GET /api/account/members 200 in 1264ms (next.js: 3ms, proxy.ts: 400ms, application-code: 860ms)
+ GET /api/inbox/pins 200 in 1276ms (next.js: 3ms, proxy.ts: 409ms, application-code: 864ms)
+ GET /api/inbox/pins 200 in 1243ms (next.js: 3ms, proxy.ts: 452ms, application-code: 789ms)
+ GET /api/account/members 200 in 1320ms (next.js: 2ms, proxy.ts: 460ms, application-code: 858ms)
+ GET /api/inbox/pins 200 in 965ms (next.js: 4ms, proxy.ts: 195ms, application-code: 766ms)
+ GET /api/account/members 200 in 1369ms (next.js: 10ms, proxy.ts: 195ms, application-code: 1165ms)
+ GET /api/account/members 200 in 1101ms (next.js: 3ms, proxy.ts: 308ms, application-code: 790ms)
+ GET /api/inbox/pins 200 in 1103ms (next.js: 3ms, proxy.ts: 316ms, application-code: 784ms)
+ GET /api/account/members 200 in 1158ms (next.js: 3ms, proxy.ts: 357ms, application-code: 798ms)
+ GET /api/inbox/pins 200 in 1228ms (next.js: 2ms, proxy.ts: 375ms, application-code: 851ms)
+ GET /inbox?c=9ae4862e-6416-4627-810c-0724015a23db 200 in 251ms (next.js: 5ms, proxy.ts: 233ms, application-code: 13ms)
+ GET /manifest.webmanifest 200 in 12ms (next.js: 4ms, proxy.ts: 3ms, application-code: 5ms)
+ GET /api/inbox/pins 200 in 1044ms (next.js: 3ms, proxy.ts: 270ms, application-code: 771ms)
+ GET /api/account/members 200 in 1065ms (next.js: 8ms, proxy.ts: 270ms, application-code: 787ms)
+ GET /automations 200 in 544ms (next.js: 306ms, proxy.ts: 226ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 4ms, proxy.ts: 1997µs, application-code: 4ms)
+ GET /automations/new 200 in 517ms (next.js: 321ms, proxy.ts: 183ms, application-code: 13ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 1983µs, proxy.ts: 2ms, application-code: 3ms)
+ GET /api/account/members 200 in 952ms (next.js: 3ms, proxy.ts: 181ms, application-code: 769ms)
+ GET /api/account/members 200 in 982ms (next.js: 3ms, proxy.ts: 234ms, application-code: 746ms)
+ GET /automations 200 in 239ms (next.js: 4ms, proxy.ts: 225ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /inbox 200 in 248ms (next.js: 6ms, proxy.ts: 230ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1933µs, application-code: 3ms)
+ GET /api/inbox/pins 200 in 959ms (next.js: 3ms, proxy.ts: 195ms, application-code: 761ms)
+ GET /api/account/members 200 in 1016ms (next.js: 3ms, proxy.ts: 223ms, application-code: 791ms)
+ GET /api/inbox/pins 200 in 955ms (next.js: 3ms, proxy.ts: 177ms, application-code: 775ms)
+ GET /api/account/members 200 in 970ms (next.js: 3ms, proxy.ts: 192ms, application-code: 776ms)
+ GET /inbox?c=884ceadf-4c85-4f82-95e9-904574501944 200 in 249ms (next.js: 3ms, proxy.ts: 235ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /inbox?c=c585f512-92ad-4fd9-9fe0-6ce6632efcc3 200 in 256ms (next.js: 4ms, proxy.ts: 241ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /api/account/members 200 in 1099ms (next.js: 5ms, proxy.ts: 332ms, application-code: 762ms)
+ GET /api/inbox/pins 200 in 1102ms (next.js: 9ms, proxy.ts: 334ms, application-code: 758ms)
+ GET /api/inbox/pins 200 in 1001ms (next.js: 2ms, proxy.ts: 224ms, application-code: 775ms)
+ GET /api/account/members 200 in 1079ms (next.js: 3ms, proxy.ts: 307ms, application-code: 769ms)
+ GET /api/account/members 200 in 987ms (next.js: 2ms, proxy.ts: 226ms, application-code: 759ms)
+ GET /api/inbox/pins 200 in 1052ms (next.js: 3ms, proxy.ts: 249ms, application-code: 800ms)
+ GET /inbox?c=91ac0665-499c-49a6-9230-aff081b1ae31 200 in 244ms (next.js: 6ms, proxy.ts: 227ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1992µs, application-code: 3ms)
+ GET /settings 200 in 791ms (next.js: 432ms, proxy.ts: 344ms, application-code: 14ms)
+ GET /api/account/members 200 in 994ms (next.js: 3ms, proxy.ts: 197ms, application-code: 795ms)
+ GET /settings 200 in 209ms (next.js: 5ms, proxy.ts: 194ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /api/account/members 200 in 1227ms (next.js: 4ms, proxy.ts: 447ms, application-code: 776ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 3ms, proxy.ts: 1907µs, application-code: 3ms)
+ GET /api/account/invitations 200 in 1327ms (next.js: 126ms, proxy.ts: 448ms, application-code: 753ms)
+ GET /api/account/invitations 200 in 1340ms (next.js: 120ms, proxy.ts: 447ms, application-code: 774ms)
+ GET /api/whatsapp/config 200 in 1818ms (next.js: 8ms, proxy.ts: 436ms, application-code: 1375ms)
+ GET /api/whatsapp/config 200 in 1833ms (next.js: 129ms, proxy.ts: 265ms, application-code: 1439ms)
+ GET /settings?tab=whatsapp 200 in 197ms (next.js: 4ms, proxy.ts: 184ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 3ms)
+ GET /api/whatsapp/config 200 in 1402ms (next.js: 4ms, proxy.ts: 185ms, application-code: 1213ms)
+ GET /settings?tab=fields 200 in 259ms (next.js: 3ms, proxy.ts: 246ms, application-code: 9ms)
+ GET /manifest.webmanifest 200 in 12ms (next.js: 3ms, proxy.ts: 5ms, application-code: 4ms)
+ GET /settings?tab=deals 200 in 205ms (next.js: 3ms, proxy.ts: 192ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 3ms)
+ GET /settings?tab=members 200 in 197ms (next.js: 3ms, proxy.ts: 183ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 2ms, proxy.ts: 4ms, application-code: 3ms)
+ GET /api/account/invitations 200 in 1676ms (next.js: 2ms, proxy.ts: 248ms, application-code: 1426ms)
+ GET /api/account/members 200 in 1701ms (next.js: 3ms, proxy.ts: 235ms, application-code: 1463ms)
+ GET /api/account/invitations 200 in 1700ms (next.js: 7ms, proxy.ts: 230ms, application-code: 1463ms)
+ GET /api/account/members 200 in 1710ms (next.js: 10ms, proxy.ts: 196ms, application-code: 1504ms)
+ GET /settings?tab=api 200 in 326ms (next.js: 4ms, proxy.ts: 312ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 2ms, proxy.ts: 3ms, application-code: 3ms)
+ GET /settings?tab=webhooks 200 in 203ms (next.js: 4ms, proxy.ts: 189ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 1714µs, application-code: 4ms)
+ GET /api/account/api-keys 200 in 1283ms (next.js: 116ms, proxy.ts: 185ms, application-code: 982ms)
+ GET /api/account/api-keys 200 in 1301ms (next.js: 116ms, proxy.ts: 191ms, application-code: 993ms)
+ GET /api/internal/webhooks 200 in 946ms (next.js: 106ms, proxy.ts: 188ms, application-code: 652ms)
+ GET /settings?tab=connected-number 200 in 211ms (next.js: 4ms, proxy.ts: 197ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 2ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /api/internal/webhooks 200 in 852ms (next.js: 2ms, proxy.ts: 182ms, application-code: 667ms)
+ GET /api/whatsapp/connected-number 200 in 1815ms (next.js: 124ms, proxy.ts: 198ms, application-code: 1493ms)
+ GET /api/whatsapp/connected-number 200 in 1818ms (next.js: 123ms, proxy.ts: 206ms, application-code: 1488ms)
+ GET /settings?tab=security 200 in 197ms (next.js: 4ms, proxy.ts: 183ms, application-code: 11ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /settings?tab=profile 200 in 230ms (next.js: 5ms, proxy.ts: 215ms, application-code: 10ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 2ms, application-code: 5ms)
+ GET /settings?tab=overview 200 in 201ms (next.js: 4ms, proxy.ts: 186ms, application-code: 11ms)
+ GET /api/account/members 200 in 1049ms (next.js: 3ms, proxy.ts: 207ms, application-code: 838ms)
+ GET /api/account/invitations 200 in 1147ms (next.js: 5ms, proxy.ts: 266ms, application-code: 877ms)
+ GET /api/account/members 200 in 1154ms (next.js: 9ms, proxy.ts: 267ms, application-code: 878ms)
+ GET /api/account/invitations 200 in 1158ms (next.js: 3ms, proxy.ts: 289ms, application-code: 866ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 4ms, proxy.ts: 3ms, application-code: 3ms)
+ GET /api/whatsapp/config 200 in 1508ms (next.js: 13ms, proxy.ts: 269ms, application-code: 1225ms)
+ GET /api/whatsapp/config 200 in 1506ms (next.js: 6ms, proxy.ts: 276ms, application-code: 1224ms)
+ GET /chat-assignment 200 in 546ms (next.js: 324ms, proxy.ts: 209ms, application-code: 14ms)
+ GET /api/account/members 200 in 966ms (next.js: 3ms, proxy.ts: 187ms, application-code: 777ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1458µs, application-code: 3ms)
+ GET /api/account/assignment/rules 200 in 1129ms (next.js: 132ms, proxy.ts: 196ms, application-code: 801ms)
+ GET /api/account/assignment 200 in 1183ms (next.js: 126ms, proxy.ts: 181ms, application-code: 876ms)
+ GET /api/account/members 200 in 973ms (next.js: 4ms, proxy.ts: 185ms, application-code: 785ms)
+ GET /api/account/assignment/rules 200 in 940ms (next.js: 3ms, proxy.ts: 208ms, application-code: 729ms)
+ GET /api/account/assignment 200 in 1037ms (next.js: 4ms, proxy.ts: 232ms, application-code: 801ms)
+ GET /data-export 200 in 568ms (next.js: 356ms, proxy.ts: 197ms, application-code: 15ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1885µs, application-code: 3ms)
+ GET /api/google-sheets/list 200 in 1318ms (next.js: 135ms, proxy.ts: 181ms, application-code: 1002ms)
+ GET /api/flows/dropped-off 200 in 1701ms (next.js: 141ms, proxy.ts: 193ms, application-code: 1367ms)
+ GET /api/google-sheets/list 200 in 1164ms (next.js: 5ms, proxy.ts: 191ms, application-code: 967ms)
+ GET /flows 200 in 866ms (next.js: 30ms, proxy.ts: 244ms, application-code: 592ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1743µs, application-code: 3ms)
+ GET /api/flows/dropped-off 200 in 1493ms (next.js: 3ms, proxy.ts: 230ms, application-code: 1260ms)
+ GET /api/flows/templates 200 in 434ms (next.js: 15ms, proxy.ts: 216ms, application-code: 203ms)
+ GET /api/flows 200 in 647ms (next.js: 16ms, proxy.ts: 196ms, application-code: 435ms)
+ GET /api/flows/templates 200 in 387ms (next.js: 2ms, proxy.ts: 185ms, application-code: 199ms)
+ GET /api/flows 200 in 597ms (next.js: 2ms, proxy.ts: 176ms, application-code: 419ms)
+ GET /agents 200 in 1148ms (next.js: 355ms, proxy.ts: 186ms, application-code: 607ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 1863µs, application-code: 4ms)
+ GET /api/ai/config 200 in 1071ms (next.js: 110ms, proxy.ts: 190ms, application-code: 771ms)
+ GET /automations 200 in 218ms (next.js: 3ms, proxy.ts: 200ms, application-code: 15ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 2ms, proxy.ts: 3ms, application-code: 3ms)
+ GET /broadcasts 200 in 463ms (next.js: 255ms, proxy.ts: 196ms, application-code: 12ms)
+ GET /api/ai/config 200 in 970ms (next.js: 2ms, proxy.ts: 185ms, application-code: 783ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1700µs, application-code: 3ms)
+ GET /pipelines 200 in 592ms (next.js: 391ms, proxy.ts: 186ms, application-code: 14ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 1984µs, application-code: 4ms)
+ GET /quick-replies 200 in 472ms (next.js: 271ms, proxy.ts: 189ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 1920µs, proxy.ts: 1774µs, application-code: 3ms)
+ GET /templates 200 in 492ms (next.js: 295ms, proxy.ts: 186ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 4ms)
+ GET /contacts 200 in 199ms (next.js: 9ms, proxy.ts: 178ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 2ms, application-code: 3ms)
+ GET /notifications 200 in 217ms (next.js: 9ms, proxy.ts: 194ms, application-code: 14ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 3ms, application-code: 3ms)
+ GET /inbox 200 in 215ms (next.js: 6ms, proxy.ts: 197ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /api/inbox/pins 200 in 955ms (next.js: 2ms, proxy.ts: 181ms, application-code: 772ms)
+ GET /api/account/members 200 in 970ms (next.js: 4ms, proxy.ts: 229ms, application-code: 737ms)
+ GET /api/account/members 200 in 912ms (next.js: 1976µs, proxy.ts: 179ms, application-code: 731ms)
+ GET /api/inbox/pins 200 in 943ms (next.js: 2ms, proxy.ts: 186ms, application-code: 754ms)
+ GET /dashboard 200 in 265ms (next.js: 11ms, proxy.ts: 243ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 2ms, application-code: 3ms)
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+ GET /inbox 200 in 282ms (next.js: 4ms, proxy.ts: 266ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 3ms, proxy.ts: 3ms, application-code: 3ms)
+ GET /api/account/members 200 in 985ms (next.js: 2ms, proxy.ts: 222ms, application-code: 760ms)
+ GET /api/inbox/pins 200 in 995ms (next.js: 3ms, proxy.ts: 201ms, application-code: 790ms)
+ GET /api/account/members 200 in 939ms (next.js: 3ms, proxy.ts: 179ms, application-code: 757ms)
+ GET /api/inbox/pins 200 in 954ms (next.js: 2ms, proxy.ts: 191ms, application-code: 761ms)
+ GET /api/inbox/pins 200 in 1094ms (next.js: 5ms, proxy.ts: 245ms, application-code: 844ms)
+ GET /api/account/members 200 in 1103ms (next.js: 1921µs, proxy.ts: 254ms, application-code: 847ms)
+ GET /api/inbox/pins 200 in 1022ms (next.js: 2ms, proxy.ts: 228ms, application-code: 792ms)
+ GET /api/account/members 200 in 1075ms (next.js: 2ms, proxy.ts: 235ms, application-code: 837ms)
+ GET /api/account/members 200 in 1263ms (next.js: 5ms, proxy.ts: 470ms, application-code: 787ms)
+ GET /api/inbox/pins 200 in 1288ms (next.js: 14ms, proxy.ts: 475ms, application-code: 799ms)
+ GET /api/account/members 200 in 944ms (next.js: 5ms, proxy.ts: 203ms, application-code: 736ms)
+ GET /api/inbox/pins 200 in 980ms (next.js: 4ms, proxy.ts: 193ms, application-code: 783ms)
+ GET /settings 200 in 255ms (next.js: 6ms, proxy.ts: 235ms, application-code: 15ms)
+ GET /api/account/members 200 in 972ms (next.js: 4ms, proxy.ts: 195ms, application-code: 774ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 1904µs, application-code: 4ms)
+ GET /api/account/members 200 in 1008ms (next.js: 2ms, proxy.ts: 246ms, application-code: 760ms)
+ GET /api/account/invitations 200 in 1029ms (next.js: 2ms, proxy.ts: 268ms, application-code: 759ms)
+ GET /api/account/invitations 200 in 1058ms (next.js: 7ms, proxy.ts: 255ms, application-code: 796ms)
+ GET /api/whatsapp/config 200 in 1416ms (next.js: 3ms, proxy.ts: 236ms, application-code: 1177ms)
+ GET /api/whatsapp/config 200 in 1443ms (next.js: 1994µs, proxy.ts: 242ms, application-code: 1198ms)
+ GET /dashboard 200 in 220ms (next.js: 9ms, proxy.ts: 200ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 7ms (next.js: 2ms, proxy.ts: 1963µs, application-code: 3ms)
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+[browser] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+ GET /broadcasts/new 200 in 1103ms (next.js: 849ms, proxy.ts: 241ms, application-code: 13ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /dashboard 200 in 273ms (next.js: 34ms, proxy.ts: 227ms, application-code: 12ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /automations/new 200 in 212ms (next.js: 8ms, proxy.ts: 189ms, application-code: 15ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 2ms, proxy.ts: 2ms, application-code: 3ms)
+ GET /api/account/members 200 in 970ms (next.js: 3ms, proxy.ts: 197ms, application-code: 771ms)
+ GET /api/account/members 200 in 971ms (next.js: 2ms, proxy.ts: 217ms, application-code: 751ms)
+ GET /automations 200 in 206ms (next.js: 5ms, proxy.ts: 188ms, application-code: 13ms)
+ GET /manifest.webmanifest 200 in 8ms (next.js: 3ms, proxy.ts: 1897µs, application-code: 3ms)
+ GET /inbox 200 in 255ms (next.js: 7ms, proxy.ts: 234ms, application-code: 15ms)
+ GET /manifest.webmanifest 200 in 10ms (next.js: 3ms, proxy.ts: 3ms, application-code: 4ms)
+ GET /api/inbox/pins 200 in 1052ms (next.js: 3ms, proxy.ts: 246ms, application-code: 803ms)
+ GET /api/account/members 200 in 1309ms (next.js: 4ms, proxy.ts: 192ms, application-code: 1113ms)
+ GET /api/inbox/pins 200 in 975ms (next.js: 3ms, proxy.ts: 196ms, application-code: 777ms)
+ GET /api/account/members 200 in 974ms (next.js: 4ms, proxy.ts: 190ms, application-code: 780ms)
+ GET /inbox?c=183d2beb-836e-4126-b9f0-6e3566e86efa 200 in 230ms (next.js: 13ms, proxy.ts: 202ms, application-code: 16ms)
+ GET /manifest.webmanifest 200 in 9ms (next.js: 3ms, proxy.ts: 3ms, application-code: 3ms)
+ POST /api/whatsapp/send 200 in 3.7s (next.js: 34ms, proxy.ts: 268ms, application-code: 3.4s)
+ GET /api/whatsapp/media/2562932764170944 200 in 3.2s (next.js: 555ms, proxy.ts: 333ms, application-code: 2.3s)
+ GET /api/inbox/pins 200 in 1096ms (next.js: 2ms, proxy.ts: 307ms, application-code: 787ms)
+ GET /api/account/members 200 in 1423ms (next.js: 2ms, proxy.ts: 296ms, application-code: 1124ms)
+ POST /api/whatsapp/send 200 in 3.7s (next.js: 6ms, proxy.ts: 533ms, application-code: 3.1s)
+ GET /api/inbox/pins 200 in 1323ms (next.js: 3ms, proxy.ts: 568ms, application-code: 753ms)
+ GET /api/account/members 200 in 1541ms (next.js: 4ms, proxy.ts: 376ms, application-code: 1161ms)
+ GET /api/account/members 200 in 1011ms (next.js: 3ms, proxy.ts: 230ms, application-code: 778ms)
+ GET /api/inbox/pins 200 in 1058ms (next.js: 3ms, proxy.ts: 288ms, application-code: 768ms)
+ GET /api/account/members 200 in 1281ms (next.js: 3ms, proxy.ts: 472ms, application-code: 805ms)
+ GET /api/inbox/pins 200 in 1304ms (next.js: 8ms, proxy.ts: 474ms, application-code: 822ms)
+ GET /api/account/members 200 in 956ms (next.js: 3ms, proxy.ts: 189ms, application-code: 765ms)
+ GET /api/inbox/pins 200 in 951ms (next.js: 3ms, proxy.ts: 196ms, application-code: 752ms)

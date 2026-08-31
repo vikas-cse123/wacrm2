@@ -157,6 +157,42 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   );
 }
 
+/**
+ * Which way to render a `content_type === 'interactive'` bubble.
+ *
+ * - "inbound-reply": the customer tapped a button/list row (webhook
+ *   stores the tapped title in content_text + id in
+ *   interactive_reply_id) — render the "↩ Button reply" affordance.
+ * - "outgoing-prompt": the bot's Send Buttons prompt with the offered
+ *   buttons persisted (interactive_buttons, set by the flows engine's
+ *   meta-send) — render the body plus read-only option chips.
+ * - "plain": anything else (historical outgoing prompts with no
+ *   stored buttons, or malformed rows) — just the body text.
+ *
+ * Pure function so the branching is unit-testable without a DOM.
+ */
+export function interactiveRenderKind(message: Message): {
+  kind: "inbound-reply" | "outgoing-prompt" | "plain";
+  buttons: Array<{ id: string; title: string }>;
+} {
+  if (message.content_type !== "interactive") {
+    return { kind: "plain", buttons: [] };
+  }
+  if (message.sender_type === "customer") {
+    return { kind: "inbound-reply", buttons: [] };
+  }
+  const buttons = Array.isArray(message.interactive_buttons)
+    ? message.interactive_buttons.filter(
+        (b): b is { id: string; title: string } =>
+          b != null && typeof b.id === "string" && typeof b.title === "string",
+      )
+    : [];
+  return {
+    kind: buttons.length > 0 ? "outgoing-prompt" : "plain",
+    buttons,
+  };
+}
+
 function MessageContent({
   message,
   onPrimary,
@@ -265,11 +301,40 @@ function MessageContent({
       );
 
     case "interactive": {
-      // Customer tapped a reply button or list row on a message the bot
-      // sent. We show the tapped option's title (already in content_text,
-      // set by parseMessageContent in the webhook) with a small affordance
-      // so agents reading the inbox can tell at a glance that this is a
-      // tap rather than the customer typing the same words.
+      const { kind, buttons } = interactiveRenderKind(message);
+
+      // Outgoing Send Buttons prompt from the bot: show the body, then
+      // the options that were offered, as READ-ONLY chips — a
+      // historical record of what the customer saw, not clickable
+      // actions. No "↩ Button reply" affordance here; that label means
+      // the customer tapped something.
+      if (kind === "outgoing-prompt") {
+        return (
+          <div className="flex flex-col gap-1.5">
+            <p className="whitespace-pre-wrap break-words text-sm">
+              {message.content_text || "[Interactive message]"}
+            </p>
+            <div className="flex flex-col gap-1">
+              {buttons.map((b) => (
+                <div
+                  key={b.id}
+                  className="rounded-lg border border-primary-foreground/25 bg-primary-foreground/10 px-2.5 py-1 text-center text-xs font-medium text-primary-foreground"
+                >
+                  {b.title}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      // Inbound: the customer tapped a reply button or list row on a
+      // message the bot sent. We show the tapped option's title (already
+      // in content_text, set by parseMessageContent in the webhook) with
+      // a small affordance so agents reading the inbox can tell at a
+      // glance that this is a tap rather than the customer typing the
+      // same words. Historical outgoing prompts with no stored buttons
+      // fall through here to the same plain body rendering as before.
       return (
         <div className="flex flex-col gap-0.5">
           <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

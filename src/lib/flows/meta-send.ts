@@ -398,9 +398,9 @@ interface SendInteractiveListEngineArgs {
  * Send an interactive-button WhatsApp message from the Flows engine.
  *
  * Persists the outgoing message to `messages` with
- * `content_type='interactive'` and `sender_type='bot'` so the inbox
- * surfaces it with the "Button reply" affordance and the conversation
- * thread reflects the bot's prompt.
+ * `content_type='interactive'` and `sender_type='bot'`, plus the
+ * offered buttons in `interactive_buttons` (exactly as sent to Meta)
+ * so the Inbox renders the choices on the bot's bubble.
  *
  * Returns the Meta message id so the caller (engine) can stash it on
  * the `flow_runs.last_prompt_message_id` field for later reference.
@@ -520,6 +520,13 @@ async function sendInteractiveViaMeta(
   // We do NOT set interactive_reply_id here — that column is reserved
   // for the customer's tap on this message, populated by the webhook
   // when their reply arrives.
+  //
+  // interactive_buttons records the buttons OFFERED on a button
+  // prompt — the exact ids/titles (and order) that were sent to Meta —
+  // so the Inbox can render the choices on the bot's bubble. Only
+  // button messages get it: interactive list prompts (rows/sections)
+  // are a different shape and store nothing here. Display metadata
+  // only; routing keeps using the webhook's interactive_reply_id.
   const { error: msgErr } = await db.from('messages').insert({
     conversation_id: input.conversationId,
     sender_type: 'bot',
@@ -527,6 +534,14 @@ async function sendInteractiveViaMeta(
     content_text: input.bodyText,
     message_id: waMessageId,
     status: 'sent',
+    ...(input.kind === 'buttons'
+      ? {
+          interactive_buttons: input.buttons.map((b) => ({
+            id: b.id,
+            title: b.title,
+          })),
+        }
+      : {}),
   })
   if (msgErr) {
     throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
