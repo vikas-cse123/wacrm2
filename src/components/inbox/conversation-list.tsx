@@ -25,7 +25,7 @@ import type {
   ConversationStatus,
   Tag,
 } from "@/types";
-import { Search, ChevronDown, Users, X, Pin, Loader2 } from "lucide-react";
+import { Search, ChevronDown, Users, X, Pin, Loader2, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
@@ -110,9 +110,12 @@ export function ConversationList({
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
   // Broadcast audience filtering. Company is an exact match on the field.
+  // Flow matches the contact's active (or most recent) flow run.
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  const [flows, setFlows] = useState<{ id: string; name: string }[]>([]);
+  const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
   const [members, setMembers] = useState<AccountMember[]>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
@@ -241,6 +244,24 @@ export function ConversationList({
     };
   }, [resyncToken]);
 
+  // Flow definitions for the filter picker — same pattern as tags. RLS
+  // scopes this to the account; a conversation can only ever match one
+  // of the account's own flows.
+  useEffect(() => {
+    const supabase = createClient();
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("flows")
+        .select("id, name")
+        .order("name");
+      if (!cancelled && data) setFlows(data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resyncToken]);
+
   // Company options are derived from the loaded conversations — there's no
   // separate companies table, and only companies with a live conversation
   // are worth offering as an inbox filter.
@@ -279,12 +300,18 @@ export function ConversationList({
       result = result.filter((c) => c.status === filter);
     }
 
-    // Contact-based filters (tags via OR logic, exact company match).
-    if (selectedTagIds.length > 0 || selectedCompany !== null) {
+    // Contact-based filters (tags via OR logic, exact company match,
+    // flow via the contact's active/most-recent flow run).
+    if (
+      selectedTagIds.length > 0 ||
+      selectedCompany !== null ||
+      selectedFlowId != null
+    ) {
       result = result.filter((c) =>
         matchesContactFilters(c, {
           tagIds: selectedTagIds,
           company: selectedCompany,
+          flowId: selectedFlowId,
         })
       );
     }
@@ -315,6 +342,7 @@ export function ConversationList({
     search,
     selectedTagIds,
     selectedCompany,
+    selectedFlowId,
     selectedMemberIds,
   ]);
 
@@ -417,6 +445,7 @@ export function ConversationList({
   const clearContactFilters = useCallback(() => {
     setSelectedTagIds([]);
     setSelectedCompany(null);
+    setSelectedFlowId(null);
     setSelectedMemberIds([]);
   }, []);
 
@@ -431,6 +460,7 @@ export function ConversationList({
   const hasContactFilters =
     selectedTagIds.length > 0 ||
     selectedCompany !== null ||
+    selectedFlowId != null ||
     selectedMemberIds.length > 0;
 
   const handleSearchChange = useCallback(
@@ -487,6 +517,7 @@ export function ConversationList({
   );
 
   const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const activeFlow = flows.find((f) => f.id === selectedFlowId);
   const activeDateFilter = DATE_FILTER_OPTIONS.find(
     (o) => o.value === dateFilter
   );
@@ -719,6 +750,55 @@ export function ConversationList({
             </DropdownMenu>
           )}
 
+          {flows.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={cn(
+                  "hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs",
+                  selectedFlowId
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Workflow className="h-3 w-3" />
+                <span className="max-w-24 truncate">
+                  {activeFlow?.name ?? "Flow"}
+                </span>
+                <ChevronDown className="h-3 w-3 shrink-0" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="border-border bg-popover max-h-64 w-56"
+              >
+                <DropdownMenuItem
+                  onClick={() => setSelectedFlowId(null)}
+                  className={cn(
+                    "text-sm",
+                    selectedFlowId === null
+                      ? "text-primary"
+                      : "text-popover-foreground"
+                  )}
+                >
+                  All flows
+                </DropdownMenuItem>
+                {flows.map((flow) => (
+                  <DropdownMenuItem
+                    key={flow.id}
+                    onClick={() => setSelectedFlowId(flow.id)}
+                    className={cn(
+                      "text-sm",
+                      selectedFlowId === flow.id
+                        ? "text-primary"
+                        : "text-popover-foreground"
+                    )}
+                  >
+                    <span className="truncate">{flow.name}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
           {members.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -793,6 +873,18 @@ export function ConversationList({
                 className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
               >
                 <span className="max-w-24 truncate">{selectedCompany}</span>
+                <X className="h-3 w-3" />
+              </button>
+            )}
+            {selectedFlowId && (
+              <button
+                onClick={() => setSelectedFlowId(null)}
+                className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+              >
+                <Workflow className="h-3 w-3 shrink-0" />
+                <span className="max-w-24 truncate">
+                  {activeFlow?.name ?? "Flow"}
+                </span>
                 <X className="h-3 w-3" />
               </button>
             )}

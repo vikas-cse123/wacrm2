@@ -110,6 +110,11 @@ export interface Contact {
   /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the
    *  Inbox conversation list, for tag filtering). Absent otherwise. */
   tags?: Tag[];
+  /** Hydrated by queries that embed `flow_runs` (Inbox conversation
+   *  list): the contact's active flow run, or its most recent run of
+   *  any status. Null/absent when the contact has no flow runs. */
+  flow_id?: string | null;
+  flow_name?: string | null;
 }
 
 export interface Tag {

@@ -100,6 +100,31 @@ describe("matchesContactFilters", () => {
       matchesContactFilters(conv, { tagIds: ["tX"], company: "Acme" })
     ).toBe(false);
   });
+
+  it("matches by flow id against the contact's hydrated flow", () => {
+    const conv = makeConversation({
+      flow_id: "f1",
+      flow_name: "Bali Automation",
+    });
+    expect(
+      matchesContactFilters(conv, { tagIds: [], company: null, flowId: "f1" })
+    ).toBe(true);
+    expect(
+      matchesContactFilters(conv, { tagIds: [], company: null, flowId: "f2" })
+    ).toBe(false);
+    // A contact with no flow never matches an active flow filter.
+    expect(
+      matchesContactFilters(makeConversation(null), {
+        tagIds: [],
+        company: null,
+        flowId: "f1",
+      })
+    ).toBe(false);
+    // A null flow filter is a no-op.
+    expect(
+      matchesContactFilters(conv, { tagIds: [], company: null, flowId: null })
+    ).toBe(true);
+  });
 });
 
 describe("normalizeConversation", () => {
@@ -143,6 +168,65 @@ describe("normalizeConversation", () => {
     };
     // A contactless row passes through untouched (consumers use `?.`).
     expect(normalizeConversation(raw).contact).toBeNull();
+  });
+
+  it("flattens embedded flow_runs into contact.flow_id/flow_name", () => {
+    const raw = {
+      id: "c1",
+      user_id: "u1",
+      contact_id: "ct1",
+      status: "open" as const,
+      unread_count: 0,
+      created_at: "",
+      updated_at: "",
+      contact: {
+        id: "ct1",
+        user_id: "u1",
+        account_id: "a1",
+        phone: "123",
+        created_at: "",
+        updated_at: "",
+        flow_runs: [
+          {
+            id: "run-1",
+            status: "active",
+            started_at: "2026-01-01T10:00:00Z",
+            flow: { id: "f1", name: "Bali Automation" },
+          },
+        ],
+      },
+    };
+    const normalized = normalizeConversation(raw);
+    expect(normalized.contact?.flow_id).toBe("f1");
+    expect(normalized.contact?.flow_name).toBe("Bali Automation");
+    // The raw join key is dropped from the flattened contact.
+    expect(
+      (normalized.contact as unknown as Record<string, unknown>).flow_runs
+    ).toBeUndefined();
+  });
+
+  it("leaves flow fields null when the contact has no runs", () => {
+    const raw = {
+      id: "c1",
+      user_id: "u1",
+      contact_id: "ct1",
+      status: "open" as const,
+      unread_count: 0,
+      created_at: "",
+      updated_at: "",
+      contact: {
+        id: "ct1",
+        user_id: "u1",
+        account_id: "a1",
+        phone: "123",
+        created_at: "",
+        updated_at: "",
+        flow_runs: [],
+      },
+    };
+    const normalized = normalizeConversation(raw);
+    expect(normalized.contact?.flow_id).toBeNull();
+    expect(normalized.contact?.flow_name).toBeNull();
   });
 });
 

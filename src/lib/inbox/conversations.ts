@@ -1,22 +1,32 @@
 import type { Conversation, Contact, Tag } from "@/types";
+import { pickContactFlowRun, type ContactFlowRun } from "./contact-flow";
 
 /**
  * Conversation select that embeds the contact plus its tags, so the Inbox
  * can filter conversations by contact tag without a second round-trip.
  * `contact_tags(tags(*))` returns the join rows; {@link normalizeConversation}
  * flattens them onto `contact.tags`.
+ *
+ * Also embeds the contact's `flow_runs` (with the flow id/name joined),
+ * which the same flattening reduces to `contact.flow_id`/`contact.flow_name`
+ * (active run first, else most recent) for the Inbox flow filter and the
+ * contact panel's FLOW display.
  */
 export const CONVERSATION_SELECT =
-  "*, contact:contacts(*, contact_tags(tags(*)))";
+  "*, contact:contacts(*, contact_tags(tags(*)), flow_runs(id, status, started_at, flow:flows(id, name)))";
 
 /** Raw shape returned by {@link CONVERSATION_SELECT} before flattening. */
-type RawContact = Contact & { contact_tags?: { tags: Tag | null }[] };
+type RawContact = Contact & {
+  contact_tags?: { tags: Tag | null }[];
+  flow_runs?: ContactFlowRun[];
+};
 type RawConversation = Omit<Conversation, "contact"> & {
   contact?: RawContact | null;
 };
 
 /**
- * Flatten the embedded `contact_tags(tags(*))` join into `contact.tags`.
+ * Flatten the embedded `contact_tags(tags(*))` join into `contact.tags`,
+ * and the embedded `flow_runs` join into `contact.flow_id`/`flow_name`.
  * Safe to call on rows fetched with {@link CONVERSATION_SELECT}; a row with
  * no contact (e.g. a freshly-inserted conversation) passes through untouched.
  */
@@ -24,7 +34,8 @@ export function normalizeConversation(raw: RawConversation): Conversation {
   const rawContact = raw.contact;
   if (!rawContact) return raw as Conversation;
 
-  const { contact_tags, ...contact } = rawContact;
+  const { contact_tags, flow_runs, ...contact } = rawContact;
+  const flowRun = pickContactFlowRun(flow_runs ?? []);
   return {
     ...raw,
     contact: {
@@ -32,6 +43,8 @@ export function normalizeConversation(raw: RawConversation): Conversation {
       tags: (contact_tags ?? [])
         .map((ct) => ct.tags)
         .filter((t): t is Tag => t != null),
+      flow_id: flowRun?.flow?.id ?? null,
+      flow_name: flowRun?.flow?.name ?? null,
     },
   };
 }
@@ -47,6 +60,8 @@ export interface ContactFilters {
   tagIds: string[];
   /** Exact company match, or null for no company filter. */
   company: string | null;
+  /** Flow id (from contact.flow_id); null for no flow filter. */
+  flowId?: string | null;
 }
 
 export type ConversationDateFilter = "all" | "today" | "yesterday" | "custom";
@@ -152,12 +167,13 @@ export function matchesConversationDateFilter(
 
 /**
  * Whether a conversation passes the contact-based Inbox filters (issue #272).
- * Empty `tagIds` and null `company` are no-ops, so the default (no filters)
- * always matches. Tags use OR logic, consistent with Broadcast audiences.
+ * Empty `tagIds`, null `company` and null `flowId` are no-ops, so the
+ * default (no filters) always matches. Tags use OR logic, consistent with
+ * Broadcast audiences.
  */
 export function matchesContactFilters(
   conversation: Conversation,
-  { tagIds, company }: ContactFilters
+  { tagIds, company, flowId }: ContactFilters
 ): boolean {
   if (tagIds.length > 0) {
     const contactTagIds = conversation.contact?.tags ?? [];
@@ -165,6 +181,10 @@ export function matchesContactFilters(
   }
 
   if (company !== null && conversation.contact?.company?.trim() !== company) {
+    return false;
+  }
+
+  if (flowId != null && conversation.contact?.flow_id !== flowId) {
     return false;
   }
 
