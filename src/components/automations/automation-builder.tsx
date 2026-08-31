@@ -55,6 +55,7 @@ import type {
   KeywordMatchTriggerConfig,
   MessageTemplate,
   SendMediaRotationMessage,
+  SendMediaRotationScope,
   SendMediaSelectionMode,
   Tag as TagRecord,
 } from "@/types"
@@ -621,6 +622,7 @@ function SendMediaFields({
   caption,
   filename,
   messages,
+  rotationScope,
   onChange,
 }: {
   mode: SendMediaSelectionMode
@@ -632,6 +634,7 @@ function SendMediaFields({
   caption: string
   filename: string
   messages: SendMediaRotationMessage[]
+  rotationScope: SendMediaRotationScope
   onChange: (patch: Record<string, unknown>) => void
 }) {
   // Toggling rotation on seeds the list with the existing fixed config
@@ -730,9 +733,34 @@ function SendMediaFields({
 
       {mode === "rotate" ? (
         <>
+          <FieldBlock label="Rotation scope">
+            <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-muted px-3 py-2">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
+                <input
+                  type="radio"
+                  name={`${groupName}-scope`}
+                  checked={rotationScope === "contact"}
+                  onChange={() => onChange({ rotation_scope: "contact" })}
+                  className="accent-[var(--primary)]"
+                />
+                Per contact
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
+                <input
+                  type="radio"
+                  name={`${groupName}-scope`}
+                  checked={rotationScope === "global"}
+                  onChange={() => onChange({ rotation_scope: "global" })}
+                  className="accent-[var(--primary)]"
+                />
+                Across contacts
+              </label>
+            </div>
+          </FieldBlock>
           <p className="text-xs text-muted-foreground">
-            Each contact receives the messages in order, one per automation run, then the cycle
-            repeats. The rotation restarts from Message 1 for every new contact.
+            {rotationScope === "global"
+              ? "One shared cycle for every contact: contact 1 receives Message 1, contact 2 receives Message 2, and so on, wrapping around after the last message."
+              : "Each contact receives the messages in order, one per automation run, then the cycle repeats. The rotation restarts from Message 1 for every new contact."}
           </p>
           {messages.map((m, i) => (
             <div key={i} className="rounded-md border border-border bg-card/50 p-3">
@@ -1558,6 +1586,7 @@ function StepEditor({
           caption={(cfg.caption as string) ?? ""}
           filename={(cfg.filename as string) ?? ""}
           messages={(cfg.messages as SendMediaRotationMessage[]) ?? []}
+          rotationScope={(cfg.rotation_scope as SendMediaRotationScope) ?? "contact"}
           onChange={(patch) => set(patch)}
         />
       )
@@ -1761,7 +1790,8 @@ function previewFor(step: BuilderStep): string {
         const n = Array.isArray(step.step_config.messages)
           ? (step.step_config.messages as SendMediaRotationMessage[]).length
           : 0
-        return `rotate ${n} message${n === 1 ? "" : "s"}`
+        const scope = step.step_config.rotation_scope === "global" ? " (shared)" : ""
+        return `rotate ${n} message${n === 1 ? "" : "s"}${scope}`
       }
       const mt = step.step_config.media_type as string
       const name =

@@ -121,6 +121,24 @@ vi.mock("./admin-client", () => {
           state.mediaRotationReleases += 1;
           return Promise.resolve({ error: null });
         }
+        if (fn === "claim_automation_media_index_global") {
+          // Global scope: one shared counter per automation + step_key,
+          // with NO contact dimension.
+          const key = `${args?.p_automation_id}:shared:${args?.p_step_key}`;
+          const count = Math.max(Number(args?.p_message_count) || 1, 1);
+          const current = state.mediaRotation.get(key) ?? 0;
+          const claimed = ((current % count) + count) % count;
+          state.mediaRotation.set(key, (current + 1) % count);
+          return Promise.resolve({ data: claimed, error: null });
+        }
+        if (fn === "release_automation_media_index_global") {
+          const key = `${args?.p_automation_id}:shared:${args?.p_step_key}`;
+          const count = Math.max(Number(args?.p_message_count) || 1, 1);
+          const current = state.mediaRotation.get(key) ?? 0;
+          state.mediaRotation.set(key, (((current - 1) % count) + count) % count);
+          state.mediaRotationReleases += 1;
+          return Promise.resolve({ error: null });
+        }
         return Promise.resolve({ error: null });
       },
     }),
@@ -392,7 +410,7 @@ describe("send_media rotation", () => {
     };
   }
 
-  function rotateStep(rotationKey = "rk-1") {
+  function rotateStep(rotationKey = "rk-1", rotationScope?: string) {
     return {
       id: "s1",
       automation_id: "a1",
@@ -404,6 +422,7 @@ describe("send_media rotation", () => {
         media_url: "",
         selection_mode: "rotate",
         rotation_key: rotationKey,
+        ...(rotationScope ? { rotation_scope: rotationScope } : {}),
         messages: [
           {
             media_type: "image",
@@ -468,6 +487,53 @@ describe("send_media rotation", () => {
     expect(sendMedia.mock.calls[1][0].contactId).toBe("c2");
     // NOT B — each contact's rotation starts from its own counter.
     expect(sendMedia.mock.calls[1][0].link).toBe("https://x.example/flow-media/a.png");
+  });
+
+  it("global scope rotates ACROSS contacts (c1 → A, c2 → B)", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep("rk-1", "global")];
+
+    await trigger("c1");
+    await trigger("c2");
+    await trigger("c3");
+
+    const sendMedia = await engineSendMediaMock();
+    expect(sendMedia.mock.calls.map((c) => c[0].link)).toEqual([
+      "https://x.example/flow-media/a.png",
+      "https://x.example/flow-media/b.pdf",
+      "https://x.example/flow-media/a.png",
+    ]);
+  });
+
+  it("global scope never touches per-contact rotation state", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep("rk-1", "global")];
+
+    await trigger("c1");
+    await trigger("c2");
+
+    // Only the shared counter exists — no per-contact rows were claimed.
+    expect([...h.state.mediaRotation.keys()].every((k) => k.includes(":shared:"))).toBe(true);
+  });
+
+  it("global scope rolls the shared counter back after a failed send", async () => {
+    h.state.owned = { id: "c1" };
+    h.state.automations = [rotateAutomation()];
+    h.state.steps = [rotateStep("rk-1", "global")];
+
+    const sendMedia = await engineSendMediaMock();
+    sendMedia.mockImplementationOnce(async () => {
+      throw new Error("Meta 500");
+    });
+
+    await trigger("c1"); // fails — shared index must stay on message 1
+    await trigger("c2"); // must retry message 1, not skip to message 2
+
+    expect(sendMedia.mock.calls[0][0].link).toBe("https://x.example/flow-media/a.png");
+    expect(sendMedia.mock.calls[1][0].link).toBe("https://x.example/flow-media/a.png");
+    expect(h.state.mediaRotationReleases).toBe(1);
   });
 
   it("rolls the counter back after a failed send (failed message is retried)", async () => {
