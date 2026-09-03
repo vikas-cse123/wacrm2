@@ -1,0 +1,52 @@
+-- ============================================================
+-- 062_conversations_account_contact_unique
+--
+-- Enforce the intended invariant the app has always assumed:
+--   ONE conversation per (account_id, contact_id)
+-- (see src/lib/conversations/get-or-create.ts and the
+-- "one-conversation-per-(account, contact) convention" comments in
+-- the webhook / resolve-conversation / send paths).
+--
+-- Why:
+--   The inbound webhook did SELECT-then-INSERT with no uniqueness
+--   guard, so N concurrent webhooks for the same contact each
+--   observed "no row" and each INSERTed — one conversation per
+--   message instead of one conversation with N messages
+--   (account 5921c298-..., contact cf2b7077-...).
+--
+-- Closed-conversation semantics (verified before choosing the key):
+--   - `close_conversation` automation + inbox status toggle only
+--     UPDATE status to 'closed'; no path creates a fresh thread on
+--     next inbound. The webhook lookup has NO status filter, so a
+--     closed thread is REUSED for the next message.
+--   - Therefore the key is FULL (account_id, contact_id), NOT a
+--     partial WHERE status = 'open'. A partial index would permit a
+--     second open thread while a closed one exists and break reuse.
+--
+-- Account isolation:
+--   - Key includes account_id, so the same phone in two accounts
+--     (distinct contacts rows — contacts are unique per
+--     (account_id, phone_normalized)) still gets one conversation
+--     PER ACCOUNT. No cross-account leakage; every app lookup is
+--     already account-scoped.
+--
+-- PRODUCTION SAFETY — DO NOT APPLY TO PROD UNTIL BACKFILLED:
+--   Prod already contains duplicate (account_id, contact_id) rows.
+--   Applying this index before merging them fails with 23505 and
+--   blocks the migration. Required order:
+--     1. Deploy the code fix first (insert-or-reread on 23505;
+--        stops NEW duplicates even before the index exists).
+--     2. Offline merge duplicates per (account_id, contact_id):
+--        keep oldest created_at, re-point messages +
+--        message_reactions + flow_runs(non-active only, partial
+--        unique) + pins/notifications, recompute
+--        last_message_*/unread_count, then delete losers.
+--     3. Apply this migration.
+--   This file intentionally contains ONLY the constraint, no data
+--   deletion, so fresh/dev databases converge safely.
+--
+-- Idempotent — safe to re-run.
+-- ============================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_account_contact_unique
+  ON conversations (account_id, contact_id);
