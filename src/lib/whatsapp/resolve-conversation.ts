@@ -21,6 +21,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { getOrCreateConversation } from '@/lib/conversations/get-or-create';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
@@ -137,31 +138,17 @@ export async function resolveConversationByPhone(
   }
 
   // ---- conversation -------------------------------------------
-  // One conversation per (account, contact) — same convention as the
-  // webhook.
-  const { data: conv } = await db
-    .from('conversations')
-    .select('id')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .maybeSingle();
-
-  if (conv?.id) {
-    return { conversationId: conv.id, contactId, contactCreated };
-  }
-
-  const { data: newConv, error: convErr } = await db
-    .from('conversations')
-    .insert({
-      account_id: accountId,
-      user_id: ownerUserId,
-      contact_id: contactId,
-    })
-    .select('id')
-    .single();
-
-  if (convErr || !newConv) {
-    console.error('[resolve-conversation] conversation create error:', convErr);
+  // One conversation per (account, contact) — atomic via the shared
+  // helper (SELECT → INSERT → on 23505 re-SELECT winner, backed by
+  // migration 062's UNIQUE index). Same convention as the webhook.
+  const convResult = await getOrCreateConversation(
+    db,
+    accountId,
+    contactId,
+    ownerUserId,
+  );
+  if (!convResult) {
+    console.error('[resolve-conversation] conversation create error');
     throw new SendMessageError(
       'db_error',
       'Failed to create conversation',
@@ -169,5 +156,9 @@ export async function resolveConversationByPhone(
     );
   }
 
-  return { conversationId: newConv.id, contactId, contactCreated };
+  return {
+    conversationId: convResult.conversation.id as string,
+    contactId,
+    contactCreated,
+  };
 }

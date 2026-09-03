@@ -4,6 +4,7 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { getOrCreateConversation } from '@/lib/conversations/get-or-create'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { resolveAssignment } from '@/lib/assignment/engine'
@@ -1418,34 +1419,20 @@ async function findOrCreateConversation(
   configOwnerUserId: string,
   contactId: string,
 ) {
-  // Look for existing conversation in this account
-  const { data: existing, error: findError } = await supabaseAdmin()
-    .from('conversations')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .single()
-
-  if (!findError && existing) {
-    return { conversation: existing, created: false }
-  }
-
-  // Create new conversation. Same tenancy + audit split as
-  // findOrCreateContact above.
-  const { data: newConv, error: createError } = await supabaseAdmin()
-    .from('conversations')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      contact_id: contactId,
-    })
-    .select()
-    .single()
-
-  if (createError) {
-    console.error('Error creating conversation:', createError)
+  // Atomic single-thread-per-(account, contact) guarantee lives in
+  // the shared helper (SELECT fast-path → INSERT → on 23505 re-SELECT
+  // the racing winner, backed by migration 062's UNIQUE index).
+  // Returns null only on genuine DB failure so callers keep their
+  // existing drop-and-log behavior.
+  try {
+    return await getOrCreateConversation(
+      supabaseAdmin(),
+      accountId,
+      contactId,
+      configOwnerUserId,
+    )
+  } catch (err) {
+    console.error('Error creating conversation:', err)
     return null
   }
-
-  return { conversation: newConv, created: true }
 }
