@@ -743,9 +743,29 @@ async function getFirstMessageText(
   return data?.content_text ?? inboundText(currentMessage)
 }
 
+/**
+ * Resolve the display name for an inbound Meta contact entry.
+ *
+ * Meta does not guarantee `contacts[].profile` on every payload
+ * (privacy-restricted senders, some message types, batched payloads
+ * where the paired entry is missing). A direct `contact.profile.name`
+ * throws `TypeError: Cannot read properties of undefined
+ * (reading 'name')` and drops the whole webhook batch, so fall back
+ * to the normalized sender phone when profile/name is absent.
+ * `findOrCreateContact` already maps a falsy name to the phone on
+ * insert (`name || phone`) and skips blank renames on update, so an
+ * empty profile name still ends up as the phone downstream.
+ */
+export function resolveInboundContactName(
+  contact: { profile?: { name?: string }; wa_id?: string } | undefined | null,
+  fallbackPhone: string,
+): string {
+  return contact?.profile?.name ?? fallbackPhone
+}
+
 async function processMessage(
   message: WhatsAppMessage,
-  contact: { profile: { name: string }; wa_id: string },
+  contact: { profile?: { name?: string }; wa_id: string },
   // Tenancy. Resolved from the matched whatsapp_config row; every
   // contact / conversation / message row created downstream is
   // stamped with this so any member of the account can see it.
@@ -758,7 +778,7 @@ async function processMessage(
    rawMetaBody: { entry?: WhatsAppWebhookEntry[] }
 ) {
   const senderPhone = normalizePhone(message.from)
-  const contactName = contact.profile.name
+  const contactName = resolveInboundContactName(contact, senderPhone)
 
   // Click-to-WhatsApp referral, if this inbound came from an ad/link.
   const referralSource = message.referral?.source_url
