@@ -7,7 +7,12 @@ import {
   STANDARD_COLUMNS_V3,
 } from "@/lib/google/sheets";
 import { stringifySheetCell, partitionSheetKeys } from "@/lib/flows/sheet-layout";
-import type { FlowNodeLite } from "@/lib/flows/sheet-columns";
+import {
+  headerByKey,
+  orderNodesForSheets,
+  sortKeysByFlowOrder,
+  type FlowNodeLite,
+} from "@/lib/flows/sheet-columns";
 import { NextResponse } from "next/server";
 
 export async function POST(
@@ -21,7 +26,7 @@ export async function POST(
     // Verify flow ownership
     const { data: flow } = await ctx.supabase
       .from("flows")
-      .select("id, name")
+      .select("id, name, entry_node_id")
       .eq("id", flowId)
       .eq("account_id", ctx.accountId)
       .maybeSingle();
@@ -78,29 +83,44 @@ export async function POST(
 
     // Build rows with the V3 headers (Name + Phone + Time + answer vars).
     // Honor "Include in Google Sheet" like every other writer: keys whose
-    // nodes are switched off never become columns here. Unknown keys
-    // (deleted nodes, non-question captures) are still exported, matching
-    // the conservative incomplete-sheet contract.
+    // nodes are switched off never become columns here. Answer columns
+    // follow canonical flow (graph-walk) order; unknown keys (deleted
+    // nodes, non-question captures) keep first-seen order at the end,
+    // matching the conservative incomplete-sheet contract.
     const { data: sheetNodes } = await ctx.supabase
       .from("flow_nodes")
-      .select("node_key, node_type, config")
+      .select("node_key, node_type, config, created_at")
       .eq("flow_id", flowId)
       .order("created_at", { ascending: true });
-    const { disabledKeys } = partitionSheetKeys(
+    const orderedNodes = orderNodesForSheets(
+      (flow as { entry_node_id?: string | null } | null)?.entry_node_id ?? null,
       (sheetNodes ?? []) as FlowNodeLite[],
     );
-    const allVarKeys = new Set<string>();
+    const { disabledKeys } = partitionSheetKeys(orderedNodes);
+    // Human-readable headers per the completed-sheet contract; unknown
+    // keys fall back to the raw key. Map order matches flow order, so its
+    // keys double as the ranking (unknowns keep first-seen order after).
+    const headerMap = headerByKey(
+      (flow as { entry_node_id?: string | null } | null)?.entry_node_id ?? null,
+      orderedNodes,
+    );
+    const headerFor = (k: string): string => headerMap.get(k) ?? k;
+    const unorderedKeys = new Set<string>();
     droppedRuns.forEach((run: any) => {
       Object.keys(run.vars ?? {}).forEach((k) => {
-        if (!disabledKeys.has(k)) allVarKeys.add(k);
+        if (!disabledKeys.has(k)) unorderedKeys.add(k);
       });
     });
+    const allVarKeys = sortKeysByFlowOrder(
+      [...unorderedKeys],
+      [...headerMap.keys()],
+    );
 
     // Use the V3 header structure for this brand-new spreadsheet (no
     // legacy layout to preserve): Name + Phone Number + Submission Time +
     // answer vars. Flow Name / User ID are display-only and omitted.
     const nameHeaderCell = ["Name"];
-    const answerHeaders = Array.from(allVarKeys);
+    const answerHeaders = Array.from(allVarKeys, headerFor);
     const headers = [...nameHeaderCell, ...STANDARD_COLUMNS_V3, ...answerHeaders];
 
     const rows = droppedRuns.map((run: any) => {

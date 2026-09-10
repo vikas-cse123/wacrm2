@@ -27,12 +27,14 @@ import { deriveFlowColumns, type FlowNodeLite } from "./sheet-columns";
 export const INCOMPLETE_RUN_ID_HEADER = "Flow Run ID";
 
 /**
- * Current incomplete-sheet layout version. V4 drops the fixed
- * WhatsApp/contact-profile Name cell (the flow-collected Name answer is
- * unaffected — it travels as a normal dynamic answer column). V2/V3
- * sheets keep their frozen leading Name cell.
+ * Current incomplete-sheet layout version. V5 keeps the V4 slim columns
+ * (no Flow Name / User ID) but restores a fixed leading contact column
+ * under an unambiguous label. V2/V3/V4 sheets keep their frozen layouts.
  */
-export const CURRENT_INCOMPLETE_SCHEMA_VERSION = 4;
+export const CURRENT_INCOMPLETE_SCHEMA_VERSION = 5;
+
+/** Fixed leading header for the contact-profile name cell (V5+ only). */
+export const WHATSAPP_NAME_HEADER = "WhatsApp Name";
 
 /** Flatten a stored var into a single cell value for a spreadsheet. */
 export function stringifySheetCell(v: unknown): string {
@@ -56,14 +58,25 @@ export function completedAnswerOffset(
   return (hasNameCell ? 1 : 0) + completedStandardLength(schemaVersion);
 }
 
-/** 0-based offset where dynamic answer columns start on an incomplete sheet. V4 has no leading Name cell; V2/V3 always do. */
+/** 0-based offset where dynamic answer columns start on an incomplete sheet. Only V4 has no leading fixed cell (V5+ restores one, V2/V3 never lost it). */
 export function incompleteBaseOffset(
   schemaVersion: number | null | undefined,
 ): number {
   const v = schemaVersion ?? 2;
   return (
-    (v >= 4 ? 0 : 1) + standardColumnsForSchemaVersion(schemaVersion).length
+    (v >= 4 && v < 5 ? 0 : 1) +
+    standardColumnsForSchemaVersion(schemaVersion).length
   );
+}
+
+/** Fixed leading header cell for an incomplete sheet: V5+ "WhatsApp Name", V4 none, V2/V3 legacy "Name". */
+export function incompleteLeadingHeader(
+  schemaVersion: number | null | undefined,
+): string | null {
+  const v = schemaVersion ?? 2;
+  if (v >= 5) return WHATSAPP_NAME_HEADER;
+  if (v >= 4) return null;
+  return "Name";
 }
 
 /** 0-based index of the hidden Flow Run ID column for a given answer-column list. Always last. */
@@ -131,7 +144,8 @@ export interface IncompleteLayoutInput {
    * nullish means v2 (the layout every existing incomplete sheet was
    * written with — frozen). 3 selects the slim V3 layout (no Flow Name /
    * User ID, leading contact Name kept); 4 additionally drops the fixed
-   * leading contact-Name cell (flow-collected Name answers are unaffected).
+   * leading contact-Name cell; 5 restores it as "WhatsApp Name"
+   * (flow-collected Name answers are unaffected in all versions).
    */
   schemaVersion?: number | null;
   contactName: string;
@@ -155,20 +169,23 @@ export interface IncompleteLayoutInput {
 }
 
 /**
- * Header row for an incomplete sheet — Run ID always last. V4 omits the
- * fixed leading contact-Name cell (and Flow Name / User ID); V2/V3 keep
- * their frozen layouts byte-for-byte.
+ * Header row for an incomplete sheet — Run ID always last. Answer labels
+ * come from `answerHeaders` (human-readable, resolved by the caller via
+ * headerByKey); when omitted they default to the raw keys (legacy
+ * behavior for already-frozen sheets). Leading fixed cell: V5+
+ * "WhatsApp Name", V4 none, V2/V3 legacy "Name".
  */
 export function buildIncompleteHeader(
   schemaVersion: number | null | undefined,
   answerColumns: readonly string[],
+  answerHeaders: readonly string[] = answerColumns,
 ): string[] {
-  const v = schemaVersion ?? 2;
-  const nameCell = v >= 4 ? [] : ["Name"];
+  const leading = incompleteLeadingHeader(schemaVersion);
+  const nameCell = leading ? [leading] : [];
   return [
     ...nameCell,
     ...standardColumnsForSchemaVersion(schemaVersion ?? 2),
-    ...answerColumns,
+    ...answerHeaders,
     INCOMPLETE_RUN_ID_HEADER,
   ];
 }
@@ -177,8 +194,9 @@ export function buildIncompleteHeader(
 export function buildIncompleteRow(
   input: IncompleteLayoutInput,
 ): (string | number)[] {
+  const leading = incompleteLeadingHeader(input.schemaVersion);
+  const nameCell = leading ? [input.contactName] : [];
   const v = input.schemaVersion ?? 2;
-  const nameCell = v >= 4 ? [] : [input.contactName];
   const standardValues =
     v >= 3
       ? [input.contactPhone, input.submissionTime]

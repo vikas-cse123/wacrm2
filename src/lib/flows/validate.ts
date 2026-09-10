@@ -915,7 +915,12 @@ export function reachableFromEntry(
   return visited;
 }
 
-function outgoingEdges(node: NodeInput): string[] {
+/**
+ * Successor node keys in deterministic config order (single next,
+ * condition true→false, buttons/rows in array order). Exported for
+ * sheet column ordering; validation behavior unchanged.
+ */
+export function outgoingEdges(node: NodeInput): string[] {
   switch (node.node_type) {
     case "start":
     case "send_message":

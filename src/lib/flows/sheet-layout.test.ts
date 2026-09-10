@@ -29,11 +29,13 @@ import {
   CURRENT_INCOMPLETE_SCHEMA_VERSION,
   INCOMPLETE_RUN_ID_HEADER,
   incompleteBaseOffset,
+  incompleteLeadingHeader,
   incompleteRunIdColumnIndex,
   partitionSheetKeys,
   resolveFreshLinkSchemaVersion,
   type CompletedLayoutInput,
   type IncompleteLayoutInput,
+  WHATSAPP_NAME_HEADER,
 } from "./sheet-layout";
 
 function completedInput(
@@ -441,8 +443,8 @@ describe("V4 incomplete layout (no fixed contact Name)", () => {
     };
   }
 
-  it("declares version 4 as the current incomplete version", () => {
-    expect(CURRENT_INCOMPLETE_SCHEMA_VERSION).toBe(4);
+  it("declares version 5 as the current incomplete version", () => {
+    expect(CURRENT_INCOMPLETE_SCHEMA_VERSION).toBe(5);
   });
 
   it("headers are Phone | Time | answers | Flow Run ID (no leading Name)", () => {
@@ -672,5 +674,81 @@ describe("sheet_include partitioning (incomplete-sheets contract)", () => {
     const newKeys = rawNew.filter((k) => !disabledKeys.has(k));
     expect(newKeys).toEqual(["rooms"]);
     expect([...stored, ...newKeys]).toEqual(["name", "rooms"]);
+  });
+});
+
+describe("V5 incomplete layout (WhatsApp Name leading)", () => {
+  function incompleteV5(
+    overrides: Partial<IncompleteLayoutInput> = {},
+  ): IncompleteLayoutInput {
+    return {
+      schemaVersion: 5,
+      contactName: "WA Profile",
+      contactPhone: "+91",
+      flowName: "F",
+      submissionTime: "t",
+      contactId: "c-1",
+      vars: { name: "Asha", rooms: "2" },
+      answerColumns: ["name", "rooms"],
+      runId: "run-1",
+      ...overrides,
+    };
+  }
+
+  it("headers are WhatsApp Name | Phone | Time | answers | Flow Run ID", () => {
+    expect(WHATSAPP_NAME_HEADER).toBe("WhatsApp Name");
+    expect(incompleteLeadingHeader(5)).toBe("WhatsApp Name");
+    expect(incompleteLeadingHeader(4)).toBeNull();
+    expect(incompleteLeadingHeader(3)).toBe("Name");
+    expect(incompleteLeadingHeader(2)).toBe("Name");
+    expect(
+      buildIncompleteHeader(5, ["name", "rooms"], ["Name", "Rooms?"]),
+    ).toEqual([
+      "WhatsApp Name",
+      "Phone Number",
+      "Submission Time",
+      "Name",
+      "Rooms?",
+      "Flow Run ID",
+    ]);
+  });
+
+  it("rows carry the contact value first and match header width", () => {
+    const header = buildIncompleteHeader(5, ["name"], ["Name"]);
+    const row = buildIncompleteRow(incompleteV5({ answerColumns: ["name"] }));
+    expect(row[0]).toBe("WA Profile");
+    expect(row).toHaveLength(header.length);
+    expect(row.slice(1)).toEqual(["+91", "t", "Asha", "run-1"]);
+  });
+
+  it("flow-collected Name stays a normal answer column", () => {
+    const row = buildIncompleteRow(incompleteV5()).map(String);
+    expect(row).toContain("Asha");
+    expect(row.filter((c) => c === "WA Profile")).toHaveLength(1);
+  });
+
+  it("V2/V3/V4 leading labels are frozen", () => {
+    expect(buildIncompleteHeader(2, [])[0]).toBe("Name");
+    expect(buildIncompleteHeader(3, [])[0]).toBe("Name");
+    expect(buildIncompleteHeader(4, [])).toEqual([
+      "Phone Number",
+      "Submission Time",
+      "Flow Run ID",
+    ]);
+  });
+
+  it("answer labels default to raw keys (legacy) unless mapped", () => {
+    expect(buildIncompleteHeader(5, ["send_buttons"])).toEqual([
+      "WhatsApp Name",
+      "Phone Number",
+      "Submission Time",
+      "send_buttons",
+      "Flow Run ID",
+    ]);
+  });
+
+  it("Run ID stays last with V5 offsets", () => {
+    expect(incompleteBaseOffset(5)).toBe(3);
+    expect(incompleteRunIdColumnIndex(5, ["a", "b"])).toBe(5);
   });
 });
