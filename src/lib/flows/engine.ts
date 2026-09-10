@@ -36,11 +36,14 @@ import { supabaseAdmin } from "./admin-client";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRow,
-  STANDARD_COLUMNS_V1,
-  STANDARD_COLUMNS_V2,
   formatSubmissionTimeIST,
 } from "@/lib/google/sheets";
 import { resolveFlowSheetColumns } from "./sheet-sync";
+import {
+  buildCompletedHeader,
+  buildCompletedRow,
+  stringifySheetCell,
+} from "./sheet-layout";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -154,18 +157,16 @@ export function isTerminal(node_type: string): boolean {
   return node_type === "handoff" || node_type === "end";
 }
 
-/** Flatten a stored var into a single cell value for a spreadsheet. */
-function stringifyVar(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
-}
-
 /**
  * Append the run's collected answers as a new row on the flow's linked
  * Google Sheet. Writes the header row on first sync. Every call appends
  * one row — existing rows are never touched, so repeat completions from
  * the same contact each get their own row.
+ *
+ * Layout is versioned per sheet (see sheet-layout.ts): V1/V2 sheets keep
+ * their frozen Flow Name / User ID columns; V3 sheets (new links) omit
+ * those display-only cells. Header and row are built by the same
+ * versioned builder so they always stay position-aligned.
  *
  * Throws on failure (after durably logging the row to
  * google_sheets_sync_failures) so the caller can record the error; the
@@ -184,36 +185,35 @@ async function syncRunToGoogleSheet(
   if (!resolved) return "not_linked"; // no sheet linked — not an error.
   const { sheet, nameKey, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
+  // V3 sheets have no Flow Name cell, so the flows.name lookup is skipped
+  // for them. contact_id is still read (contact lookup + failure payload),
+  // only its exported User ID *cell* is gone.
+  const isV3 = (sheet.schema_version ?? 1) >= 3;
   const [{ data: contact }, { data: flow }] = await Promise.all([
     run.contact_id
       ? db.from("contacts").select("phone").eq("id", run.contact_id).maybeSingle()
       : Promise.resolve({ data: null as { phone?: string } | null }),
-    db.from("flows").select("name").eq("id", run.flow_id).maybeSingle(),
+    isV3
+      ? Promise.resolve({ data: null as { name?: string } | null })
+      : db.from("flows").select("name").eq("id", run.flow_id).maybeSingle(),
   ]);
 
-  const promoteName = (sheet.schema_version ?? 1) >= 2;
-  const nameHeaderCell = nameKey ? [resolved.nameHeader ?? "Name"] : [];
-  const nameValueCell = nameKey ? [stringifyVar(run.vars?.[nameKey])] : [];
-
-  // v2's standard columns don't include Name (promoted separately above,
-  // or omitted entirely when the flow captures none). v1 (legacy) sheets
-  // still have a "Name" header written on-sheet from before this change —
-  // its value source (WhatsApp profile name) is gone per the "remove
-  // WhatsApp name" change, so that cell is simply left blank going
-  // forward; the column stays to keep every later cell aligned under its
-  // original header.
-  const standardColumns = promoteName ? STANDARD_COLUMNS_V2 : STANDARD_COLUMNS_V1;
-  const standardValues = promoteName
-    ? [contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(), run.contact_id ?? ""]
-    : ["", contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(), run.contact_id ?? ""];
-
-  const headers = [...nameHeaderCell, ...standardColumns, ...answerHeaders];
-  const values = [
-    ...nameValueCell,
-    ...standardValues,
-    // Only write to active columns; leave inactive ones (sheet_include: false) empty.
-    ...answerColumns.map((k) => activeKeys.has(k) ? stringifyVar(run.vars?.[k]) : ""),
-  ];
+  const nameHeader = nameKey ? (resolved.nameHeader ?? "Name") : null;
+  const layout = {
+    schemaVersion: sheet.schema_version ?? 1,
+    nameHeader,
+    nameValue: nameKey ? stringifySheetCell(run.vars?.[nameKey]) : null,
+    contactPhone: contact?.phone ?? "",
+    flowName: flow?.name ?? "",
+    submissionTime: formatSubmissionTimeIST(),
+    contactId: run.contact_id ?? "",
+    answerKeys: answerColumns,
+    answerHeaders,
+    activeKeys,
+    vars: (run.vars ?? {}) as Record<string, unknown>,
+  };
+  const headers = buildCompletedHeader(layout);
+  const values = buildCompletedRow(layout);
 
   try {
     if (!token) throw new Error("no_google_connection");

@@ -107,7 +107,7 @@ const navItems: NavItem[] = [
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
-  { href: "/data-export", label: "Data Export", icon: Sheet },
+  { href: "/data-export", label: "Google Sheets", icon: Sheet },
   { href: "/chat-assignment", label: "Chat Assignment", icon: Route },
 ];
 

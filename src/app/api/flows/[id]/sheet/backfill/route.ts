@@ -15,17 +15,14 @@ import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRows,
-  STANDARD_COLUMNS_V1,
-  STANDARD_COLUMNS_V2,
   formatSubmissionTimeIST,
 } from "@/lib/google/sheets";
 import { resolveFlowSheetColumns } from "@/lib/flows/sheet-sync";
-
-function stringifyVar(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
-}
+import {
+  buildCompletedHeader,
+  buildCompletedRow,
+  stringifySheetCell,
+} from "@/lib/flows/sheet-layout";
 
 function parseIsoDate(value: unknown): string | null {
   if (typeof value !== "string" || !value) return null;
@@ -102,35 +99,56 @@ export async function POST(
       }
     }
 
-    const { data: flow } = await ctx.supabase
-      .from("flows")
-      .select("name")
-      .eq("id", id)
-      .maybeSingle();
+    // Versioned layout (see sheet-layout.ts): V1/V2 sheets keep their
+    // frozen Flow Name / User ID columns; V3 sheets omit them. Header and
+    // rows share one builder so positions always align. V3 needs no
+    // flows.name lookup (no Flow Name cell); contact_id is still read for
+    // row identity, only its exported User ID cell is gone.
+    const isV3 = (sheet.schema_version ?? 1) >= 3;
+    const { data: flow } = isV3
+      ? { data: null as { name?: string } | null }
+      : await ctx.supabase
+        .from("flows")
+        .select("name")
+        .eq("id", id)
+        .maybeSingle();
 
-    const promoteName = (sheet.schema_version ?? 1) >= 2;
-    const standardColumns = promoteName ? STANDARD_COLUMNS_V2 : STANDARD_COLUMNS_V1;
-    const nameHeaderCell = nameKey ? [nameHeader ?? "Name"] : [];
+    const resolvedNameHeader = nameKey ? (nameHeader ?? "Name") : null;
 
     const rows: (string | number)[][] = runs.map((run) => {
       const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
-      const nameValueCell = nameKey ? [stringifyVar(vars[nameKey])] : [];
-      const standardValues = promoteName
-        ? [contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(run.ended_at ?? run.started_at), run.contact_id ?? ""]
-        : ["", contact?.phone ?? "", flow?.name ?? "", formatSubmissionTimeIST(run.ended_at ?? run.started_at), run.contact_id ?? ""];
-      return [
-        ...nameValueCell,
-        ...standardValues,
-        // Only write to active columns; leave inactive ones (sheet_include: false) empty.
-        ...answerColumns.map((k) => activeKeys.has(k) ? stringifyVar(vars[k]) : ""),
-      ];
+      return buildCompletedRow({
+        schemaVersion: sheet.schema_version ?? 1,
+        nameHeader: resolvedNameHeader,
+        nameValue: nameKey ? stringifySheetCell(vars[nameKey]) : null,
+        contactPhone: contact?.phone ?? "",
+        flowName: flow?.name ?? "",
+        submissionTime: formatSubmissionTimeIST(run.ended_at ?? run.started_at),
+        contactId: run.contact_id ?? "",
+        answerKeys: answerColumns,
+        answerHeaders,
+        activeKeys,
+        vars,
+      });
     });
 
     // Write the header row first if the sheet has never been synced.
     const toWrite = sheet.header_written
       ? rows
-      : [[...nameHeaderCell, ...standardColumns, ...answerHeaders], ...rows];
+      : [buildCompletedHeader({
+        schemaVersion: sheet.schema_version ?? 1,
+        nameHeader: resolvedNameHeader,
+        nameValue: null,
+        contactPhone: "",
+        flowName: "",
+        submissionTime: "",
+        contactId: "",
+        answerKeys: answerColumns,
+        answerHeaders,
+        activeKeys,
+        vars: {},
+      }), ...rows];
 
     await appendRows(token, sheet.spreadsheet_id, sheet.sheet_tab, toWrite);
 

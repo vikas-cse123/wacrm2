@@ -4,15 +4,11 @@ import {
   createSpreadsheet,
   appendRows,
   formatSubmissionTimeIST,
-  STANDARD_COLUMNS_V2,
+  STANDARD_COLUMNS_V3,
 } from "@/lib/google/sheets";
+import { stringifySheetCell, partitionSheetKeys } from "@/lib/flows/sheet-layout";
+import type { FlowNodeLite } from "@/lib/flows/sheet-columns";
 import { NextResponse } from "next/server";
-
-function stringifyVar(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
-}
 
 export async function POST(
   request: Request,
@@ -80,16 +76,32 @@ export async function POST(
     const title = `${flow.name} — Dropped Off Users`;
     const meta = await createSpreadsheet(token, title);
 
-    // Build rows with exact same headers as Google Sheets: Name + Standard + Answer vars
+    // Build rows with the V3 headers (Name + Phone + Time + answer vars).
+    // Honor "Include in Google Sheet" like every other writer: keys whose
+    // nodes are switched off never become columns here. Unknown keys
+    // (deleted nodes, non-question captures) are still exported, matching
+    // the conservative incomplete-sheet contract.
+    const { data: sheetNodes } = await ctx.supabase
+      .from("flow_nodes")
+      .select("node_key, node_type, config")
+      .eq("flow_id", flowId)
+      .order("created_at", { ascending: true });
+    const { disabledKeys } = partitionSheetKeys(
+      (sheetNodes ?? []) as FlowNodeLite[],
+    );
     const allVarKeys = new Set<string>();
     droppedRuns.forEach((run: any) => {
-      Object.keys(run.vars ?? {}).forEach((k) => allVarKeys.add(k));
+      Object.keys(run.vars ?? {}).forEach((k) => {
+        if (!disabledKeys.has(k)) allVarKeys.add(k);
+      });
     });
 
-    // Use same header structure as Google Sheets sync
+    // Use the V3 header structure for this brand-new spreadsheet (no
+    // legacy layout to preserve): Name + Phone Number + Submission Time +
+    // answer vars. Flow Name / User ID are display-only and omitted.
     const nameHeaderCell = ["Name"];
     const answerHeaders = Array.from(allVarKeys);
-    const headers = [...nameHeaderCell, ...STANDARD_COLUMNS_V2, ...answerHeaders];
+    const headers = [...nameHeaderCell, ...STANDARD_COLUMNS_V3, ...answerHeaders];
 
     const rows = droppedRuns.map((run: any) => {
       const contact = run.contact_id
@@ -99,11 +111,9 @@ export async function POST(
       return [
         contact?.name ?? "",
         contact?.phone ?? "",
-        flow.name,
         formatSubmissionTimeIST(run.ended_at ?? run.started_at),
-        run.contact_id ?? "",
         ...Array.from(allVarKeys).map((k) =>
-          stringifyVar(vars[k]),
+          stringifySheetCell(vars[k]),
         ),
       ];
     });

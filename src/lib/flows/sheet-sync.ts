@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { deriveFlowColumns, type FlowNodeLite } from "./sheet-columns";
+import { completedAnswerOffset } from "./sheet-layout";
 import { updateHeaderCells } from "@/lib/google/sheets";
 
 export interface FlowSheetConfigRow {
@@ -154,11 +155,14 @@ export async function resolveFlowSheetColumns(
   }
 
   // Push header-cell writes for the live sheet: appended columns at the
-  // end, renamed columns in place at their existing position.
+  // end, renamed columns in place at their existing position. Offsets are
+  // derived from the sheet's OWN stored version so V1/V2/V3 sheets each
+  // keep their frozen layout — never hardcoded.
   if (sheet.header_written && accessToken) {
-    const standardLen = promoteName ? 4 : 5; // STANDARD_COLUMNS_V2 / V1
-    const nameOffset = nameKey ? 1 : 0;
-    const baseOffset = nameOffset + standardLen;
+    const baseOffset = completedAnswerOffset(
+      sheet.schema_version ?? 1,
+      !!nameKey,
+    );
 
     const cellUpdates: Array<{ colIndex: number; value: string }> = [];
     for (const i of renamedIndices) {

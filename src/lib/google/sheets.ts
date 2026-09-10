@@ -12,13 +12,18 @@ const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
  *
  * v1 (legacy — sheets linked before the self-healing columns change):
  *   Name (WhatsApp profile name), Phone Number, Flow Name, Submission
- *   Time, User ID.
+ *   Time, User ID. Frozen — existing v1 sheets keep this exact layout.
  *
- * v2 (current — any sheet linked/relinked from now on): no automatic
- * WhatsApp-profile name column. If the flow itself captures a name
- * (a question node whose var_key or column name is "Name"), that
- * captured value is promoted to the first column instead; otherwise
- * there's no Name column at all.
+ * v2 (legacy — sheets linked before the V3 slim-columns change):
+ *   Phone Number, Flow Name, Submission Time, User ID, with the
+ *   flow-captured name (if any) promoted to a leading Name column.
+ *   Frozen — existing v2 sheets keep this exact layout.
+ *
+ * v3 (current — any sheet linked from now on): Phone Number and
+ * Submission Time only. "Flow Name" (a flows.name snapshot) and
+ * "User ID" (a contacts.id snapshot) were display-only copies — never
+ * lifecycle keys — so new sheets omit them. Existing V1/V2 sheets are
+ * NEVER upgraded; writers branch on the stored schema_version.
  */
 export const STANDARD_COLUMNS_V1 = [
   "Name",
@@ -35,10 +40,29 @@ export const STANDARD_COLUMNS_V2 = [
   "User ID",
 ] as const;
 
+export const STANDARD_COLUMNS_V3 = [
+  "Phone Number",
+  "Submission Time",
+] as const;
+
 /** @deprecated use STANDARD_COLUMNS_V1 / STANDARD_COLUMNS_V2 */
 export const STANDARD_COLUMNS = STANDARD_COLUMNS_V1;
 
-export const CURRENT_SHEET_SCHEMA_VERSION = 2;
+export const CURRENT_SHEET_SCHEMA_VERSION = 3;
+
+/**
+ * Standard leading columns for a stored schema version. Unknown/nullish
+ * versions fall back to v1 (the original layout), matching the
+ * `?? 1` convention at every writer. Never reorders or mutates V1/V2.
+ */
+export function standardColumnsForSchemaVersion(
+  version: number | null | undefined,
+): readonly string[] {
+  const v = version ?? 1;
+  if (v >= 3) return STANDARD_COLUMNS_V3;
+  if (v === 2) return STANDARD_COLUMNS_V2;
+  return STANDARD_COLUMNS_V1;
+}
 
 /**
  * Format a timestamp as India Standard Time for the "Submission Time"
