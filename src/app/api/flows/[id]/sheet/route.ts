@@ -23,6 +23,7 @@ import {
   CURRENT_SHEET_SCHEMA_VERSION,
 } from "@/lib/google/sheets";
 import { deriveFlowColumns, type FlowNodeLite } from "@/lib/flows/sheet-columns";
+import { resolveFreshLinkSchemaVersion } from "@/lib/flows/sheet-layout";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
@@ -110,14 +111,16 @@ async function linkSheet(
   const sameSpreadsheet = existing?.spreadsheet_id === meta.spreadsheetId;
   const headerWritten = sameSpreadsheet ? (existing?.header_written ?? false) : false;
   // A genuinely fresh header (new spreadsheet, or one never synced yet)
-  // adopts the current schema (v2: no WhatsApp-name column, flow-captured
-  // name promoted first). Relinking the SAME spreadsheet that already has
-  // a header keeps whatever version it was written under — the on-sheet
-  // header text can't be silently reflowed.
-  const isFreshHeader = !sameSpreadsheet || !headerWritten;
-  const schemaVersion = isFreshHeader
-    ? CURRENT_SHEET_SCHEMA_VERSION
-    : (existing?.schema_version ?? 1);
+  // adopts the current schema (v3: Phone Number + Submission Time only,
+  // flow-captured name promoted first when present). Relinking the SAME
+  // spreadsheet that already has a header keeps whatever version it was
+  // written under (v1/v2 frozen with their Flow Name / User ID columns) —
+  // the on-sheet header text can't be silently reflowed.
+  const schemaVersion = resolveFreshLinkSchemaVersion(
+    existing,
+    meta.spreadsheetId,
+    CURRENT_SHEET_SCHEMA_VERSION,
+  );
 
   const derived = await deriveColumnsForFlow(ctx.supabase, flowId);
   const promoteName = schemaVersion >= 2;

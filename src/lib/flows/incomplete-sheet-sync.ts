@@ -27,13 +27,21 @@ import {
   formatSubmissionTimeIST,
   insertSheetColumns,
   setSheetColumnHidden,
-  STANDARD_COLUMNS_V2,
   updateHeaderCells,
 } from "@/lib/google/sheets";
+import {
+  buildIncompleteHeader,
+  buildIncompleteRow,
+  collectNewAnswerKeys,
+  INCOMPLETE_RUN_ID_HEADER,
+  incompleteRunIdColumnIndex,
+  partitionSheetKeys,
+} from "./sheet-layout";
+import type { FlowNodeLite } from "./sheet-columns";
 
 /** Terminal statuses that count as "incomplete" for the live sheet. */
 export const INCOMPLETE_STATUSES = ["timed_out", "failed", "handed_off"];
-export const INCOMPLETE_RUN_ID_HEADER = "Flow Run ID";
+export { INCOMPLETE_RUN_ID_HEADER };
 export const INCOMPLETE_RUN_ID_MARKER = "incomplete_sheet_row_key_written";
 
 export interface IncompleteSheetConfigRow {
@@ -45,12 +53,16 @@ export interface IncompleteSheetConfigRow {
   sheet_tab: string;
   answer_columns: string[];
   header_written: boolean;
-}
-
-function stringifyVar(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
+  /**
+   * Sheet layout version. This table predates versioning, so configs
+   * written before the V3 change carry no value and default to 2 (the
+   * layout every existing incomplete sheet was written with — frozen).
+   * Brand-new sheets are stamped with CURRENT_INCOMPLETE_SCHEMA_VERSION
+   * (see the incomplete-sheet enable route); only an explicit 3 selects
+   * the slim V3 layout (no Flow Name / User ID), and only an explicit 4
+   * additionally drops the fixed leading contact-Name cell.
+   */
+  schema_version?: number | null;
 }
 
 interface RunRow {
@@ -86,11 +98,22 @@ export async function syncIncompleteRunsForFlow(
 
   if (!runs || runs.length === 0) return 0;
 
-  const { data: flow } = await db
-    .from("flows")
-    .select("name")
-    .eq("id", config.flow_id)
-    .maybeSingle();
+  // Versioned layout (see sheet-layout.ts): configs without a stored
+  // version are pre-V3 sheets frozen on v2 (contact Name + Phone/Flow/
+  // Time/UserID + answers + Run ID). 3 selects the slim V3 layout (no
+  // Flow Name / User ID, leading contact Name kept); 4 additionally drops
+  // the fixed leading contact-Name cell. contact_id stays in application
+  // logic (contact lookup); only its exported User ID *cell* is gone.
+  const schemaVersion = config.schema_version ?? 2;
+  const noFlowNameCell = schemaVersion >= 3;
+
+  const { data: flow } = noFlowNameCell
+    ? { data: null as { name?: string } | null }
+    : await db
+      .from("flows")
+      .select("name")
+      .eq("id", config.flow_id)
+      .maybeSingle();
 
   const contactIds = [
     ...new Set(
@@ -110,31 +133,35 @@ export async function syncIncompleteRunsForFlow(
 
   // Column healing — append any var keys these runs carry that the
   // stored header doesn't have yet. Existing positions never move.
+  // Honor "Include in Google Sheet" like the completed path does: keys
+  // whose nodes are switched off are neither added as new columns nor
+  // given values in future rows (stored ones keep their frozen positions
+  // but go blank, mirroring completed-sheet activeKeys). Unknown keys
+  // (deleted nodes, non-question captures) keep current behavior.
   const storedKeys = config.answer_columns ?? [];
-  const storedKeySet = new Set(storedKeys);
-  const newKeys: string[] = [];
-  for (const run of runs as RunRow[]) {
-    for (const k of Object.keys(run.vars ?? {})) {
-      if (!storedKeySet.has(k)) {
-        storedKeySet.add(k);
-        newKeys.push(k);
-      }
-    }
-  }
+  const { data: sheetNodes } = await db
+    .from("flow_nodes")
+    .select("node_key, node_type, config")
+    .eq("flow_id", config.flow_id)
+    .order("created_at", { ascending: true });
+  const { disabledKeys } = partitionSheetKeys(
+    (sheetNodes ?? []) as FlowNodeLite[],
+  );
+  const { newKeys: rawNewKeys } = collectNewAnswerKeys(
+    storedKeys,
+    (runs as RunRow[]).map((run) => run.vars),
+  );
+  const newKeys = rawNewKeys.filter((k) => !disabledKeys.has(k));
   const answerColumns = [...storedKeys, ...newKeys];
 
   // The hidden run-id column is a stable row key. A contact may abandon the
   // same flow more than once, so phone/contact id alone cannot safely identify
-  // which incomplete row to remove after a later completion.
-  const headers = [
-    "Name",
-    ...STANDARD_COLUMNS_V2,
-    ...answerColumns,
-    INCOMPLETE_RUN_ID_HEADER,
-  ];
-  const baseOffset = 1 + STANDARD_COLUMNS_V2.length;
-  const previousRunIdCol = baseOffset + storedKeys.length;
-  const runIdCol = baseOffset + answerColumns.length;
+  // which incomplete row to remove after a later completion. Offsets derive
+  // from this sheet's OWN version so V2 sheets keep their frozen positions
+  // and V3 sheets compute their slim ones — Run ID stays last either way.
+  const headers = buildIncompleteHeader(schemaVersion, answerColumns);
+  const previousRunIdCol = incompleteRunIdColumnIndex(schemaVersion, storedKeys);
+  const runIdCol = incompleteRunIdColumnIndex(schemaVersion, answerColumns);
 
   if (config.header_written) {
     // Upgrade already-created sheets in place. Put the stable key after the
@@ -177,16 +204,18 @@ export async function syncIncompleteRunsForFlow(
 
   const rows: (string | number)[][] = (runs as RunRow[]).map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
-    const vars = (run.vars ?? {}) as Record<string, unknown>;
-    return [
-      contact?.name ?? "",
-      contact?.phone ?? "",
-      flow?.name ?? "",
-      formatSubmissionTimeIST(run.ended_at ?? run.started_at),
-      run.contact_id ?? "",
-      ...answerColumns.map((k) => stringifyVar(vars[k])),
-      run.id,
-    ];
+    return buildIncompleteRow({
+      schemaVersion,
+      contactName: contact?.name ?? "",
+      contactPhone: contact?.phone ?? "",
+      flowName: flow?.name ?? "",
+      submissionTime: formatSubmissionTimeIST(run.ended_at ?? run.started_at),
+      contactId: run.contact_id ?? "",
+      vars: (run.vars ?? {}) as Record<string, unknown>,
+      answerColumns,
+      runId: run.id,
+      inactiveKeys: disabledKeys,
+    });
   });
 
   // This marker lets cleanup distinguish a new keyed row from a legacy row
@@ -224,6 +253,9 @@ export async function syncIncompleteRunsForFlow(
   // Persist header/column state, then stamp the watermark. If the stamp
   // failed after a successful append, the next sweep would re-append
   // those rows — accepted trade-off (duplicates over silent data loss).
+  // NOTE: schema_version is deliberately NOT written here — it is stamped
+  // once at creation (see the incomplete-sheet enable route) so a sheet's
+  // layout version can never drift mid-life.
   await db
     .from("flow_incomplete_sheet_configs")
     .update({

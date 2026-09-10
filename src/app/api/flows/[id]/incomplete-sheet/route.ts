@@ -18,6 +18,7 @@ import {
   syncIncompleteRunsForFlow,
   type IncompleteSheetConfigRow,
 } from "@/lib/flows/incomplete-sheet-sync";
+import { CURRENT_INCOMPLETE_SCHEMA_VERSION } from "@/lib/flows/sheet-layout";
 
 export async function POST(
   request: Request,
@@ -90,13 +91,35 @@ export async function POST(
       throw new Error(insertErr?.message ?? "Failed to save sheet config");
     }
 
+    // Stamp brand-new sheets with the current incomplete layout (V4:
+    // slim columns without Flow Name / User ID and without the fixed
+    // WhatsApp/contact-profile Name cell; flow-collected Name answers are
+    // unaffected). Best-effort: DBs predating the schema_version column
+    // reject the update, in which case the sheet stays on the frozen v2
+    // layout — the first sync below is then explicitly told which version
+    // was stamped so its header and rows stay consistent either way.
+    // Existing sheets are never touched (the `existing` early-return above
+    // reuses them).
+    let incompleteSchemaVersion = 2;
+    const { error: versionErr } = await ctx.supabase
+      .from("flow_incomplete_sheet_configs")
+      .update({ schema_version: CURRENT_INCOMPLETE_SCHEMA_VERSION })
+      .eq("flow_id", flowId);
+    if (!versionErr) {
+      incompleteSchemaVersion = 3;
+    } else {
+      console.warn(
+        `[incomplete-sheet] schema_version stamp skipped (pre-migration DB?) — new sheet stays v2: ${versionErr.message}`,
+      );
+    }
+
     // Initial backfill — same code path the cron uses, so historical
     // rows and future live rows share one format. Admin client: the
     // sweep stamps flow_runs.incomplete_synced_at, which end-user RLS
     // doesn't allow.
     const imported = await syncIncompleteRunsForFlow(
       supabaseAdmin(),
-      config,
+      { ...config, schema_version: incompleteSchemaVersion },
       token,
       window,
     );

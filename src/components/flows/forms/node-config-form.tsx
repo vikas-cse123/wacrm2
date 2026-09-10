@@ -1407,6 +1407,7 @@ interface SheetConfigRow {
   sheet_tab: string;
   answer_columns: string[];
   answer_headers?: string[];
+  schema_version?: number | null;
 }
 
 function GoogleSheetsSyncForm({
@@ -1618,7 +1619,9 @@ function GoogleSheetsSyncForm({
                 {sheet.spreadsheet_name || sheet.spreadsheet_id}
               </a>
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Columns: Phone Number, Flow Name, Submission Time, User ID
+                Columns: {(sheet.schema_version ?? 1) >= 3
+                  ? "Phone Number, Submission Time"
+                  : "Phone Number, Flow Name, Submission Time, User ID"}
                 {(sheet.answer_headers?.length
                   ? sheet.answer_headers
                   : sheet.answer_columns
