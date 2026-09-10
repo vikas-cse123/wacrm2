@@ -27,11 +27,13 @@ import { deriveFlowColumns, type FlowNodeLite } from "./sheet-columns";
 export const INCOMPLETE_RUN_ID_HEADER = "Flow Run ID";
 
 /**
- * Current incomplete-sheet layout version. V5 keeps the V4 slim columns
- * (no Flow Name / User ID) but restores a fixed leading contact column
- * under an unambiguous label. V2/V3/V4 sheets keep their frozen layouts.
+ * Current incomplete-sheet layout version. V6 keeps the V4/V5 slim
+ * columns (no Flow Name / User ID) but rearranges the name cells: the
+ * flow-collected Name answer is promoted first (mirroring completed
+ * sheets) and the contact-profile name moves after the answers as
+ * "WhatsApp Name". V2/V3/V4/V5 sheets keep their frozen layouts.
  */
-export const CURRENT_INCOMPLETE_SCHEMA_VERSION = 5;
+export const CURRENT_INCOMPLETE_SCHEMA_VERSION = 6;
 
 /** Fixed leading header for the contact-profile name cell (V5+ only). */
 export const WHATSAPP_NAME_HEADER = "WhatsApp Name";
@@ -58,33 +60,40 @@ export function completedAnswerOffset(
   return (hasNameCell ? 1 : 0) + completedStandardLength(schemaVersion);
 }
 
-/** 0-based offset where dynamic answer columns start on an incomplete sheet. Only V4 has no leading fixed cell (V5+ restores one, V2/V3 never lost it). */
+/** 0-based offset where dynamic answer columns start on an incomplete sheet. V6 has a conditional promoted slot (flag); V4 has none; V5/V2/V3 (and any other version) always have exactly one fixed leading cell. The flag is ignored below V6. */
 export function incompleteBaseOffset(
   schemaVersion: number | null | undefined,
+  hasPromotedCell = false,
 ): number {
   const v = schemaVersion ?? 2;
+  const leading = v >= 6 ? (hasPromotedCell ? 1 : 0) : v === 4 ? 0 : 1;
   return (
-    (v >= 4 && v < 5 ? 0 : 1) +
-    standardColumnsForSchemaVersion(schemaVersion).length
+    leading + standardColumnsForSchemaVersion(schemaVersion).length
   );
 }
 
-/** Fixed leading header cell for an incomplete sheet: V5+ "WhatsApp Name", V4 none, V2/V3 legacy "Name". */
+/** Fixed leading header cell for an incomplete sheet: V5 "WhatsApp Name", V4 none, V2/V3 legacy "Name". V6+ has no fixed leading cell — its first slot is the dynamically promoted flow answer (or omitted). */
 export function incompleteLeadingHeader(
   schemaVersion: number | null | undefined,
 ): string | null {
   const v = schemaVersion ?? 2;
+  if (v >= 6) return null;
   if (v >= 5) return WHATSAPP_NAME_HEADER;
   if (v >= 4) return null;
   return "Name";
 }
 
-/** 0-based index of the hidden Flow Run ID column for a given answer-column list. Always last. */
+/** 0-based index of the hidden Flow Run ID column for a given answer-column list. Always last (V6 counts its trailing WhatsApp cell). The flag is ignored below V6. */
 export function incompleteRunIdColumnIndex(
   schemaVersion: number | null | undefined,
   answerColumns: readonly string[],
+  hasPromotedCell = false,
 ): number {
-  return incompleteBaseOffset(schemaVersion) + answerColumns.length;
+  return (
+    incompleteBaseOffset(schemaVersion, hasPromotedCell) +
+    answerColumns.length +
+    ((schemaVersion ?? 2) >= 6 ? 1 : 0)
+  );
 }
 
 export interface CompletedLayoutInput {
@@ -144,8 +153,10 @@ export interface IncompleteLayoutInput {
    * nullish means v2 (the layout every existing incomplete sheet was
    * written with — frozen). 3 selects the slim V3 layout (no Flow Name /
    * User ID, leading contact Name kept); 4 additionally drops the fixed
-   * leading contact-Name cell; 5 restores it as "WhatsApp Name"
-   * (flow-collected Name answers are unaffected in all versions).
+   * leading contact-Name cell; 5 restores it as "WhatsApp Name"; 6
+   * promotes the flow-collected Name answer first and moves the contact
+   * name after the answers as "WhatsApp Name" (flow-collected Name
+   * answers are unaffected in all versions).
    */
   schemaVersion?: number | null;
   contactName: string;
@@ -160,6 +171,14 @@ export interface IncompleteLayoutInput {
   answerColumns: readonly string[];
   runId: string;
   /**
+   * V6 adopted promotion: the flow-collected Name answer rendered first.
+   * Presence (non-null header) also drives row width, so it must match
+   * the live sheet — the caller pins it via the header row, never by
+   * re-deriving mid-life. Ignored below V6.
+   */
+  promotedHeader?: string | null;
+  promotedValue?: string | null;
+  /**
    * Answer keys whose nodes are switched off via sheet_include=false.
    * Their columns keep their frozen positions (existing sheets) but all
    * future rows write "" there — the completed-sheet activeKeys contract.
@@ -172,20 +191,32 @@ export interface IncompleteLayoutInput {
  * Header row for an incomplete sheet — Run ID always last. Answer labels
  * come from `answerHeaders` (human-readable, resolved by the caller via
  * headerByKey); when omitted they default to the raw keys (legacy
- * behavior for already-frozen sheets). Leading fixed cell: V5+
- * "WhatsApp Name", V4 none, V2/V3 legacy "Name".
+ * behavior for already-frozen sheets). Leading slot: V6 promoted flow
+ * answer (or omitted), V5 "WhatsApp Name", V4 none, V2/V3 legacy "Name".
+ * V6 appends the fixed "WhatsApp Name" cell after the answers.
  */
 export function buildIncompleteHeader(
   schemaVersion: number | null | undefined,
   answerColumns: readonly string[],
   answerHeaders: readonly string[] = answerColumns,
+  promotedHeader: string | null = null,
 ): string[] {
-  const leading = incompleteLeadingHeader(schemaVersion);
-  const nameCell = leading ? [leading] : [];
+  const v = schemaVersion ?? 2;
+  const leading =
+    v >= 6
+      ? promotedHeader != null
+        ? [promotedHeader]
+        : []
+      : (() => {
+          const fixed = incompleteLeadingHeader(schemaVersion);
+          return fixed ? [fixed] : [];
+        })();
+  const trailing = v >= 6 ? [WHATSAPP_NAME_HEADER] : [];
   return [
-    ...nameCell,
+    ...leading,
     ...standardColumnsForSchemaVersion(schemaVersion ?? 2),
     ...answerHeaders,
+    ...trailing,
     INCOMPLETE_RUN_ID_HEADER,
   ];
 }
@@ -194,19 +225,28 @@ export function buildIncompleteHeader(
 export function buildIncompleteRow(
   input: IncompleteLayoutInput,
 ): (string | number)[] {
-  const leading = incompleteLeadingHeader(input.schemaVersion);
-  const nameCell = leading ? [input.contactName] : [];
   const v = input.schemaVersion ?? 2;
+  const leading =
+    v >= 6
+      ? input.promotedHeader != null
+        ? [input.promotedValue ?? ""]
+        : []
+      : (() => {
+          const fixed = incompleteLeadingHeader(input.schemaVersion);
+          return fixed ? [input.contactName] : [];
+        })();
   const standardValues =
     v >= 3
       ? [input.contactPhone, input.submissionTime]
       : [input.contactPhone, input.flowName, input.submissionTime, input.contactId];
+  const trailing = v >= 6 ? [input.contactName] : [];
   return [
-    ...nameCell,
+    ...leading,
     ...standardValues,
     ...input.answerColumns.map((k) =>
       input.inactiveKeys?.has(k) ? "" : stringifySheetCell(input.vars[k]),
     ),
+    ...trailing,
     input.runId,
   ];
 }

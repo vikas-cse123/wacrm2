@@ -443,8 +443,8 @@ describe("V4 incomplete layout (no fixed contact Name)", () => {
     };
   }
 
-  it("declares version 5 as the current incomplete version", () => {
-    expect(CURRENT_INCOMPLETE_SCHEMA_VERSION).toBe(5);
+  it("declares version 6 as the current incomplete version", () => {
+    expect(CURRENT_INCOMPLETE_SCHEMA_VERSION).toBe(6);
   });
 
   it("headers are Phone | Time | answers | Flow Run ID (no leading Name)", () => {
@@ -750,5 +750,103 @@ describe("V5 incomplete layout (WhatsApp Name leading)", () => {
   it("Run ID stays last with V5 offsets", () => {
     expect(incompleteBaseOffset(5)).toBe(3);
     expect(incompleteRunIdColumnIndex(5, ["a", "b"])).toBe(5);
+  });
+});
+
+describe("V6 incomplete layout (promoted flow Name, trailing WhatsApp)", () => {
+  function incompleteV6(
+    overrides: Partial<IncompleteLayoutInput> = {},
+  ): IncompleteLayoutInput {
+    return {
+      schemaVersion: 6,
+      contactName: "WA Profile",
+      contactPhone: "+91",
+      flowName: "F",
+      submissionTime: "t",
+      contactId: "c-1",
+      vars: { name: "Asha", rooms: "2" },
+      answerColumns: ["rooms"],
+      runId: "run-1",
+      promotedHeader: "Name",
+      promotedValue: "Asha",
+      ...overrides,
+    };
+  }
+
+  it("has no fixed leading cell in V6 (promotion is dynamic)", () => {
+    expect(incompleteLeadingHeader(6)).toBeNull();
+    expect(incompleteLeadingHeader(5)).toBe("WhatsApp Name");
+  });
+
+  it("headers are Name | Phone | Time | answers | WhatsApp Name | Run ID", () => {
+    expect(
+      buildIncompleteHeader(6, ["rooms"], ["No. of Rooms"], "Name"),
+    ).toEqual([
+      "Name",
+      "Phone Number",
+      "Submission Time",
+      "No. of Rooms",
+      "WhatsApp Name",
+      "Flow Run ID",
+    ]);
+  });
+
+  it("omits the first cell when nothing is promoted", () => {
+    expect(buildIncompleteHeader(6, ["rooms"], ["No. of Rooms"], null)).toEqual(
+      [
+        "Phone Number",
+        "Submission Time",
+        "No. of Rooms",
+        "WhatsApp Name",
+        "Flow Run ID",
+      ],
+    );
+    const row = buildIncompleteRow(
+      incompleteV6({ promotedHeader: null, promotedValue: null }),
+    );
+    expect(row[0]).toBe("+91");
+    // Header above has one answer → Phone + Time + answer + WhatsApp + RunID.
+    expect(row).toEqual(["+91", "t", "2", "WA Profile", "run-1"]);
+    expect(row).toHaveLength(5);
+  });
+
+  it("rows match headers with contact value in the trailing cell", () => {
+    const header = buildIncompleteHeader(6, ["rooms"], ["No. of Rooms"], "Name");
+    const row = buildIncompleteRow(incompleteV6());
+    expect(row).toEqual(["Asha", "+91", "t", "2", "WA Profile", "run-1"]);
+    expect(row).toHaveLength(header.length);
+  });
+
+  it("V6 offsets count the promoted and trailing cells", () => {
+    expect(incompleteBaseOffset(6, true)).toBe(3);
+    expect(incompleteBaseOffset(6, false)).toBe(2);
+    expect(incompleteRunIdColumnIndex(6, ["a"], true)).toBe(5);
+    expect(incompleteRunIdColumnIndex(6, ["a"], false)).toBe(4);
+    // Legacy versions ignore the flag.
+    expect(incompleteBaseOffset(5, true)).toBe(3);
+    expect(incompleteBaseOffset(2, true)).toBe(5);
+  });
+
+  it("V5 and below are frozen (leading labels + no trailing cell)", () => {
+    expect(buildIncompleteHeader(5, ["a"], ["A"])).toEqual([
+      "WhatsApp Name",
+      "Phone Number",
+      "Submission Time",
+      "A",
+      "Flow Run ID",
+    ]);
+    expect(
+      buildIncompleteRow({
+        schemaVersion: 5,
+        contactName: "WA",
+        contactPhone: "p",
+        flowName: "f",
+        submissionTime: "t",
+        contactId: "c",
+        vars: {},
+        answerColumns: ["a"],
+        runId: "r",
+      }),
+    ).toEqual(["WA", "p", "t", "", "r"]);
   });
 });

@@ -26,7 +26,9 @@ import {
   appendRows,
   formatSubmissionTimeIST,
   insertSheetColumns,
+  readFirstHeaderCell,
   setSheetColumnHidden,
+  standardColumnsForSchemaVersion,
   updateHeaderCells,
 } from "@/lib/google/sheets";
 import {
@@ -34,10 +36,13 @@ import {
   buildIncompleteRow,
   collectNewAnswerKeys,
   INCOMPLETE_RUN_ID_HEADER,
+  incompleteBaseOffset,
   incompleteRunIdColumnIndex,
   partitionSheetKeys,
+  stringifySheetCell,
 } from "./sheet-layout";
 import {
+  deriveFlowColumns,
   headerByKey,
   orderNodesForSheets,
   sortKeysByFlowOrder,
@@ -65,8 +70,10 @@ export interface IncompleteSheetConfigRow {
    * Brand-new sheets are stamped with CURRENT_INCOMPLETE_SCHEMA_VERSION
    * (see the incomplete-sheet enable route); only an explicit 3 selects
    * the slim V3 layout (no Flow Name / User ID), only an explicit 4
-   * additionally drops the fixed leading contact-Name cell, and only an
-   * explicit 5 restores it as "WhatsApp Name".
+   * additionally drops the fixed leading contact-Name cell, only an
+   * explicit 5 restores it as "WhatsApp Name", and only an explicit 6
+   * promotes the flow-collected Name first with the contact name moved
+   * after the answers.
    */
   schema_version?: number | null;
 }
@@ -167,11 +174,46 @@ export async function syncIncompleteRunsForFlow(
     storedKeys,
     (runs as RunRow[]).map((run) => run.vars),
   );
+  // V6 promotion (flow-collected Name first, mirroring completed
+  // sheets): adopted fresh on first write; afterwards pinned to the live
+  // sheet's A1 so node edits (delete/disable/rename the name question,
+  // or add one later) can never change row widths mid-life. A late-added
+  // name-like key folds in as a normal answer, like completed sheets do.
+  // hasPromotedCell drives header/row widths AND Run ID offsets together.
+  const isV6 = schemaVersion >= 6;
+  let promotedKey: string | null = null;
+  let promotedHeader: string | null = null;
+  let hasPromotedCell = false;
+  if (isV6 && !config.header_written) {
+    const derived = deriveFlowColumns(orderedNodes, true);
+    if (derived.name) {
+      promotedKey = derived.name.key;
+      promotedHeader = derived.name.header;
+      hasPromotedCell = true;
+    }
+  } else if (isV6) {
+    const firstCell = await readFirstHeaderCell(
+      accessToken,
+      config.spreadsheet_id,
+      config.sheet_tab,
+    );
+    if (firstCell === null) {
+      throw new Error("incomplete sheet header unreadable");
+    }
+    if (firstCell !== standardColumnsForSchemaVersion(6)[0]) {
+      hasPromotedCell = true;
+      const derived = deriveFlowColumns(orderedNodes, true);
+      promotedKey = derived.name?.key ?? null;
+      promotedHeader = derived.name?.header ?? firstCell;
+    }
+  }
+
   // New keys take canonical flow order (unknown keys keep first-seen
   // order at the end); they append after stored keys via the existing
-  // append/before-RunID mechanism — stored positions never move.
+  // append/before-RunID mechanism — stored positions never move. The
+  // adopted promoted key is not an answer column (it renders first).
   const newKeys = sortKeysByFlowOrder(
-    rawNewKeys.filter((k) => !disabledKeys.has(k)),
+    rawNewKeys.filter((k) => !disabledKeys.has(k) && k !== promotedKey),
     [...headerMap.keys()],
   );
   const answerColumns = [...storedKeys, ...newKeys];
@@ -179,15 +221,32 @@ export async function syncIncompleteRunsForFlow(
   // The hidden run-id column is a stable row key. A contact may abandon the
   // same flow more than once, so phone/contact id alone cannot safely identify
   // which incomplete row to remove after a later completion. Offsets derive
-  // from this sheet's OWN version so V2 sheets keep their frozen positions
-  // and V3 sheets compute their slim ones — Run ID stays last either way.
+  // from this sheet's OWN version (plus the adopted V6 promotion flag) so
+  // V2+ sheets keep their frozen positions — Run ID stays last either way.
   const headers = buildIncompleteHeader(
     schemaVersion,
     answerColumns,
     answerColumns.map(headerFor),
+    promotedHeader,
   );
-  const previousRunIdCol = incompleteRunIdColumnIndex(schemaVersion, storedKeys);
-  const runIdCol = incompleteRunIdColumnIndex(schemaVersion, answerColumns);
+  const previousRunIdCol = incompleteRunIdColumnIndex(
+    schemaVersion,
+    storedKeys,
+    hasPromotedCell,
+  );
+  const runIdCol = incompleteRunIdColumnIndex(
+    schemaVersion,
+    answerColumns,
+    hasPromotedCell,
+  );
+  // Physical insertion point for new answer columns: immediately after
+  // the existing answer block. For V2–V5 that coincides with the Run ID
+  // index; V6 has a trailing WhatsApp cell between the answers and the
+  // Run ID, so inserting at the Run ID index would strand new columns
+  // after WhatsApp while rows render them before it. Deriving from the
+  // layout keeps header labels and row values aligned on every version.
+  const answerInsertCol =
+    incompleteBaseOffset(schemaVersion, hasPromotedCell) + storedKeys.length;
 
   if (config.header_written) {
     // Upgrade already-created sheets in place. Put the stable key after the
@@ -201,7 +260,7 @@ export async function syncIncompleteRunsForFlow(
         accessToken,
         config.spreadsheet_id,
         config.sheet_tab,
-        previousRunIdCol,
+        answerInsertCol,
         newKeys.length,
       );
       await updateHeaderCells(
@@ -209,7 +268,7 @@ export async function syncIncompleteRunsForFlow(
         config.spreadsheet_id,
         config.sheet_tab,
         newKeys.map((k, i) => ({
-          colIndex: previousRunIdCol + i,
+          colIndex: answerInsertCol + i,
           value: headerFor(k),
         })),
       );
@@ -230,6 +289,7 @@ export async function syncIncompleteRunsForFlow(
 
   const rows: (string | number)[][] = (runs as RunRow[]).map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
+    const vars = (run.vars ?? {}) as Record<string, unknown>;
     return buildIncompleteRow({
       schemaVersion,
       contactName: contact?.name ?? "",
@@ -237,10 +297,15 @@ export async function syncIncompleteRunsForFlow(
       flowName: flow?.name ?? "",
       submissionTime: formatSubmissionTimeIST(run.ended_at ?? run.started_at),
       contactId: run.contact_id ?? "",
-      vars: (run.vars ?? {}) as Record<string, unknown>,
+      vars,
       answerColumns,
       runId: run.id,
       inactiveKeys: disabledKeys,
+      promotedHeader,
+      promotedValue:
+        promotedHeader != null && promotedKey != null
+          ? stringifySheetCell(vars[promotedKey])
+          : null,
     });
   });
 

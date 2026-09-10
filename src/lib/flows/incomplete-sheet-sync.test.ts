@@ -41,6 +41,7 @@ interface FetchCall {
 const fetchCalls: FetchCall[] = [];
 let headerRow: string[] = [];
 let columnValues: string[] = [];
+let a1Value: string | null | "ERROR" = null;
 
 function stubFetch() {
   vi.stubGlobal(
@@ -54,6 +55,12 @@ function stubFetch() {
         return okJson({
           sheets: [{ properties: { sheetId: 7, title: "Sheet1" } }],
         });
+      }
+      if (u.includes("A1:A1")) {
+        if (a1Value === "ERROR") {
+          return new Response("boom", { status: 500 });
+        }
+        return okJson(a1Value === null ? {} : { values: [[a1Value]] });
       }
       if (u.includes("/values/") && u.includes("1:1")) {
         return okJson({ values: [headerRow] });
@@ -71,6 +78,7 @@ afterEach(() => {
   fetchCalls.length = 0;
   headerRow = [];
   columnValues = [];
+  a1Value = null;
 });
 
 interface SelectCall {
@@ -746,5 +754,301 @@ describe("cleanupCompletedIncompleteRows against a V5 sheet", () => {
       startIndex: 2,
       endIndex: 3,
     });
+  });
+});
+
+describe("syncIncompleteRunsForFlow on V6 sheets", () => {
+  const V6_NODES = [
+    {
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "name" },
+    },
+    {
+      node_key: "name",
+      node_type: "collect_input",
+      config: {
+        var_key: "name",
+        prompt_text: "Your name?",
+        next_node_key: "rooms",
+      },
+    },
+    {
+      node_key: "rooms",
+      node_type: "collect_input",
+      config: { var_key: "rooms", sheet_column_name: "No. of Rooms" },
+    },
+  ];
+
+  function v6Run(vars: Record<string, unknown>) {
+    return {
+      id: "run-6",
+      contact_id: "c-1",
+      vars,
+      started_at: "2026-07-14T10:00:00.000Z",
+      ended_at: "2026-07-14T11:00:00.000Z",
+    };
+  }
+
+  function v6Db(nodes: Record<string, unknown>[] = V6_NODES) {
+    return makeDb({
+      runs: [v6Run({ name: "Asha", rooms: "2" })],
+      flow: { name: "F", entry_node_id: "start" },
+      contacts: [{ id: "c-1", name: "WA Profile", phone: "+91" }],
+      nodes,
+    });
+  }
+
+  it("fresh sheet promotes the flow Name first with WhatsApp trailing", async () => {
+    stubFetch();
+    const { db, updates } = v6Db();
+
+    const appended = await syncIncompleteRunsForFlow(
+      db,
+      baseConfig({ schema_version: 6 }),
+      "tok",
+    );
+    expect(appended).toBe(1);
+
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const values = (append?.body as { values: string[][] }).values;
+    expect(values[0]).toEqual([
+      "Your name?",
+      "Phone Number",
+      "Submission Time",
+      "No. of Rooms",
+      "WhatsApp Name",
+      "Flow Run ID",
+    ]);
+    expect(values[1]).toEqual([
+      "Asha",
+      "+91",
+      formatSubmissionTimeIST("2026-07-14T11:00:00.000Z"),
+      "2",
+      "WA Profile",
+      "run-6",
+    ]);
+
+    // Promoted key excluded from persisted answers; Run ID hidden last.
+    const persisted = updates.find(
+      (u) =>
+        u.table === "flow_incomplete_sheet_configs" &&
+        (u.payload as Record<string, unknown>).answer_columns !== undefined,
+    );
+    expect(
+      (persisted?.payload as { answer_columns: string[] }).answer_columns,
+    ).toEqual(["rooms"]);
+    const hide = fetchCalls.find((c) =>
+      JSON.stringify(c.body ?? {}).includes("hiddenByUser"),
+    );
+    const range = (
+      hide?.body as {
+        requests: Array<{
+          updateDimensionProperties: { range: Record<string, unknown> };
+        }>;
+      }
+    ).requests[0]?.updateDimensionProperties.range;
+    expect(range).toMatchObject({ startIndex: 5, endIndex: 6 });
+  });
+
+  it("fresh sheet without a name node omits the first cell", async () => {
+    stubFetch();
+    const nodes = V6_NODES.filter((n) => n.node_key !== "name").map((n) =>
+      n.node_key === "start"
+        ? { ...n, config: { next_node_key: "rooms" } }
+        : n,
+    );
+    const { db } = makeDb({
+      runs: [v6Run({ rooms: "2" })],
+      flow: { name: "F", entry_node_id: "start" },
+      contacts: [{ id: "c-1", name: "WA Profile", phone: "+91" }],
+      nodes,
+    });
+
+    await syncIncompleteRunsForFlow(db, baseConfig({ schema_version: 6 }), "tok");
+
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const values = (append?.body as { values: string[][] }).values;
+    expect(values[0]).toEqual([
+      "Phone Number",
+      "Submission Time",
+      "No. of Rooms",
+      "WhatsApp Name",
+      "Flow Run ID",
+    ]);
+    expect(values[1]?.[0]).toBe("+91");
+  });
+
+  it("deleted name node later blanks the first cell without shifting", async () => {
+    a1Value = "Your name?";
+    stubFetch();
+    const nodes = V6_NODES.filter((n) => n.node_key !== "name");
+    const { db } = makeDb({
+      runs: [v6Run({ rooms: "2" })],
+      flow: { name: "F", entry_node_id: "start" },
+      contacts: [{ id: "c-1", name: "WA Profile", phone: "+91" }],
+      nodes,
+    });
+
+    await syncIncompleteRunsForFlow(
+      db,
+      baseConfig({
+        schema_version: 6,
+        answer_columns: ["rooms"],
+        header_written: true,
+      }),
+      "tok",
+    );
+
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const row = (append?.body as { values: string[][] }).values[0];
+    // Width preserved (6 cells incl. blank first + trailing WhatsApp).
+    expect(row).toEqual([
+      "",
+      "+91",
+      formatSubmissionTimeIST("2026-07-14T11:00:00.000Z"),
+      "2",
+      "WA Profile",
+      "run-6",
+    ]);
+  });
+
+  it("late-added name node folds in as a normal answer (no promotion)", async () => {
+    a1Value = "Phone Number";
+    stubFetch();
+    const { db, updates } = v6Db();
+
+    await syncIncompleteRunsForFlow(
+      db,
+      baseConfig({
+        schema_version: 6,
+        answer_columns: ["rooms"],
+        header_written: true,
+      }),
+      "tok",
+    );
+
+    // "name" heals as a trailing answer; no first cell appears.
+    const persisted = updates.find(
+      (u) =>
+        u.table === "flow_incomplete_sheet_configs" &&
+        (u.payload as Record<string, unknown>).answer_columns !== undefined,
+    );
+    expect(
+      (persisted?.payload as { answer_columns: string[] }).answer_columns,
+    ).toEqual(["rooms", "name"]);
+    // Physical insert lands BEFORE the trailing WhatsApp cell (index 3),
+    // not at the Run ID index (4) — otherwise the new column would sit
+    // after WhatsApp while rows render it before. This assertion is the
+    // regression pin for that misalignment.
+    const columnInsert = fetchCalls.find((c) =>
+      JSON.stringify(c.body ?? {}).includes("insertDimension"),
+    );
+    expect(
+      (
+        columnInsert?.body as {
+          requests: Array<{ insertDimension: { range: unknown } }>;
+        }
+      ).requests[0]?.insertDimension.range,
+    ).toMatchObject({ startIndex: 3, endIndex: 4 });
+    const labelWrite = fetchCalls.find(
+      (c) =>
+        c.url.includes("values:batchUpdate") &&
+        JSON.stringify(c.body ?? {}).includes("Your name?"),
+    );
+    expect(
+      (labelWrite?.body as { data: Array<{ range: string }> }).data,
+    ).toContainEqual({ range: "Sheet1!D1", values: [["Your name?"]] });
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const row = (append?.body as { values: string[][] }).values[0];
+    expect(row?.[0]).toBe("+91");
+    expect(row?.slice(2, 4)).toEqual(["2", "Asha"]);
+  });
+
+  it("A1 read failure aborts before any write", async () => {
+    a1Value = "ERROR";
+    stubFetch();
+    const { db, updates, inserts } = v6Db();
+
+    await expect(
+      syncIncompleteRunsForFlow(
+        db,
+        baseConfig({
+          schema_version: 6,
+          answer_columns: ["rooms"],
+          header_written: true,
+        }),
+        "tok",
+      ),
+    ).rejects.toThrow();
+    expect(fetchCalls.some((c) => c.url.includes(":append"))).toBe(false);
+    expect(
+      updates.some(
+        (u) =>
+          u.table === "flow_runs" &&
+          "incomplete_synced_at" in (u.payload as Record<string, unknown>),
+      ),
+    ).toBe(false);
+    expect(inserts.length).toBe(0);
+  });
+});
+
+describe("cleanupCompletedIncompleteRows against a V6 sheet", () => {
+  it("finds the Run ID by name across promoted and trailing cells", async () => {
+    headerRow = [
+      "Your name?",
+      "Phone Number",
+      "Submission Time",
+      "No. of Rooms",
+      "WhatsApp Name",
+      "Flow Run ID",
+    ];
+    columnValues = ["", "", "run-10"];
+    stubFetch();
+    const { db, updates } = makeDb({
+      runs: [],
+      completedRuns: [{ id: "run-10", flow_id: "flow-1", account_id: "acct-1" }],
+      runEvents: [
+        {
+          flow_run_id: "run-10",
+          payload: { incomplete_sheet_row_key_written: true },
+          created_at: "2026-07-14T10:00:00.000Z",
+        },
+        {
+          flow_run_id: "run-10",
+          payload: { node_type: "google_sheets_sync", result: "synced" },
+          created_at: "2026-07-14T11:00:00.000Z",
+        },
+      ],
+      incompleteConfigs: [baseConfig({ schema_version: 6 })],
+    });
+
+    const result = await cleanupCompletedIncompleteRows(db);
+    expect(result.removed).toBe(1);
+
+    const del = fetchCalls.find((c) =>
+      JSON.stringify(c.body ?? {}).includes("deleteDimension"),
+    );
+    expect(
+      (
+        del?.body as {
+          requests: Array<{ deleteDimension: { range: unknown } }>;
+        }
+      ).requests[0]?.deleteDimension.range,
+    ).toMatchObject({
+      sheetId: 7,
+      dimension: "ROWS",
+      startIndex: 3,
+      endIndex: 4,
+    });
+
+    expect(
+      updates.some(
+        (u) =>
+          u.table === "flow_runs" &&
+          (u.payload as Record<string, unknown>).incomplete_synced_at ===
+            null,
+      ),
+    ).toBe(true);
   });
 });

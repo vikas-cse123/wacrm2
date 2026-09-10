@@ -91,9 +91,10 @@ export async function POST(
       throw new Error(insertErr?.message ?? "Failed to save sheet config");
     }
 
-    // Stamp brand-new sheets with the current incomplete layout (V5:
-    // slim columns without Flow Name / User ID, fixed contact column
-    // labeled "WhatsApp Name"; flow-collected Name answers are
+    // Stamp brand-new sheets with the current incomplete layout (V6:
+    // slim columns without Flow Name / User ID, flow-collected Name
+    // promoted first, fixed contact column after the answers labeled
+    // "WhatsApp Name"; flow-collected Name answers are otherwise
     // unaffected). Best-effort: DBs predating the schema_version column
     // reject the update, in which case the sheet stays on the frozen v2
     // layout — the first sync below is then explicitly told which version
@@ -106,7 +107,11 @@ export async function POST(
       .update({ schema_version: CURRENT_INCOMPLETE_SCHEMA_VERSION })
       .eq("flow_id", flowId);
     if (!versionErr) {
-      incompleteSchemaVersion = 3;
+      // Pass through the exact stamped version so the first header/row
+      // write below uses the same layout all subsequent syncs will read
+      // back from the stored config. A stale literal here would write the
+      // first header in one version and all later rows in another.
+      incompleteSchemaVersion = CURRENT_INCOMPLETE_SCHEMA_VERSION;
     } else {
       console.warn(
         `[incomplete-sheet] schema_version stamp skipped (pre-migration DB?) — new sheet stays v2: ${versionErr.message}`,

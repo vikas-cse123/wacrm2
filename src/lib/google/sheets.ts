@@ -383,6 +383,34 @@ export async function findHeaderColumn(
   return index >= 0 ? index : null;
 }
 
+/**
+ * Read the live value of the header row's first cell (A1), or null when
+ * the sheet has no header row. Used to pin layout decisions that must
+ * match the on-sheet truth (e.g. whether a sheet was created with an
+ * optional leading column) so later node edits can never change row
+ * widths mid-life. Throws on API failure — callers treat that as fatal
+ * for the sync (nothing is written before this read resolves).
+ */
+export async function readFirstHeaderCell(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+): Promise<string | null> {
+  const range = `${encodeURIComponent(tab)}!A1:A1`;
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}/values/${range}?majorDimension=ROWS`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets header read failed (${res.status}): ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as { values?: unknown[][] };
+  const cell = data.values?.[0]?.[0];
+  return cell === undefined || cell === null ? null : String(cell);
+}
+
 /** Find the 1-based row number containing an exact value in one column. */
 export async function findExactValueRow(
   accessToken: string,
