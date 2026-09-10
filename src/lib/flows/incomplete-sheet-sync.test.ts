@@ -240,16 +240,19 @@ describe("syncIncompleteRunsForFlow on a new V4 sheet", () => {
       "incomplete_synced_at",
       null,
     ]);
-    // V4 skips the flows.name lookup (no Flow Name cell).
-    expect(selects.some((s) => s.table === "flows")).toBe(false);
+    // V4 still reads flows, but only for entry_node_id (canonical order)
+    // — never for the removed Flow Name cell.
+    expect(selects.some((s) => s.table === "flows")).toBe(true);
 
     const append = fetchCalls.find((c) => c.url.includes(":append"));
     const values = (append?.body as { values: string[][] }).values;
+    // Human-readable headers resolved from node config; unknown keys
+    // keep their raw key. Row values stay key-addressed either way.
     expect(values[0]).toEqual([
       "Phone Number",
       "Submission Time",
-      "name",
-      "rooms",
+      "Your name?",
+      "Rooms?",
       "extra",
       "Flow Run ID",
     ]);
@@ -322,7 +325,9 @@ describe("syncIncompleteRunsForFlow on an existing V2 sheet", () => {
         {
           node_key: "city",
           node_type: "collect_input",
-          config: { var_key: "city" },
+          // Renamed after the sheet was created: the frozen on-sheet
+          // "city" header must NOT be rewritten to "Town".
+          config: { var_key: "city", sheet_column_name: "Town" },
         },
         {
           node_key: "send_buttons",
@@ -382,6 +387,18 @@ describe("syncIncompleteRunsForFlow on an existing V2 sheet", () => {
       "c-1",
     ]);
     expect(row?.slice(5)).toEqual(["Goa", "", "N", "run-2"]);
+
+    // Stored raw headers are never rewritten: no header-cell write may
+    // relabel the frozen "city" column as "Town".
+    const writtenLabels = fetchCalls
+      .filter((c) => c.url.includes("values:batchUpdate"))
+      .flatMap(
+        (c) =>
+          (c.body as { data?: Array<{ values?: string[][] }> }).data ?? [],
+      )
+      .flatMap((d) => d.values ?? [])
+      .flat();
+    expect(writtenLabels).not.toContain("Town");
   });
 
   it("nullish version defaults to the frozen V2 layout", async () => {
@@ -469,5 +486,265 @@ describe("cleanupCompletedIncompleteRows against a V4 sheet", () => {
             null,
       ),
     ).toBe(true);
+  });
+});
+
+describe("syncIncompleteRunsForFlow answer ordering", () => {
+  const GRAPH_NODES = [
+    {
+      node_key: "hotel",
+      node_type: "collect_input",
+      config: { var_key: "hotel", prompt_text: "Hotel?" },
+    },
+    {
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "month" },
+    },
+    {
+      node_key: "rooms",
+      node_type: "collect_input",
+      config: { var_key: "rooms", prompt_text: "Rooms?", next_node_key: "hotel" },
+    },
+    {
+      node_key: "month",
+      node_type: "collect_input",
+      config: { var_key: "month", prompt_text: "Month?", next_node_key: "rooms" },
+    },
+  ];
+
+  it("new V4 sheets follow flow order, not vars arrival order", async () => {
+    stubFetch();
+    const { db } = makeDb({
+      runs: [
+        {
+          id: "run-4",
+          contact_id: "c-1",
+          // Deliberately non-flow order (as JSONB normalization may yield).
+          vars: { hotel: "H", rooms: "2", month: "May" },
+          started_at: "2026-07-14T10:00:00.000Z",
+          ended_at: "2026-07-14T11:00:00.000Z",
+        },
+      ],
+      flow: { entry_node_id: "start" },
+      contacts: [{ id: "c-1", name: "WA Name", phone: "+91" }],
+      nodes: GRAPH_NODES,
+    });
+
+    await syncIncompleteRunsForFlow(
+      db,
+      baseConfig({ schema_version: 4 }),
+      "tok",
+    );
+
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const values = (append?.body as { values: string[][] }).values;
+    expect(values[0]).toEqual([
+      "Phone Number",
+      "Submission Time",
+      "Month?",
+      "Rooms?",
+      "Hotel?",
+      "Flow Run ID",
+    ]);
+    expect(values[1]?.slice(2)).toEqual(["May", "2", "H", "run-4"]);
+  });
+
+  it("existing sheets append flow-sorted new keys without moving history", async () => {
+    stubFetch();
+    const { db, updates } = makeDb({
+      runs: [
+        {
+          id: "run-5",
+          contact_id: "c-1",
+          vars: { rooms: "2", hotel: "H", month: "May" },
+          started_at: "2026-07-14T10:00:00.000Z",
+          ended_at: "2026-07-14T11:00:00.000Z",
+        },
+      ],
+      flow: { name: "F", entry_node_id: "start" },
+      contacts: [{ id: "c-1", name: "WA Name", phone: "+91" }],
+      nodes: GRAPH_NODES,
+    });
+
+    await syncIncompleteRunsForFlow(
+      db,
+      baseConfig({
+        schema_version: 2,
+        answer_columns: ["rooms"],
+        header_written: true,
+      }),
+      "tok",
+    );
+
+    // Stored "rooms" stays first; new keys arrive flow-sorted after it.
+    const persisted = updates.find(
+      (u) =>
+        u.table === "flow_incomplete_sheet_configs" &&
+        (u.payload as Record<string, unknown>).answer_columns !== undefined,
+    );
+    expect(
+      (persisted?.payload as { answer_columns: string[] }).answer_columns,
+    ).toEqual(["rooms", "month", "hotel"]);
+
+    // Inserted as one block before the frozen Run ID slot (1+4+1 = 6).
+    const columnInsert = fetchCalls.find((c) =>
+      JSON.stringify(c.body ?? {}).includes("insertDimension"),
+    );
+    expect(
+      (
+        columnInsert?.body as {
+          requests: Array<{ insertDimension: { range: unknown } }>;
+        }
+      ).requests[0]?.insertDimension.range,
+    ).toMatchObject({ startIndex: 6, endIndex: 8 });
+
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const row = (append?.body as { values: string[][] }).values[0];
+    expect(row?.slice(5)).toEqual(["2", "May", "H", "run-5"]);
+  });
+});
+
+describe("syncIncompleteRunsForFlow on a new V5 sheet", () => {
+  it("writes WhatsApp Name + mapped headers with Run ID last and hidden", async () => {
+    stubFetch();
+    const { db, updates } = makeDb({
+      runs: [
+        {
+          id: "run-6",
+          contact_id: "c-1",
+          vars: { name: "Asha", send_button_3: "Taj", rooms: "2" },
+          started_at: "2026-07-14T10:00:00.000Z",
+          ended_at: "2026-07-14T11:00:00.000Z",
+        },
+      ],
+      flow: { entry_node_id: "start" },
+      contacts: [{ id: "c-1", name: "WA Profile", phone: "+91" }],
+      nodes: [
+        {
+          node_key: "start",
+          node_type: "start",
+          config: { next_node_key: "name" },
+        },
+        {
+          node_key: "name",
+          node_type: "collect_input",
+          config: {
+            var_key: "name",
+            prompt_text: "Your name?",
+            next_node_key: "send_button_3",
+          },
+        },
+        {
+          node_key: "send_button_3",
+          node_type: "send_buttons",
+          config: { text: "Pick a hotel?", next_node_key: "rooms" },
+        },
+        {
+          node_key: "rooms",
+          node_type: "collect_input",
+          config: { var_key: "rooms", sheet_column_name: "No. of Rooms" },
+        },
+      ],
+    });
+
+    const appended = await syncIncompleteRunsForFlow(
+      db,
+      baseConfig({ schema_version: 5 }),
+      "tok",
+    );
+    expect(appended).toBe(1);
+
+    const append = fetchCalls.find((c) => c.url.includes(":append"));
+    const values = (append?.body as { values: string[][] }).values;
+    expect(values[0]).toEqual([
+      "WhatsApp Name",
+      "Phone Number",
+      "Submission Time",
+      "Your name?",
+      "Pick a hotel?",
+      "No. of Rooms",
+      "Flow Run ID",
+    ]);
+    // Fixed contact value first; flow-collected Name stays an answer.
+    expect(values[1]?.slice(0, 4)).toEqual([
+      "WA Profile",
+      "+91",
+      formatSubmissionTimeIST("2026-07-14T11:00:00.000Z"),
+      "Asha",
+    ]);
+    expect(values[1]?.slice(-3)).toEqual(["Taj", "2", "run-6"]);
+
+    // Stored keys (raw) are unaffected by header mapping.
+    const persisted = updates.find(
+      (u) =>
+        u.table === "flow_incomplete_sheet_configs" &&
+        (u.payload as Record<string, unknown>).answer_columns !== undefined,
+    );
+    expect(
+      (persisted?.payload as { answer_columns: string[] }).answer_columns,
+    ).toEqual(["name", "send_button_3", "rooms"]);
+
+    const hide = fetchCalls.find((c) =>
+      JSON.stringify(c.body ?? {}).includes("hiddenByUser"),
+    );
+    const range = (
+      hide?.body as {
+        requests: Array<{
+          updateDimensionProperties: { range: Record<string, unknown> };
+        }>;
+      }
+    ).requests[0]?.updateDimensionProperties.range;
+    expect(range).toMatchObject({ startIndex: 6, endIndex: 7 });
+  });
+});
+
+describe("cleanupCompletedIncompleteRows against a V5 sheet", () => {
+  it("finds the Run ID by name despite the renamed leading header", async () => {
+    headerRow = [
+      "WhatsApp Name",
+      "Phone Number",
+      "Submission Time",
+      "Your name?",
+      "Flow Run ID",
+    ];
+    columnValues = ["", "run-7"];
+    stubFetch();
+    const { db } = makeDb({
+      runs: [],
+      completedRuns: [{ id: "run-7", flow_id: "flow-1", account_id: "acct-1" }],
+      runEvents: [
+        {
+          flow_run_id: "run-7",
+          payload: { incomplete_sheet_row_key_written: true },
+          created_at: "2026-07-14T10:00:00.000Z",
+        },
+        {
+          flow_run_id: "run-7",
+          payload: { node_type: "google_sheets_sync", result: "synced" },
+          created_at: "2026-07-14T11:00:00.000Z",
+        },
+      ],
+      incompleteConfigs: [baseConfig({ schema_version: 5 })],
+    });
+
+    const result = await cleanupCompletedIncompleteRows(db);
+    expect(result.removed).toBe(1);
+
+    const del = fetchCalls.find((c) =>
+      JSON.stringify(c.body ?? {}).includes("deleteDimension"),
+    );
+    expect(
+      (
+        del?.body as {
+          requests: Array<{ deleteDimension: { range: unknown } }>;
+        }
+      ).requests[0]?.deleteDimension.range,
+    ).toMatchObject({
+      sheetId: 7,
+      dimension: "ROWS",
+      startIndex: 2,
+      endIndex: 3,
+    });
   });
 });

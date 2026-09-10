@@ -37,6 +37,11 @@ import {
   incompleteRunIdColumnIndex,
   partitionSheetKeys,
 } from "./sheet-layout";
+import {
+  headerByKey,
+  orderNodesForSheets,
+  sortKeysByFlowOrder,
+} from "./sheet-columns";
 import type { FlowNodeLite } from "./sheet-columns";
 
 /** Terminal statuses that count as "incomplete" for the live sheet. */
@@ -59,8 +64,9 @@ export interface IncompleteSheetConfigRow {
    * layout every existing incomplete sheet was written with — frozen).
    * Brand-new sheets are stamped with CURRENT_INCOMPLETE_SCHEMA_VERSION
    * (see the incomplete-sheet enable route); only an explicit 3 selects
-   * the slim V3 layout (no Flow Name / User ID), and only an explicit 4
-   * additionally drops the fixed leading contact-Name cell.
+   * the slim V3 layout (no Flow Name / User ID), only an explicit 4
+   * additionally drops the fixed leading contact-Name cell, and only an
+   * explicit 5 restores it as "WhatsApp Name".
    */
   schema_version?: number | null;
 }
@@ -105,15 +111,17 @@ export async function syncIncompleteRunsForFlow(
   // the fixed leading contact-Name cell. contact_id stays in application
   // logic (contact lookup); only its exported User ID *cell* is gone.
   const schemaVersion = config.schema_version ?? 2;
-  const noFlowNameCell = schemaVersion >= 3;
 
-  const { data: flow } = noFlowNameCell
-    ? { data: null as { name?: string } | null }
-    : await db
-      .from("flows")
-      .select("name")
-      .eq("id", config.flow_id)
-      .maybeSingle();
+  // The flows.name value is only needed for pre-V3 sheets (no Flow Name
+  // cell from V3 on); entry_node_id is always needed for canonical flow
+  // ordering. Single indexed row read either way.
+  const { data: flow } = await db
+    .from("flows")
+    .select("name, entry_node_id")
+    .eq("id", config.flow_id)
+    .maybeSingle();
+  const entryKey =
+    (flow as { entry_node_id?: string | null } | null)?.entry_node_id ?? null;
 
   const contactIds = [
     ...new Set(
@@ -141,17 +149,31 @@ export async function syncIncompleteRunsForFlow(
   const storedKeys = config.answer_columns ?? [];
   const { data: sheetNodes } = await db
     .from("flow_nodes")
-    .select("node_key, node_type, config")
+    .select("node_key, node_type, config, created_at")
     .eq("flow_id", config.flow_id)
     .order("created_at", { ascending: true });
-  const { disabledKeys } = partitionSheetKeys(
+  const orderedNodes = orderNodesForSheets(
+    entryKey,
     (sheetNodes ?? []) as FlowNodeLite[],
   );
+  const { disabledKeys } = partitionSheetKeys(orderedNodes);
+  // Human-readable labels per the completed-sheet contract (custom name
+  // → question text → raw key); unknown keys fall back to the raw key.
+  // Stored headers are never rewritten — this map labels only new sheets
+  // and newly healed columns.
+  const headerMap = headerByKey(entryKey, orderedNodes);
+  const headerFor = (k: string): string => headerMap.get(k) ?? k;
   const { newKeys: rawNewKeys } = collectNewAnswerKeys(
     storedKeys,
     (runs as RunRow[]).map((run) => run.vars),
   );
-  const newKeys = rawNewKeys.filter((k) => !disabledKeys.has(k));
+  // New keys take canonical flow order (unknown keys keep first-seen
+  // order at the end); they append after stored keys via the existing
+  // append/before-RunID mechanism — stored positions never move.
+  const newKeys = sortKeysByFlowOrder(
+    rawNewKeys.filter((k) => !disabledKeys.has(k)),
+    [...headerMap.keys()],
+  );
   const answerColumns = [...storedKeys, ...newKeys];
 
   // The hidden run-id column is a stable row key. A contact may abandon the
@@ -159,7 +181,11 @@ export async function syncIncompleteRunsForFlow(
   // which incomplete row to remove after a later completion. Offsets derive
   // from this sheet's OWN version so V2 sheets keep their frozen positions
   // and V3 sheets compute their slim ones — Run ID stays last either way.
-  const headers = buildIncompleteHeader(schemaVersion, answerColumns);
+  const headers = buildIncompleteHeader(
+    schemaVersion,
+    answerColumns,
+    answerColumns.map(headerFor),
+  );
   const previousRunIdCol = incompleteRunIdColumnIndex(schemaVersion, storedKeys);
   const runIdCol = incompleteRunIdColumnIndex(schemaVersion, answerColumns);
 
@@ -184,7 +210,7 @@ export async function syncIncompleteRunsForFlow(
         config.sheet_tab,
         newKeys.map((k, i) => ({
           colIndex: previousRunIdCol + i,
-          value: k,
+          value: headerFor(k),
         })),
       );
     }

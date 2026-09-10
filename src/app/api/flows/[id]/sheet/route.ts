@@ -22,25 +22,34 @@ import {
   createSpreadsheet,
   CURRENT_SHEET_SCHEMA_VERSION,
 } from "@/lib/google/sheets";
-import { deriveFlowColumns, type FlowNodeLite } from "@/lib/flows/sheet-columns";
+import { deriveFlowColumns, orderNodesForSheets, type FlowNodeLite } from "@/lib/flows/sheet-columns";
 import { resolveFreshLinkSchemaVersion } from "@/lib/flows/sheet-layout";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * Every question node this flow currently has, split into the promoted
- * "Name" slot (if any) and the rest, in flow order. Used both to seed a
- * brand-new link and to recompute after a relink.
+ * "Name" slot (if any) and the rest, in canonical flow (graph-walk)
+ * order. Used both to seed a brand-new link and to recompute after a
+ * relink — so NEW sheets list answers in flow order. Existing sheets
+ * keep their stored order; this only seeds fresh configs.
  */
 async function deriveColumnsForFlow(
   db: SupabaseClient,
   flowId: string,
 ): Promise<ReturnType<typeof deriveFlowColumns>> {
-  const { data: nodes } = await db
-    .from("flow_nodes")
-    .select("node_key, node_type, config")
-    .eq("flow_id", flowId)
-    .order("created_at", { ascending: true });
-  return deriveFlowColumns((nodes ?? []) as FlowNodeLite[], true);
+  const [{ data: nodes }, { data: flow }] = await Promise.all([
+    db
+      .from("flow_nodes")
+      .select("node_key, node_type, config, created_at")
+      .eq("flow_id", flowId)
+      .order("created_at", { ascending: true }),
+    db.from("flows").select("entry_node_id").eq("id", flowId).maybeSingle(),
+  ]);
+  const ordered = orderNodesForSheets(
+    (flow as { entry_node_id?: string | null } | null)?.entry_node_id ?? null,
+    (nodes ?? []) as FlowNodeLite[],
+  );
+  return deriveFlowColumns(ordered, true);
 }
 
 async function assertOwnedFlow(
@@ -104,7 +113,9 @@ async function linkSheet(
   // the next sync writes a fresh header into the new sheet.
   const { data: existing } = await ctx.supabase
     .from("flow_sheet_configs")
-    .select("spreadsheet_id, header_written, schema_version")
+    .select(
+      "spreadsheet_id, header_written, schema_version, answer_columns, answer_headers, name_column_key, name_column_header",
+    )
     .eq("flow_id", flowId)
     .maybeSingle();
 
@@ -124,9 +135,33 @@ async function linkSheet(
 
   const derived = await deriveColumnsForFlow(ctx.supabase, flowId);
   const promoteName = schemaVersion >= 2;
-  const nameKey = promoteName ? (derived.name?.key ?? null) : null;
-  const nameHeader = promoteName ? (derived.name?.header ?? null) : null;
-  const rest = promoteName ? derived.rest : [...(derived.name ? [derived.name] : []), ...derived.rest];
+  // Relinking the SAME spreadsheet whose header is already written must
+  // not touch the stored column order: the on-sheet header and all
+  // existing rows are aligned to it, and a fresh derivation (now in
+  // canonical flow order) could otherwise reorder it and misalign future
+  // appends. Renames and newly-included questions are still picked up by
+  // the self-healing sync on the next run — no manual relink needed.
+  const reuseStoredColumns = sameSpreadsheet && headerWritten;
+  const nameKey = reuseStoredColumns
+    ? ((existing as { name_column_key?: string | null } | null)?.name_column_key ?? null)
+    : promoteName
+      ? (derived.name?.key ?? null)
+      : null;
+  const nameHeader = reuseStoredColumns
+    ? ((existing as { name_column_header?: string | null } | null)?.name_column_header ?? null)
+    : promoteName
+      ? (derived.name?.header ?? null)
+      : null;
+  const restKeys = reuseStoredColumns
+    ? (((existing as { answer_columns?: string[] } | null)?.answer_columns ?? []) as string[])
+    : promoteName
+      ? derived.rest.map((c) => c.key)
+      : [...(derived.name ? [derived.name] : []), ...derived.rest].map((c) => c.key);
+  const restHeaders = reuseStoredColumns
+    ? (((existing as { answer_headers?: string[] } | null)?.answer_headers ?? []) as string[])
+    : promoteName
+      ? derived.rest.map((c) => c.header)
+      : [...(derived.name ? [derived.name] : []), ...derived.rest].map((c) => c.header);
 
   const { data, error } = await ctx.supabase
     .from("flow_sheet_configs")
@@ -138,8 +173,8 @@ async function linkSheet(
         spreadsheet_url: meta.url,
         spreadsheet_name: meta.title,
         sheet_tab: meta.tab,
-        answer_columns: rest.map((c) => c.key),
-        answer_headers: rest.map((c) => c.header),
+        answer_columns: restKeys,
+        answer_headers: restHeaders,
         name_column_key: nameKey,
         name_column_header: nameHeader,
         schema_version: schemaVersion,

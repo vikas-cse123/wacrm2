@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   runs: [] as Record<string, unknown>[],
   contacts: [] as Record<string, unknown>[],
   nodes: [] as Record<string, unknown>[],
+  flowExtra: {} as Record<string, unknown>,
 }));
 
 function okJson(value: unknown): Response {
@@ -37,7 +38,7 @@ vi.mock("@/lib/auth/account", () => ({
         b.maybeSingle = vi.fn(async () => {
           if (table === "flows") {
             return {
-              data: { id: "flow-1", name: "Welcome Flow" },
+              data: { id: "flow-1", name: "Welcome Flow", ...h.flowExtra },
               error: null,
             };
           }
@@ -161,5 +162,69 @@ describe("POST /api/flows/[id]/dropped-off", () => {
     expect(values[1]).toHaveLength(values[0]?.length);
     expect(values[1]?.slice(3)).toEqual(["2", "kept"]);
     expect(values[2]?.slice(3)).toEqual(["3", ""]);
+  });
+});
+
+describe("POST /api/flows/[id]/dropped-off ordering", () => {
+  it("lists answers in flow order despite shuffled nodes and vars", async () => {
+    h.flowExtra = { entry_node_id: "start" };
+    h.runs = [
+      {
+        id: "run-1",
+        contact_id: "c-1",
+        // Deliberately non-flow order.
+        vars: { hotel: "H", rooms: "2", month: "May" },
+        started_at: "2026-07-14T10:00:00.000Z",
+        ended_at: "2026-07-14T11:00:00.000Z",
+      },
+    ];
+    h.contacts = [{ id: "c-1", name: "WA Name", phone: "+91" }];
+    // Deliberately shuffled storage order; edges define the flow.
+    h.nodes = [
+      {
+        node_key: "hotel",
+        node_type: "collect_input",
+        config: { var_key: "hotel", prompt_text: "Hotel?" },
+      },
+      {
+        node_key: "start",
+        node_type: "start",
+        config: { next_node_key: "month" },
+      },
+      {
+        node_key: "rooms",
+        node_type: "collect_input",
+        config: {
+          var_key: "rooms",
+          prompt_text: "Rooms?",
+          next_node_key: "hotel",
+        },
+      },
+      {
+        node_key: "month",
+        node_type: "collect_input",
+        config: {
+          var_key: "month",
+          prompt_text: "Month?",
+          next_node_key: "rooms",
+        },
+      },
+    ];
+    appendBodies.length = 0;
+
+    const res = await postDroppedOff();
+    expect(res.status).toBe(200);
+
+    const values = (appendBodies[0] as { values: string[][] }).values;
+    expect(values[0]).toEqual([
+      "Name",
+      "Phone Number",
+      "Submission Time",
+      "Month?",
+      "Rooms?",
+      "Hotel?",
+    ]);
+    expect(values[1]?.slice(3)).toEqual(["May", "2", "H"]);
+    h.flowExtra = {};
   });
 });

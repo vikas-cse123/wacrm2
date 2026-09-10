@@ -91,9 +91,9 @@ export async function POST(
       throw new Error(insertErr?.message ?? "Failed to save sheet config");
     }
 
-    // Stamp brand-new sheets with the current incomplete layout (V4:
-    // slim columns without Flow Name / User ID and without the fixed
-    // WhatsApp/contact-profile Name cell; flow-collected Name answers are
+    // Stamp brand-new sheets with the current incomplete layout (V5:
+    // slim columns without Flow Name / User ID, fixed contact column
+    // labeled "WhatsApp Name"; flow-collected Name answers are
     // unaffected). Best-effort: DBs predating the schema_version column
     // reject the update, in which case the sheet stays on the frozen v2
     // layout — the first sync below is then explicitly told which version

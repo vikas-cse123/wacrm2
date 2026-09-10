@@ -14,7 +14,7 @@
 // ============================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { deriveFlowColumns, type FlowNodeLite } from "./sheet-columns";
+import { deriveFlowColumns, orderNodesForSheets, type FlowNodeLite } from "./sheet-columns";
 import { completedAnswerOffset } from "./sheet-layout";
 import { updateHeaderCells } from "@/lib/google/sheets";
 
@@ -76,15 +76,25 @@ export async function resolveFlowSheetColumns(
     .maybeSingle<FlowSheetConfigRow>();
   if (!sheet) return null;
 
-  const { data: nodes } = await db
-    .from("flow_nodes")
-    .select("node_key, node_type, config")
-    .eq("flow_id", flowId)
-    .order("created_at", { ascending: true });
+  const [{ data: nodes }, { data: flow }] = await Promise.all([
+    db
+      .from("flow_nodes")
+      .select("node_key, node_type, config, created_at")
+      .eq("flow_id", flowId)
+      .order("created_at", { ascending: true }),
+    db.from("flows").select("entry_node_id").eq("id", flowId).maybeSingle(),
+  ]);
 
   const schemaVersion = sheet.schema_version ?? 1;
   const promoteName = schemaVersion >= 2;
-  const derived = deriveFlowColumns((nodes ?? []) as FlowNodeLite[], promoteName);
+  // Canonical flow (graph-walk) order — stored columns keep their frozen
+  // positions below; only genuinely NEW keys take flow order, appended at
+  // the end via the existing append mechanism (never spliced inward).
+  const orderedNodes = orderNodesForSheets(
+    (flow as { entry_node_id?: string | null } | null)?.entry_node_id ?? null,
+    (nodes ?? []) as FlowNodeLite[],
+  );
+  const derived = deriveFlowColumns(orderedNodes, promoteName);
 
   const storedKeys = sheet.answer_columns ?? [];
   const storedHeaders = sheet.answer_headers ?? [];
