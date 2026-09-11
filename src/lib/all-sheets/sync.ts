@@ -54,6 +54,10 @@ import {
 export interface AllSheetWindow {
   from?: string;
   to?: string;
+  /** Max runs per pass (oldest first). Omitted = unbounded (manual Import). */
+  limit?: number;
+  /** Restrict to these run ids (completion handler, reconciliation). */
+  runIds?: string[];
 }
 
 interface RunRow {
@@ -132,6 +136,8 @@ export async function importAllSheetCompleted(
     .eq("status", "completed");
   if (window?.from) query = query.gte("started_at", window.from);
   if (window?.to) query = query.lt("started_at", window.to);
+  if (window?.runIds) query = query.in("id", window.runIds);
+  if (window?.limit) query = query.limit(window.limit);
   const { data: runs, error: runsError } = await query.order("started_at", { ascending: true });
   if (runsError) throw runsError;
 
@@ -181,17 +187,22 @@ export async function importAllSheetCompleted(
     vars: {},
   });
 
+  // Two-phase write: header first (then flag), rows second. A crash
+  // between phases retries cleanly instead of duplicating the header.
+  // Completed rows carry no stable id, so the tab-state stamp after the
+  // row append is the dedup key (same accepted trade-off as the existing
+  // system: duplicates over silent data loss on narrow crash windows).
   try {
-    const toWrite = sheet.header_written ? rows : [header, ...rows];
-    await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, toWrite);
+    if (!sheet.header_written) {
+      await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, [header]);
+      await db.from("all_sheet_flow_tabs").update({ header_written: true }).eq("id", tab.id);
+    }
+    await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, rows);
   } catch (err) {
     await logFailure(db, sheet, collection.account_id, tab.flow_id, null, null, { count: rows.length }, err);
     throw err;
   }
 
-  if (!sheet.header_written) {
-    await db.from("all_sheet_flow_tabs").update({ header_written: true }).eq("id", tab.id);
-  }
   await markSynced(db, tab.id, pending.map((r) => r.id));
 
   // Own-spreadsheet-only cleanup: runs that completed are removed from
@@ -225,6 +236,8 @@ export async function refreshAllSheetIncomplete(
     .in("status", [...ALL_SHEET_INCOMPLETE_STATUSES]);
   if (window?.from) query = query.gte("started_at", window.from);
   if (window?.to) query = query.lt("started_at", window.to);
+  if (window?.runIds) query = query.in("id", window.runIds);
+  if (window?.limit) query = query.limit(window.limit);
   const { data: runs, error: runsError } = await query.order("started_at", { ascending: true });
   if (runsError) throw runsError;
 
@@ -324,7 +337,21 @@ export async function refreshAllSheetIncomplete(
   const headers = buildIncompleteHeader(schemaVersion, finalCols, finalHeaders, promotedHeader);
   const runIdCol = incompleteRunIdColumnIndex(schemaVersion, finalCols, !!promotedHeader);
 
-  const rows = pending.map((run) => {
+  const toWriteHeader = tab.header_written ? null : headers;
+  // Retry reconciliation: the hidden Flow Run ID column lets us detect
+  // rows a previous crashed pass already appended (state stamp comes
+  // after the append). Present rows are skipped AND stamped, so a retry
+  // never duplicates and never loses.
+  const present = tab.header_written
+    ? await findIncompleteRowsPresent(accessToken, collection.spreadsheet_id, tab.worksheet_title, pending.map((r) => r.id))
+    : new Set<string>();
+  if (present.size > 0) {
+    await markSynced(db, tab.id, [...present]);
+  }
+  const fresh = pending.filter((r) => !present.has(r.id));
+  if (fresh.length === 0) return { imported: 0 };
+
+  const toWriteRows = fresh.map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
     const vars = (run.vars ?? {}) as Record<string, unknown>;
     return buildIncompleteRow({
@@ -344,11 +371,15 @@ export async function refreshAllSheetIncomplete(
     });
   });
 
-  const toWrite = tab.header_written ? rows : [headers, ...rows];
+  // Two-phase write: header first (then flag), rows second.
   try {
-    await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, toWrite);
+    if (toWriteHeader) {
+      await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, [toWriteHeader]);
+      await db.from("all_sheet_flow_tabs").update({ header_written: true }).eq("id", tab.id);
+    }
+    await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, toWriteRows);
   } catch (err) {
-    await logFailure(db, tab, collection.account_id, tab.flow_id, null, null, { count: rows.length }, err);
+    await logFailure(db, tab, collection.account_id, tab.flow_id, null, null, { count: toWriteRows.length }, err);
     throw err;
   }
   try {
@@ -361,8 +392,37 @@ export async function refreshAllSheetIncomplete(
     .from("all_sheet_flow_tabs")
     .update({ header_written: true, updated_at: new Date().toISOString() })
     .eq("id", tab.id);
-  await markSynced(db, tab.id, pending.map((r) => r.id));
-  return { imported: pending.length };
+  await markSynced(db, tab.id, fresh.map((r) => r.id));
+  return { imported: fresh.length };
+}
+
+/**
+ * Which of the given run ids already have a row in the tab (via the
+ * hidden Flow Run ID column). Empty set when the header is absent —
+ * nothing could have been written yet.
+ */
+export async function findIncompleteRowsPresent(
+  accessToken: string,
+  spreadsheetId: string,
+  rawWorksheetTitle: string,
+  runIds: string[],
+): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set();
+  const runIdCol = await findHeaderColumn(
+    accessToken,
+    spreadsheetId,
+    quoteSheetTitle(rawWorksheetTitle),
+    INCOMPLETE_RUN_ID_HEADER,
+  ).catch(() => null);
+  if (runIdCol === null) return new Set();
+  const found = await findExactValueRows(
+    accessToken,
+    spreadsheetId,
+    quoteSheetTitle(rawWorksheetTitle),
+    runIdCol,
+    runIds,
+  ).catch(() => new Map<string, number>());
+  return new Set(found.keys());
 }
 
 /**
@@ -411,27 +471,48 @@ async function cleanupAllSheetIncompleteForRuns(
       .in("flow_run_id", completedRunIds);
     const keyed = (states ?? []).map((s) => s.flow_run_id as string);
     if (keyed.length === 0) continue;
-
-    const runIdCol = await findHeaderColumn(
-      accessToken,
-      incCollection.spreadsheet_id,
-      quoteSheetTitle(inc.worksheet_title),
-      INCOMPLETE_RUN_ID_HEADER,
+    await removeRunsFromIncompleteTab(db, incCollection, inc, accessToken, keyed).catch((err) =>
+      console.error("[all-sheets] own cleanup failed:", err),
     );
-    if (runIdCol === null) continue;
-    const rowsByRun = await findExactValueRows(
-      accessToken,
-      incCollection.spreadsheet_id,
-      quoteSheetTitle(inc.worksheet_title),
-      runIdCol,
-      keyed,
-    );
-    const rowNumbers = [...rowsByRun.values()];
-    if (rowNumbers.length > 0) {
-      await deleteSheetRows(accessToken, incCollection.spreadsheet_id, inc.worksheet_title, rowNumbers);
-    }
-    await db.from("all_sheet_tab_run_state").delete().eq("tab_id", inc.id).in("flow_run_id", keyed);
   }
+}
+
+/**
+ * Remove specific run rows from one incomplete tab (located by the hidden
+ * Flow Run ID column — the stable per-run identity, never name/phone/time)
+ * and clear their tab state. Rows already absent are treated as removed
+ * (state still cleared) so a missing row never blocks the completed append
+ * and never retries forever. Never throws for missing rows; throws on
+ * Google/DB failures so callers can log + retry.
+ */
+export async function removeRunsFromIncompleteTab(
+  db: SupabaseClient,
+  incCollection: AllSheetCollectionRow,
+  inc: AllSheetFlowTabRow,
+  accessToken: string,
+  runIds: string[],
+): Promise<{ removed: number }> {
+  if (runIds.length === 0) return { removed: 0 };
+  const runIdCol = await findHeaderColumn(
+    accessToken,
+    incCollection.spreadsheet_id,
+    quoteSheetTitle(inc.worksheet_title),
+    INCOMPLETE_RUN_ID_HEADER,
+  );
+  if (runIdCol === null) return { removed: 0 };
+  const rowsByRun = await findExactValueRows(
+    accessToken,
+    incCollection.spreadsheet_id,
+    quoteSheetTitle(inc.worksheet_title),
+    runIdCol,
+    runIds,
+  );
+  const rowNumbers = [...rowsByRun.values()];
+  if (rowNumbers.length > 0) {
+    await deleteSheetRows(accessToken, incCollection.spreadsheet_id, inc.worksheet_title, rowNumbers);
+  }
+  await db.from("all_sheet_tab_run_state").delete().eq("tab_id", inc.id).in("flow_run_id", runIds);
+  return { removed: rowNumbers.length };
 }
 
 /**

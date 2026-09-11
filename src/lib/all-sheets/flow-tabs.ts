@@ -31,8 +31,7 @@ import type {
 } from "./types";
 import { schemaVersionForKind } from "./types";
 
-/** Fetch the tab for (collection, flow), or null when never added. */
-export async function getFlowTab(
+/** Fetch the tab for (collection, flow), or null when never added. */export async function getFlowTab(
   db: SupabaseClient,
   collectionId: string,
   flowId: string,
@@ -169,4 +168,40 @@ export async function ensureFlowTab(
   }
   if (!tab) throw new Error("Failed to save All Sheets flow tab");
   return { tab, created: true };
+}
+
+/**
+ * Re-resolve an existing tab row against the live spreadsheet (by stored
+ * worksheet_id, falling back to title adoption), persisting observed
+ * drift. Used by the background worker and completion handler so a
+ * Drive-side tab deletion is healed instead of appending into the void.
+ * Never renames the default Sheet1 here (creation-time concern only);
+ * a wholly absent tab is re-created with the stored title.
+ */
+export async function resolveAllTabWorksheet(
+  db: SupabaseClient,
+  collection: AllSheetCollectionRow,
+  tab: AllSheetFlowTabRow,
+  accessToken: string,
+): Promise<AllSheetFlowTabRow> {
+  const ensured = await ensureWorksheetTab(
+    accessToken,
+    collection.spreadsheet_id,
+    tab.worksheet_title,
+    { storedWorksheetId: tab.worksheet_id, renameDefaultSheet: false },
+  );
+  if (ensured.worksheetId === tab.worksheet_id && ensured.title === tab.worksheet_title) {
+    return tab;
+  }
+  const { data: updated } = await db
+    .from("all_sheet_flow_tabs")
+    .update({
+      worksheet_id: ensured.worksheetId,
+      worksheet_title: ensured.title,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", tab.id)
+    .select()
+    .single<AllSheetFlowTabRow>();
+  return updated ?? tab;
 }
