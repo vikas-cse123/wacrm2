@@ -33,6 +33,7 @@
  */
 
 import { supabaseAdmin } from "./admin-client";
+import { withFlowAdvanceLock } from "./advance-lock";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRow,
@@ -1111,6 +1112,40 @@ export async function dispatchInboundToFlows(
   input: DispatchInboundInput & { isFirstInboundMessage: boolean },
 ): Promise<DispatchInboundResult> {
   const db = supabaseAdmin();
+  try {
+    // Serialize advances per contact: two webhook deliveries seconds apart
+    // (different Meta ids) would otherwise both walk the same suspended
+    // run's auto-advance chain and execute every side effect twice. The
+    // loser waits, then runs the body below against FRESH state — so a
+    // duplicate tap finds the run already moved/completed (no re-advance),
+    // while a genuinely different reply is evaluated against the node the
+    // run actually sits at. Everything below re-reads after acquiring.
+    const guarded = await withFlowAdvanceLock(
+      db,
+      input.accountId,
+      input.contactId,
+      () => dispatchInboundToFlowsUnlocked(db, input),
+    );
+    if (!guarded.ok) {
+      // Another advance for this contact is still holding the guard past
+      // our wait budget. Treat as handled (suppress keyword automations
+      // like other consumed paths) — the holder's advance owns the reply.
+      return { consumed: true, outcome: "advance_busy_skipped" };
+    }
+    return guarded.value;
+  } catch (err) {
+    console.error(
+      "[flows] dispatchInboundToFlows threw:",
+      err instanceof Error ? err.message : err,
+    );
+    return { consumed: false, outcome: "no_match" };
+  }
+}
+
+async function dispatchInboundToFlowsUnlocked(
+  db: AdminClient,
+  input: DispatchInboundInput & { isFirstInboundMessage: boolean },
+): Promise<DispatchInboundResult> {
   try {
     const activeRun = await loadActiveRunForContact(
       db,

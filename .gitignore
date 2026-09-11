@@ -45,3 +45,4 @@ next-env.d.ts
 
 # Local source assets (competitor logos live in public/logos/); keep private files out of git
 logos/
+zf.sh
