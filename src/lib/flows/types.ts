@@ -420,6 +420,7 @@ export interface DispatchInboundResult {
     | "handed_off"
     | "fallback_fired"
     | "duplicate_inbound_ignored"
+    | "advance_busy_skipped"
     | "no_match";
 }
 
