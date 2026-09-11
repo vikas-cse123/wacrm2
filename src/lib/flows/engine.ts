@@ -34,6 +34,10 @@
 
 import { supabaseAdmin } from "./admin-client";
 import { withFlowAdvanceLock } from "./advance-lock";
+// ADDITIVE All Sheets completion hook (see PART 8): the import below only
+// feeds the best-effort handler in endRun. It never alters existing Google
+// Sheets logic, imports, or flow behavior.
+import { handleAllSheetCompletion } from "@/lib/all-sheets/completion";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRow,
@@ -712,6 +716,19 @@ async function endRun(
       end_reason: reason,
     })
     .eq("id", runId);
+
+  // ADDITIVE All Sheets completion hook (see PART 8): fires only for
+  // engine-driven completions, best-effort, fully isolated. The handler
+  // never throws and never touches existing Google Sheets state — and
+  // this outer guard guarantees the flow itself can never fail because
+  // of All Sheets, no matter what.
+  if (status === "completed") {
+    try {
+      await handleAllSheetCompletion(db, runId);
+    } catch (err) {
+      console.error("[all-sheets] completion hook failed:", err);
+    }
+  }
 }
 
 // ============================================================

@@ -25,11 +25,13 @@ PUBLIC_URL="${2:-https://interscalechat.co.in}"
 ENV_FILE="$APP_DIR/.env.local"
 AUTOMATION_CRON_URL="${PUBLIC_URL%/}/api/automations/cron"
 FLOW_CRON_URL="${PUBLIC_URL%/}/api/flows/cron"
+ALL_SHEETS_CRON_URL="${PUBLIC_URL%/}/api/all-sheets/cron"
 MARKER="# wacrm-automation-cron"
 
 echo "▸ App dir     : $APP_DIR"
 echo "▸ Cron targets: $AUTOMATION_CRON_URL"
 echo "               $FLOW_CRON_URL"
+echo "               $ALL_SHEETS_CRON_URL"
 
 # 1) Ensure the secret exists ------------------------------------------------
 if [ ! -f "$ENV_FILE" ]; then
@@ -67,7 +69,12 @@ fi
 
 # Reads the secret from .env.local at run time, so rotating it + re-running
 # this script keeps the two in sync automatically.
-CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$AUTOMATION_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$FLOW_CRON_URL\" >/dev/null 2>&1 $MARKER"
+#
+# The All Sheets curl is appended LAST with && so that a failure from the
+# All Sheets endpoint can never prevent the existing automations/flows
+# crons from running (nothing follows it). The existing
+# automations-cron && flows-cron sequence is byte-identical to before.
+CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$AUTOMATION_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$FLOW_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$ALL_SHEETS_CRON_URL\" >/dev/null 2>&1 $MARKER"
 
 # Replace any prior line we installed, keep everything else. Both `crontab -l`
 # (no crontab yet) and `grep -v` (empty input) legitimately exit non-zero, so
@@ -108,5 +115,5 @@ fi
 echo "✓ Flow sweep working — endpoint responded: $FLOW_RESP"
 
 echo
-echo "Done. Wait-step automations and incomplete-flow sheets now update every minute."
+echo "Done. Wait-step automations, incomplete-flow sheets, and All Sheets lifecycle now update every minute."
 echo "Watch it run:  crontab -l | grep automation-cron"

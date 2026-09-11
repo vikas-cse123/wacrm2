@@ -27,6 +27,8 @@ import {
   importAllSheetCompleted,
   refreshAllSheetIncomplete,
 } from "@/lib/all-sheets/sync";
+import { handleAllSheetCompletion } from "@/lib/all-sheets/completion";
+import { runAllSheetsCron } from "@/lib/all-sheets/auto-sync";
 import { quoteSheetTitle } from "@/lib/google/tabs";
 import type {
   AllSheetCollectionRow,
@@ -262,6 +264,8 @@ class MockGoogle {
   valueBatchBodies: unknown[] = [];
   deletedSheetIds: number[] = [];
   deletedSpreadsheetIds: string[] = [];
+  rowDeleteCalls: Array<{ ssid: string; request: unknown }> = [];
+  failNextAppend = false;
 
   async fetch(input: unknown, init?: { method?: string; body?: string }): Promise<unknown> {
     const url = String(input);
@@ -323,6 +327,9 @@ class MockGoogle {
           const tab = ss.tabs.find((t) => t.sheetId === (props["sheetId"] as number));
           if (tab) tab.title = props["title"] as string;
           replies.push({});
+        } else if (req["deleteDimension"]) {
+          this.rowDeleteCalls.push({ ssid, request: req["deleteDimension"] });
+          replies.push({});
         } else {
           replies.push({});
         }
@@ -330,6 +337,15 @@ class MockGoogle {
       return this.ok({ replies });
     }
     if (rest.includes("/values/") && rest.includes(":append")) {
+      if (this.failNextAppend) {
+        this.failNextAppend = false;
+        return {
+          ok: false,
+          status: 500,
+          json: () => Promise.resolve({}),
+          text: () => Promise.resolve("injected Google failure"),
+        };
+      }
       const body = JSON.parse(init?.body ?? "{}") as { values?: unknown };
       this.appendCalls.push({ url, rows: body.values });
       return this.ok({});
@@ -387,10 +403,10 @@ function seedBase(db: FakeDb): void {
   ];
   db.tables["contacts"] = [{ id: C1, phone: "+911", name: "Asha" }];
   db.tables["flow_runs"] = [
-    { id: "R1", flow_id: FA, contact_id: C1, status: "completed", vars: { name: "Asha", guests: "2" }, started_at: "2024-02-01T00:00:00Z", ended_at: "2024-02-01T00:05:00Z" },
-    { id: "R2", flow_id: FA, contact_id: C1, status: "completed", vars: { name: "Ravi" }, started_at: "2024-02-02T00:00:00Z", ended_at: "2024-02-02T00:05:00Z" },
-    { id: "R3", flow_id: FB, contact_id: C1, status: "completed", vars: { name: "B" }, started_at: "2024-02-03T00:00:00Z", ended_at: "2024-02-03T00:05:00Z" },
-    { id: "R4", flow_id: FA, contact_id: C1, status: "timed_out", vars: { name: "Drop" }, started_at: "2024-02-04T00:00:00Z", ended_at: "2024-02-04T01:05:00Z" },
+    { id: "R1", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed", vars: { name: "Asha", guests: "2" }, started_at: "2024-02-01T00:00:00Z", ended_at: "2024-02-01T00:05:00Z" },
+    { id: "R2", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed", vars: { name: "Ravi" }, started_at: "2024-02-02T00:00:00Z", ended_at: "2024-02-02T00:05:00Z" },
+    { id: "R3", flow_id: FB, account_id: ACC, contact_id: C1, status: "completed", vars: { name: "B" }, started_at: "2024-02-03T00:00:00Z", ended_at: "2024-02-03T00:05:00Z" },
+    { id: "R4", flow_id: FA, account_id: ACC, contact_id: C1, status: "timed_out", vars: { name: "Drop" }, started_at: "2024-02-04T00:00:00Z", ended_at: "2024-02-04T01:05:00Z" },
   ];
   db.tables["all_sheet_collections"] = [];
   db.tables["all_sheet_flow_tabs"] = [];
@@ -585,6 +601,255 @@ describe("all-sheets collection/tab behavior", () => {
     expect(db.tables["all_sheet_collections"]?.length ?? 0).toBe(1);
     assertProtectedTablesUntouched(db);
   });
+});
+
+// ------------------------------------------------------------
+// Automatic lifecycle: timeout sweep, completion transition,
+// worker idempotency + retry, multi-flow/account isolation.
+// ------------------------------------------------------------
+function completedAppendsTo(google: MockGoogle, ssid: string): string[] {
+  return google.appendCalls.map((c) => c.url).filter((u) => u.includes(`/spreadsheets/${ssid}/values/`));
+}
+
+describe("all-sheets automatic lifecycle", () => {
+  it("1. run completes before threshold → Completed only, never Incomplete", async () => {
+    const { db, google } = setupEnv();
+    const completed = await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R5", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed",
+      vars: { name: "Early" }, started_at: "2024-03-01T09:00:00Z", ended_at: "2024-03-01T09:05:00Z",
+    });
+    google.appendCalls = [];
+
+    const res = await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+    expect(res.completed).toBe(true);
+
+    const incompleteTab = (db.tables["all_sheet_flow_tabs"] as Row[]).find(
+      (t) => t["flow_id"] === FA && t["collection_id"] !== completed.collection.id,
+    );
+    const incStates = ((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).filter(
+      (s) => s["tab_id"] === incompleteTab?.["id"],
+    );
+    expect(incStates).toHaveLength(0);
+    expect(completedAppendsTo(google, completed.collection.spreadsheet_id)).toHaveLength(1);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("2. run reaching the threshold is swept to timed_out and lands in Incomplete only", async () => {
+    const { db, google } = setupEnv();
+    const inc = await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    const comp = await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R6", flow_id: FA, account_id: ACC, contact_id: C1, status: "active",
+      vars: { name: "Slow" }, started_at: "2024-01-01T09:00:00Z", ended_at: null,
+      last_advanced_at: "2024-01-01T09:00:00Z",
+    });
+    google.appendCalls = [];
+
+    const res = await runAllSheetsCron({ db: asSupabase(db), getToken: async () => "tok" });
+    expect(res.swept).toBe(1);
+
+    const r6 = (db.tables["flow_runs"] as Row[]).find((r) => r["id"] === "R6");
+    expect(r6?.["status"]).toBe("timed_out");
+    const incStates = ((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).filter(
+      (s) => s["tab_id"] === inc.tab.id,
+    );
+    expect(incStates.map((s) => s["flow_run_id"])).toContain("R6");
+    // R6 never touched the completed side.
+    const compStates = ((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).filter(
+      (s) => s["tab_id"] === comp.tab.id,
+    );
+    expect(compStates.map((s) => s["flow_run_id"])).not.toContain("R6");
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("3. incomplete run that later completes is removed then added", async () => {
+    const { db, google } = setupEnv();
+    const inc = await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    // Simulate a prior incomplete sync of R4.
+    (db.tables["all_sheet_tab_run_state"] as Row[]).push({ tab_id: inc.tab.id, flow_run_id: "R4" });
+    google.columnHits = ["R4"];
+    const r4 = (db.tables["flow_runs"] as Row[]).find((r) => r["id"] === "R4");
+    if (r4) r4["status"] = "completed";
+    google.appendCalls = [];
+    google.rowDeleteCalls = [];
+
+    const res = await handleAllSheetCompletion(asSupabase(db), "R4", { getToken: async () => "tok" });
+    expect(res.completed).toBe(true);
+    expect(res.removedIncomplete).toBe(true);
+
+    expect(google.rowDeleteCalls.length).toBeGreaterThan(0);
+    const incStates = ((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).filter(
+      (s) => s["tab_id"] === inc.tab.id,
+    );
+    expect(incStates).toHaveLength(0);
+    const compTab = (db.tables["all_sheet_flow_tabs"] as Row[]).find(
+      (t) => t["flow_id"] === FA && t["id"] !== inc.tab.id,
+    );
+    const compStates = ((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).filter(
+      (s) => s["tab_id"] === compTab?.["id"],
+    );
+    expect(compStates.map((s) => s["flow_run_id"])).toContain("R4");
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("4. completion before the worker never inserts into Incomplete", async () => {
+    const { db, google } = setupEnv();
+    await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R5", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed",
+      vars: { name: "Early" }, started_at: "2024-03-01T09:00:00Z", ended_at: "2024-03-01T09:05:00Z",
+    });
+
+    await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+    google.appendCalls = [];
+    await runAllSheetsCron({ db: asSupabase(db), getToken: async () => "tok" });
+
+    // R5 (completed) is unknown to every incomplete tab.
+    const allStates = ((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).filter(
+      (s) => (s["flow_run_id"] as string) === "R5",
+    );
+    const incompleteTabIds = new Set(
+      ((db.tables["all_sheet_flow_tabs"] as Row[]) ?? [])
+        .filter((t) => {
+          const col = ((db.tables["all_sheet_collections"] as Row[]) ?? []).find((c) => c["id"] === t["collection_id"]);
+          return col?.["kind"] === "incomplete";
+        })
+        .map((t) => t["id"]),
+    );
+    const r5IncStates = allStates.filter((s) => incompleteTabIds.has(s["tab_id"] as string));
+    expect(r5IncStates).toHaveLength(0);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("5. worker running twice creates no duplicate Incomplete rows", async () => {
+    const { db, google } = setupEnv();
+    await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+
+    const first = await runAllSheetsCron({ db: asSupabase(db), getToken: async () => "tok" });
+    const appendsAfterFirst = google.appendCalls.length;
+    const second = await runAllSheetsCron({ db: asSupabase(db), getToken: async () => "tok" });
+
+    expect(first.incompleteSynced).toBeGreaterThan(0);
+    expect(second.incompleteSynced).toBe(0);
+    expect(google.appendCalls.length).toBe(appendsAfterFirst);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("6. completion handler running twice creates no duplicate Completed rows", async () => {
+    const { db, google } = setupEnv();
+    await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R5", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed",
+      vars: { name: "Dup" }, started_at: "2024-03-01T09:00:00Z", ended_at: "2024-03-01T09:05:00Z",
+    });
+
+    await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+    const afterFirst = google.appendCalls.length;
+    const res = await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+
+    expect(res.completed).toBe(true);
+    expect(google.appendCalls.length).toBe(afterFirst);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("7. missing incomplete row does not block the completed append", async () => {
+    const { db } = setupEnv();
+    await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R5", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed",
+      vars: { name: "Ghost" }, started_at: "2024-03-01T09:00:00Z", ended_at: "2024-03-01T09:05:00Z",
+    });
+    // columnHits stays []: the incomplete row does not exist in Drive.
+
+    const res = await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+    expect(res.completed).toBe(true);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("8. Google failure during incomplete sync retries without duplicates", async () => {
+    const { db, google } = setupEnv();
+    await addFlow(db, "incomplete", FA, "Kashmir Winter + New Year Ad Chat Flow");
+
+    google.failNextAppend = true;
+    await expect(
+      refreshAllSheetIncomplete(
+        asSupabase(db),
+        ((db.tables["all_sheet_collections"] as Row[]).find(
+          (c) => c["kind"] === "incomplete",
+        ) as unknown as { id: string; account_id: string; kind: "completed" | "incomplete"; spreadsheet_id: string; spreadsheet_url: string | null; spreadsheet_name: string | null }),
+        ((db.tables["all_sheet_flow_tabs"] as Row[])[0] as unknown as Parameters<typeof refreshAllSheetIncomplete>[2]),
+        "tok",
+      ),
+    ).rejects.toThrow();
+    expect(((db.tables["all_sheet_tab_sync_failures"] as Row[]) ?? []).length).toBeGreaterThan(0);
+    expect(((db.tables["all_sheet_tab_run_state"] as Row[]) ?? []).length).toBe(0);
+
+    const okAppendsBefore = google.appendCalls.length;
+    const retry = await refreshAllSheetIncomplete(
+      asSupabase(db),
+      ((db.tables["all_sheet_collections"] as Row[]).find(
+        (c) => c["kind"] === "incomplete",
+      ) as unknown as Parameters<typeof refreshAllSheetIncomplete>[1]),
+      ((db.tables["all_sheet_flow_tabs"] as Row[])[0] as unknown as Parameters<typeof refreshAllSheetIncomplete>[2]),
+      "tok",
+    );
+    expect(retry.imported).toBe(1); // R4 only
+    expect(google.appendCalls.length).toBe(okAppendsBefore + 1);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("9. Google failure during completion transition retries; handler never rejects", async () => {
+    const { db, google } = setupEnv();
+    await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R5", flow_id: FA, account_id: ACC, contact_id: C1, status: "completed",
+      vars: { name: "Flaky" }, started_at: "2024-03-01T09:00:00Z", ended_at: "2024-03-01T09:05:00Z",
+    });
+
+    google.failNextAppend = true;
+    const first = await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+    expect(first.completed).toBe(false); // resolved, not rejected; failure logged
+
+    const okAppendsBefore = google.appendCalls.length;
+    const second = await handleAllSheetCompletion(asSupabase(db), "R5", { getToken: async () => "tok" });
+    expect(second.completed).toBe(true);
+    expect(google.appendCalls.length).toBe(okAppendsBefore + 1);
+    assertProtectedTablesUntouched(db);
+  });
+
+  it("10+11. runs route only to their own flow tab and account", async () => {
+    const { db, google } = setupEnv();
+    (db.tables["flows"] as Row[]).push({ id: "FC", account_id: "ACC2", name: "Other", entry_node_id: "start" });
+    (db.tables["flow_runs"] as Row[]).push({
+      id: "R7", flow_id: "FC", account_id: "ACC2", contact_id: C1, status: "completed",
+      vars: { name: "Z" }, started_at: "2024-03-01T09:00:00Z", ended_at: "2024-03-01T09:05:00Z",
+    });
+    const a = await addFlow(db, "completed", FA, "Kashmir Winter + New Year Ad Chat Flow");
+    const { getOrCreateCollection } = await import("@/lib/all-sheets/collections");
+    const { ensureFlowTab } = await import("@/lib/all-sheets/flow-tabs");
+    const { collection: c2 } = await getOrCreateCollection(asSupabase(db), "ACC2", "completed", "tok");
+    await ensureFlowTab(asSupabase(db), c2, "completed", "FC", "Other", "tok");
+    google.appendCalls = [];
+
+    await handleAllSheetCompletion(asSupabase(db), "R1", { getToken: async () => "tok" });
+    await handleAllSheetCompletion(asSupabase(db), "R7", { getToken: async () => "tok" });
+
+    const urls = google.appendCalls.map((c) => c.url);
+    const toA = urls.filter((u) => u.includes(`/spreadsheets/${a.collection.spreadsheet_id}/values/`));
+    const toC2 = urls.filter((u) => u.includes(`/spreadsheets/${c2.spreadsheet_id}/values/`));
+    expect(toA.length).toBeGreaterThan(0);
+    expect(toC2.length).toBeGreaterThan(0);
+    // Flow B title never appears in a Flow A append and vice versa.
+    for (const u of toA) expect(decodeURIComponent(u)).not.toContain("Honeymoon");
+    assertProtectedTablesUntouched(db);
+  });
+});
 
   it("importing Flow A appends only to Flow A's tab range (check 7)", async () => {
     const { db, google } = setupEnv();
@@ -676,4 +941,3 @@ describe("all-sheets collection/tab behavior", () => {
     expect(serialized).not.toContain("Kashmir%20");
     assertProtectedTablesUntouched(db);
   });
-});
