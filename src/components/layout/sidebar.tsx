@@ -108,6 +108,7 @@ const navItems: NavItem[] = [
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/data-export", label: "Google Sheets", icon: Sheet },
+  { href: "/all-sheets", label: "All Sheets", icon: Sheet },
   { href: "/chat-assignment", label: "Chat Assignment", icon: Route },
 ];
 
@@ -132,7 +133,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const visibleNavItems = navItems.filter((item) => {
     if (
       !isOwner &&
-      (item.href === "/flows" || item.href === "/agents" || item.href === "/data-export" || item.href === "/chat-assignment")
+      (item.href === "/flows" || item.href === "/agents" || item.href === "/data-export" || item.href === "/all-sheets" || item.href === "/chat-assignment")
     ) {
       return false;
     }
