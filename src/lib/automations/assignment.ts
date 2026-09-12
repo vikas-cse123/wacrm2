@@ -42,6 +42,7 @@ export interface AssignmentPickRow {
 
 interface DbLike {
   from(table: string): any
+  rpc?(fn: string, args?: Record<string, unknown>): any
 }
 
 /**
@@ -89,9 +90,11 @@ export function normalizePersons(raw: unknown): AssignPerson[] {
 }
 
 /**
- * Weighted random index. Randomness happens ONCE per execution — the
- * caller persists the result via claimAssignmentPick so retries reuse
- * the stored winner instead of re-drawing.
+ * Weighted random index — legacy random path, kept for fallback and
+ * tests. New assignments use claimSwrrIndex (deterministic SWRR).
+ * Randomness happens ONCE per execution — the caller persists the
+ * result via claimAssignmentPick so retries reuse the stored winner
+ * instead of re-drawing.
  */
 export function pickWeightedIndex(
   persons: AssignPerson[],
@@ -104,6 +107,36 @@ export function pickWeightedIndex(
     if (r < 0) return i
   }
   return persons.length - 1
+}
+
+/**
+ * SWRR index via atomic DB RPC. Returns 0-based index.
+ * Falls back to pickWeightedIndex if RPC unavailable (pre-migration).
+ */
+export async function claimSwrrIndex(
+  db: DbLike,
+  automationId: string,
+  stepKey: string,
+  persons: AssignPerson[],
+  rand?: () => number,
+): Promise<number> {
+  const names = persons.map((p) => p.name)
+  const weights = persons.map((p) => Number(p.percentage))
+  if (db.rpc) {
+    const { data, error } = await db.rpc('claim_assignment_swrr_pick', {
+      p_automation_id: automationId,
+      p_step_key: stepKey,
+      p_person_names: names,
+      p_person_weights: weights,
+    })
+    if (!error && typeof data === 'number' && Number.isInteger(data) && data >= 0 && data < persons.length) {
+      return data
+    }
+    // Fall through to random fallback on RPC error (e.g., function not yet deployed)
+    if (error) console.error('[assignment] SWRR RPC failed, falling back to random:', error)
+  }
+  // Fallback: weighted random (pre-migration compat)
+  return pickWeightedIndex(persons, rand ?? Math.random)
 }
 
 /**
@@ -137,13 +170,12 @@ export async function claimAssignmentPick(
     if (existing) return existing as AssignmentPickRow
   }
 
-  const index = pickWeightedIndex(args.persons, args.rand ?? Math.random)
-  const person = args.persons[index]!
-
   // Degraded mode (no log row — should not happen in practice):
-  // return a transient pick so the send can still proceed; without a
+  // return a transient pick via SWRR so the send can still proceed; without a
   // log_id there is no unique key to dedupe retries against.
   if (!args.logId) {
+    const idx = await claimSwrrIndex(db, args.automationId, args.stepKey, args.persons, args.rand)
+    const p = args.persons[idx]!
     return {
       id: `transient-${Date.now()}`,
       automation_id: args.automationId,
@@ -152,16 +184,85 @@ export async function claimAssignmentPick(
       flow_run_id: args.flowRunId,
       log_id: null,
       step_key: args.stepKey,
-      person_name: person.name,
-      person_index: index,
-      percentage: Number(person.percentage),
-      message: person.message,
-      message_type: person.message_type ?? 'text',
-      media_url: person.media_url ?? null,
-      tag_id: person.tag_id,
+      person_name: p.name,
+      person_index: idx,
+      percentage: Number(p.percentage),
+      message: p.message,
+      message_type: p.message_type ?? 'text',
+      media_url: p.media_url ?? null,
+      tag_id: p.tag_id,
       created_at: new Date().toISOString(),
     }
   }
+
+  // Atomic SWRR + durable pick: exactly one SWRR turn per successful new assignment.
+  // The RPC locks SWRR row, checks existing pick (retry), computes SWRR candidate,
+  // inserts picks, and only on winner commits SWRR advancement. Loser reuses winner
+  // without consuming another turn. See 070 migration header for two-worker proof.
+  if (db.rpc) {
+    const names = args.persons.map((p) => p.name)
+    const weights = args.persons.map((p) => Number(p.percentage))
+    const messages = args.persons.map((p) => p.message)
+    const messageTypes = args.persons.map((p) => p.message_type ?? 'text')
+    const mediaUrls = args.persons.map((p) => p.media_url ?? '')
+    const tagIds = args.persons.map((p) => p.tag_id)
+    const percentages = weights
+    try {
+      const { data: pickedIdx, error: rpcErr } = await db.rpc('claim_assignment_pick_swrr', {
+        p_automation_id: args.automationId,
+        p_account_id: args.accountId,
+        p_contact_id: args.contactId,
+        p_flow_run_id: args.flowRunId,
+        p_log_id: args.logId,
+        p_step_key: args.stepKey,
+        p_person_names: names,
+        p_person_weights: weights,
+        p_person_messages: messages,
+        p_person_message_types: messageTypes,
+        p_person_media_urls: mediaUrls,
+        p_person_tag_ids: tagIds,
+        p_person_percentages: percentages,
+      })
+      if (!rpcErr && typeof pickedIdx === 'number' && Number.isInteger(pickedIdx) && pickedIdx >= 0 && pickedIdx < args.persons.length) {
+        const { data: winner } = await db
+          .from('automation_assignment_picks')
+          .select('*')
+          .eq('automation_id', args.automationId)
+          .eq('log_id', args.logId)
+          .eq('step_key', args.stepKey)
+          .maybeSingle()
+        if (winner) return winner as AssignmentPickRow
+        // Fallback: RPC succeeded but pick row not yet visible (should not happen) — construct from index
+        const person = args.persons[pickedIdx]!
+        return {
+          id: `fallback-${Date.now()}`,
+          automation_id: args.automationId,
+          account_id: args.accountId,
+          contact_id: args.contactId,
+          flow_run_id: args.flowRunId,
+          log_id: args.logId,
+          step_key: args.stepKey,
+          person_name: person.name,
+          person_index: pickedIdx,
+          percentage: Number(person.percentage),
+          message: person.message,
+          message_type: person.message_type ?? 'text',
+          media_url: person.media_url ?? null,
+          tag_id: person.tag_id,
+          created_at: new Date().toISOString(),
+        }
+      }
+      if (rpcErr) console.error('[assignment] atomic SWRR pick RPC failed, falling back:', rpcErr)
+    } catch (e) {
+      console.error('[assignment] atomic SWRR pick threw, falling back:', e)
+    }
+  }
+
+  // Fallback path (pre-070 or RPC error): SWRR via claimSwrrIndex + separate upsert.
+  // This may waste one SWRR turn on same-log_id concurrent loser, but preserves correctness
+  // when the atomic RPC is unavailable. Post-migration this path is not taken.
+  const index = await claimSwrrIndex(db, args.automationId, args.stepKey, args.persons, args.rand)
+  const person = args.persons[index]!
 
   const payload = {
     automation_id: args.automationId,

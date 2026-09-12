@@ -21,11 +21,115 @@ const h = vi.hoisted(() => ({
     failLogInsertWithFlowRunIdOnce: false,
     enrichCalls: [] as Array<{ accountId: string; flowRunId: string | null }>,
     logSeq: 0,
+    swrr: new Map<string, { names: string[]; weights: number[]; cur: number[] }>(),
   },
 }));
 
 vi.mock("./admin-client", () => {
   const { state } = h;
+  function swrrPick(names: string[], weights: number[], key: string): number {
+    const n = names.length;
+    const total = weights.reduce((a, b) => a + b, 0);
+    let entry = (state.swrr as Map<string, { names: string[]; weights: number[]; cur: number[] }>).get(key);
+    if (!entry) {
+      entry = { names: [...names], weights: [...weights], cur: Array(n).fill(0) };
+      (state.swrr as Map<string, { names: string[]; weights: number[]; cur: number[] }>).set(key, entry);
+    }
+    const oldNames = entry.names;
+    const oldCur = entry.cur;
+    const oldWeights = entry.weights;
+    const exact =
+      oldNames.length === n &&
+      oldNames.every((v, i) => v.toLowerCase() === names[i].toLowerCase()) &&
+      oldWeights.every((v, i) => v === weights[i]) &&
+      oldCur.length === n;
+    let newCur: number[];
+    if (exact) newCur = [...oldCur];
+    else {
+      newCur = Array(n).fill(0);
+      for (let i = 0; i < n; i++) {
+        const idx = oldNames.findIndex((v) => v.toLowerCase() === names[i].toLowerCase());
+        if (idx !== -1 && idx < oldCur.length) newCur[i] = oldCur[idx]!;
+        else newCur[i] = 0;
+      }
+      const sum = newCur.reduce((a, b) => a + b, 0);
+      if (sum !== 0) { const mean = sum / n; for (let i = 0; i < n; i++) newCur[i]! -= mean; }
+    }
+    for (let i = 0; i < n; i++) newCur[i]! += weights[i]!;
+    let max = newCur[0]!;
+    let picked = 0;
+    for (let i = 1; i < n; i++) if (newCur[i]! > max) { max = newCur[i]!; picked = i; }
+    newCur[picked]! -= total;
+    entry.names = [...names];
+    entry.weights = [...weights];
+    entry.cur = newCur;
+    return picked;
+  }
+  async function swrrRpc(fn: string, args: Record<string, unknown>) {
+    if (fn === "claim_assignment_swrr_pick") {
+      const automationId = String((args as Record<string, unknown>).p_automation_id);
+      const stepKey = String((args as Record<string, unknown>).p_step_key);
+      const names = (args as Record<string, unknown>).p_person_names as string[];
+      const weights = ((args as Record<string, unknown>).p_person_weights as unknown[]).map(Number);
+      const picked = swrrPick(names, weights, `${automationId}::${stepKey}`);
+      return { data: picked, error: null };
+    }
+    if (fn === "claim_assignment_pick_swrr") {
+      const automationId = String((args as Record<string, unknown>).p_automation_id);
+      const logId = (args as Record<string, unknown>).p_log_id ? String((args as Record<string, unknown>).p_log_id) : null;
+      const stepKey = String((args as Record<string, unknown>).p_step_key);
+      const names = (args as Record<string, unknown>).p_person_names as string[];
+      const weights = ((args as Record<string, unknown>).p_person_weights as unknown[]).map(Number);
+      const messages = (args as Record<string, unknown>).p_person_messages as string[];
+      const messageTypes = (args as Record<string, unknown>).p_person_message_types as string[];
+      const mediaUrls = (args as Record<string, unknown>).p_person_media_urls as string[];
+      const tagIds = (args as Record<string, unknown>).p_person_tag_ids as string[];
+      const percentages = ((args as Record<string, unknown>).p_person_percentages as unknown[]).map(Number);
+      if (logId) {
+        const existing = state.picks.find((r) => (r as Record<string, unknown>).automation_id === automationId && (r as Record<string, unknown>).log_id === logId && (r as Record<string, unknown>).step_key === stepKey);
+        if (existing) return { data: (existing as Record<string, unknown>).person_index as number, error: null };
+      }
+      if (logId) {
+        const existing2 = state.picks.find((r) => (r as Record<string, unknown>).automation_id === automationId && (r as Record<string, unknown>).log_id === logId && (r as Record<string, unknown>).step_key === stepKey);
+        if (existing2) return { data: (existing2 as Record<string, unknown>).person_index as number, error: null };
+      }
+      const picked = swrrPick(names, weights, `${automationId}::${stepKey}`);
+      if (!logId) return { data: picked, error: null };
+      const existingAfter = state.picks.find((r) => (r as Record<string, unknown>).automation_id === automationId && (r as Record<string, unknown>).log_id === logId && (r as Record<string, unknown>).step_key === stepKey);
+      if (existingAfter) {
+        // Loser: do not keep the wasted SWRR advancement (revert by undoing last pick)
+        // For mock, we revert by undoing the last swrrPick: we know picked, weights, total
+        const entry = (state.swrr as Map<string, { names: string[]; weights: number[]; cur: number[] }>).get(`${automationId}::${stepKey}`)!;
+        const total = weights.reduce((a, b) => a + b, 0);
+        // Undo: cur[picked] += total; then subtract weights
+        entry.cur[picked]! += total;
+        for (let i = 0; i < names.length; i++) entry.cur[i]! -= weights[i]!;
+        // Note: reconciliation re-center not needed for revert due to single-threaded mock
+        return { data: (existingAfter as Record<string, unknown>).person_index as number, error: null };
+      }
+      const idx = picked;
+      const row = {
+        id: `pick-${state.picks.length + 1}`,
+        created_at: "2026-01-01",
+        automation_id: automationId,
+        account_id: String((args as Record<string, unknown>).p_account_id),
+        contact_id: (args as Record<string, unknown>).p_contact_id ? String((args as Record<string, unknown>).p_contact_id) : null,
+        flow_run_id: (args as Record<string, unknown>).p_flow_run_id ? String((args as Record<string, unknown>).p_flow_run_id) : null,
+        log_id: logId,
+        step_key: stepKey,
+        person_name: names[idx],
+        person_index: idx,
+        percentage: percentages[idx],
+        message: messages[idx],
+        message_type: messageTypes[idx],
+        media_url: mediaUrls[idx] || null,
+        tag_id: tagIds[idx],
+      };
+      state.picks.push(row);
+      return { data: idx, error: null };
+    }
+    return { data: null, error: null };
+  }
   function rowsFor(table: string) {
     if (table === "automation_assignment_picks") return state.picks;
     if (table === "flow_runs") return state.runs;
@@ -238,7 +342,7 @@ vi.mock("./admin-client", () => {
   return {
     supabaseAdmin: () => ({
       from: (t: string) => builder(t),
-      rpc: async () => ({ error: null }),
+      rpc: swrrRpc as unknown as (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
     }),
   };
 });
@@ -319,6 +423,7 @@ beforeEach(() => {
   h.state.failLogInsertWithFlowRunIdOnce = false;
   h.state.enrichCalls = [];
   h.state.logSeq = 0;
+  h.state.swrr.clear();
   vi.clearAllMocks();
 });
 
