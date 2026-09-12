@@ -24,6 +24,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRows,
+  findExactValueRows,
+  findHeaderColumn,
   formatSubmissionTimeIST,
   insertSheetColumns,
   readFirstHeaderCell,
@@ -31,6 +33,7 @@ import {
   standardColumnsForSchemaVersion,
   updateHeaderCells,
 } from "@/lib/google/sheets";
+import { quoteSheetTitle } from "@/lib/google/tabs";
 import {
   buildIncompleteHeader,
   buildIncompleteRow,
@@ -58,6 +61,47 @@ import {
 export const INCOMPLETE_STATUSES = ["timed_out", "failed", "handed_off"];
 export { INCOMPLETE_RUN_ID_HEADER };
 export const INCOMPLETE_RUN_ID_MARKER = "incomplete_sheet_row_key_written";
+
+/** Durable lease lock for Dedicated Incomplete sync — covers DB check → sheet read → append → watermark. */
+const DEDICATED_INCOMPLETE_LOCK_TTL_SECONDS = 300;
+
+async function tryAcquireDedicatedIncompleteLock(
+  db: SupabaseClient,
+  flowId: string,
+  token: string,
+  ttlSeconds = DEDICATED_INCOMPLETE_LOCK_TTL_SECONDS,
+): Promise<boolean> {
+  try {
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    // Try fresh insert
+  const { error: insertError } = await (db as unknown as { from: (t: string) => { insert: (r: unknown) => Promise<{ error: unknown }> } }).from("dedicated_incomplete_sync_locks").insert({ flow_id: flowId, locked_at: new Date().toISOString(), expires_at: expiresAt, locked_by: token });
+  if (!insertError) return true;
+  // Fail closed: missing table or any error other than normal lock contention must not bypass the lock
+  if (insertError && String((insertError as { message?: string }).message ?? "").includes("Could not find the table")) return false;
+  // If conflict (already locked), try to steal if expired
+  const { data: stolen, error: stealError } = await (db as unknown as { from: (t: string) => { update: (r: unknown) => { eq: (a: string, b: unknown) => { lt: (c: string, d: unknown) => { select: (e: string) => Promise<{ data: unknown[] | null; error: unknown }> } } } } }).from("dedicated_incomplete_sync_locks").update({ locked_at: new Date().toISOString(), expires_at: expiresAt, locked_by: token }).eq("flow_id", flowId).lt("expires_at", new Date().toISOString()).select("flow_id");
+  if (stealError) {
+    // Missing table or any other steal error → fail closed, do not append without lock
+    return false;
+  }
+  return !!(stolen && (stolen as unknown[]).length > 0);
+  } catch {
+    // Fail closed on any unexpected error
+    return false;
+  }
+}
+
+async function releaseDedicatedIncompleteLock(
+  db: SupabaseClient,
+  flowId: string,
+  token: string,
+): Promise<void> {
+  try {
+    await (db as unknown as { from: (t: string) => { delete: () => { eq: (a: string, b: unknown) => { eq: (c: string, d: unknown) => Promise<unknown> } } } }).from("dedicated_incomplete_sync_locks").delete().eq("flow_id", flowId).eq("locked_by", token);
+  } catch {
+    // Best effort
+  }
+}
 
 export interface IncompleteSheetConfigRow {
   flow_id: string;
@@ -104,17 +148,47 @@ export async function syncIncompleteRunsForFlow(
   accessToken: string,
   window?: { from?: string; to?: string },
 ): Promise<number> {
-  let runsQuery = db
-    .from("flow_runs")
-    .select("id, contact_id, vars, started_at, ended_at")
-    .eq("flow_id", config.flow_id)
-    .in("status", INCOMPLETE_STATUSES)
-    .is("incomplete_synced_at", null);
-  if (window?.from) runsQuery = runsQuery.gte("started_at", window.from);
-  if (window?.to) runsQuery = runsQuery.lt("started_at", window.to);
-  const { data: runs } = await runsQuery.order("started_at", { ascending: true });
+  // Durable lease lock for Dedicated Incomplete — covers DB check → sheet read → append → watermark
+  // Ensures same flow_id + same run cannot be appended twice concurrently.
+  const lockToken = (typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36)) as string;
+  const lockAcquired = await tryAcquireDedicatedIncompleteLock(db, config.flow_id, lockToken);
+  if (!lockAcquired) return 0;
+  try {
+    let runsQuery = db
+      .from("flow_runs")
+      .select("id, contact_id, vars, started_at, ended_at")
+      .eq("flow_id", config.flow_id)
+      .in("status", INCOMPLETE_STATUSES)
+      .is("incomplete_synced_at", null);
+    if (window?.from) runsQuery = runsQuery.gte("started_at", window.from);
+    if (window?.to) runsQuery = runsQuery.lt("started_at", window.to);
+    const { data: runs } = await runsQuery.order("started_at", { ascending: true });
 
-  if (!runs || runs.length === 0) return 0;
+    if (!runs || runs.length === 0) return 0;
+
+    // Sheet-level idempotency: detect rows already physically present via hidden Flow Run ID
+    // Handles crash after appendRows but before watermark, and concurrent scan-before-append race
+    let pendingRuns = runs as RunRow[];
+    if (config.header_written) {
+      try {
+        const present = await findDedicatedIncompleteRowsPresent(accessToken, config.spreadsheet_id, config.sheet_tab, pendingRuns.map((r) => r.id));
+        if (present.size > 0) {
+          // Heal watermark for rows already on sheet but not yet marked synced (crash recovery)
+          await db
+            .from("flow_runs")
+            .update({ incomplete_synced_at: new Date().toISOString() })
+            .in("id", [...present]);
+          pendingRuns = pendingRuns.filter((r) => !present.has(r.id));
+          if (pendingRuns.length === 0) return 0;
+        }
+      } catch (e) {
+        // Sheet read failure: do not treat sheet as empty, fail safely and allow retry (do not append)
+        console.error("[incomplete-sheet-sync] sheet presence check failed, aborting to avoid duplicate:", e);
+        throw e;
+      }
+    }
 
   // Versioned layout (see sheet-layout.ts): configs without a stored
   // version are pre-V3 sheets frozen on v2 (contact Name + Phone/Flow/
@@ -137,7 +211,7 @@ export async function syncIncompleteRunsForFlow(
 
   const contactIds = [
     ...new Set(
-      (runs as RunRow[]).map((r) => r.contact_id).filter((x): x is string => !!x),
+      (pendingRuns as RunRow[]).map((r) => r.contact_id).filter((x): x is string => !!x),
     ),
   ];
   const contactMap = new Map<string, { name?: string | null; phone?: string | null }>();
@@ -177,7 +251,7 @@ export async function syncIncompleteRunsForFlow(
   const headerFor = (k: string): string => headerMap.get(k) ?? k;
   const { newKeys: rawNewKeys } = collectNewAnswerKeys(
     storedKeys,
-    (runs as RunRow[]).map((run) => run.vars),
+    (pendingRuns as RunRow[]).map((run) => run.vars),
   );
   // V6 promotion (flow-collected Name first, mirroring completed
   // sheets): adopted fresh on first write; afterwards pinned to the live
@@ -229,7 +303,7 @@ export async function syncIncompleteRunsForFlow(
   // the column (then rows stay aligned with blanks). Never in vars scan.
   const assignMap = await getAssignsForFlowRuns(
     db,
-    (runs as RunRow[]).map((r) => r.id),
+    (pendingRuns as RunRow[]).map((r) => r.id),
   ).catch(() => new Map<string, string>());
   const includeAssign =
     assignMap.size > 0 || storedKeys.includes(ASSIGN_KEY);
@@ -309,7 +383,7 @@ export async function syncIncompleteRunsForFlow(
     if (columnStateError) throw columnStateError;
   }
 
-  const rows: (string | number)[][] = (runs as RunRow[]).map((run) => {
+  const rows: (string | number)[][] = (pendingRuns as RunRow[]).map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
     const vars = (run.vars ?? {}) as Record<string, unknown>;
     // Virtual Assign var (never persisted to flow_runs.vars): blank when
@@ -341,7 +415,7 @@ export async function syncIncompleteRunsForFlow(
   // that predates the hidden Flow Run ID column. Write it before the sheet
   // append so an appended row can never exist without its durable cleanup key.
   const { error: markerError } = await db.from("flow_run_events").insert(
-    (runs as RunRow[]).map((run) => ({
+    (pendingRuns as RunRow[]).map((run) => ({
       flow_run_id: run.id,
       event_type: "node_entered",
       node_key: null,
@@ -387,9 +461,26 @@ export async function syncIncompleteRunsForFlow(
   await db
     .from("flow_runs")
     .update({ incomplete_synced_at: new Date().toISOString() })
-    .in("id", (runs as RunRow[]).map((r) => r.id));
+    .in("id", (pendingRuns as RunRow[]).map((r) => r.id));
 
   return rows.length;
+  } finally {
+    await releaseDedicatedIncompleteLock(db, config.flow_id, lockToken);
+  }
+}
+
+async function findDedicatedIncompleteRowsPresent(
+  accessToken: string,
+  spreadsheetId: string,
+  sheetTab: string,
+  runIds: string[],
+): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set();
+  const { findHeaderColumn, findExactValueRows } = await import("@/lib/google/sheets");
+  const runIdCol = await findHeaderColumn(accessToken, spreadsheetId, sheetTab, INCOMPLETE_RUN_ID_HEADER).catch(() => null);
+  if (runIdCol === null) return new Set();
+  const found = await findExactValueRows(accessToken, spreadsheetId, sheetTab, runIdCol, runIds).catch(() => new Map<string, number>());
+  return new Set(found.keys());
 }
 
 /**

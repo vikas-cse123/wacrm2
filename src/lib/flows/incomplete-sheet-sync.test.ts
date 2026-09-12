@@ -989,7 +989,7 @@ describe("syncIncompleteRunsForFlow on V6 sheets", () => {
           "incomplete_synced_at" in (u.payload as Record<string, unknown>),
       ),
     ).toBe(false);
-    expect(inserts.length).toBe(0);
+    expect(inserts.filter((i) => i.table !== "dedicated_incomplete_sync_locks").length).toBe(0);
   });
 });
 
