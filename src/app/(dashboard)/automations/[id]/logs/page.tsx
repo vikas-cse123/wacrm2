@@ -183,6 +183,26 @@ function StatusBadge({ status }: { status: AutomationLog["status"] }) {
   )
 }
 
+const STEP_LABELS: Record<string, string> = {
+  send_message: "Send Message",
+  send_template: "Send Template",
+  send_media: "Send Media",
+  add_tag: "Add Tag",
+  remove_tag: "Remove Tag",
+  assign_conversation: "Assign Conversation",
+  assign_person: "Assign Person",
+  update_contact_field: "Update Contact Field",
+  create_deal: "Create Deal",
+  wait: "Wait",
+  condition: "Condition",
+  send_webhook: "Send Webhook",
+  close_conversation: "Close Conversation",
+}
+
+function prettyStepType(t: string): string {
+  return STEP_LABELS[t] ?? t.replace(/_/g, " ")
+}
+
 function StepRow({ result }: { result: AutomationLogStepResult }) {
   const ok = result.status === "success"
   return (
@@ -196,7 +216,7 @@ function StepRow({ result }: { result: AutomationLogStepResult }) {
       >
         {ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
       </span>
-      <span className="text-muted-foreground">{result.step_type}</span>
+      <span className="text-muted-foreground">{prettyStepType(result.step_type)}</span>
       {result.detail && (
         <span className="truncate text-muted-foreground">— {result.detail}</span>
       )}
