@@ -38,6 +38,7 @@ import { withFlowAdvanceLock } from "./advance-lock";
 // feeds the best-effort handler in endRun. It never alters existing Google
 // Sheets logic, imports, or flow behavior.
 import { handleAllSheetCompletion } from "@/lib/all-sheets/completion";
+import { reserveAssignmentsForTagTrigger } from "@/lib/automations/assignment";
 import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRow,
@@ -982,6 +983,13 @@ async function advanceFromNodeKey(
               { contact_id: run.contact_id!, tag_id: cfg.tag_id },
               { onConflict: "contact_id,tag_id" },
             );
+          // Early SWRR reservation for Assign Person automations triggered by this tag.
+          // Must happen BEFORE the Flow continues to sheet insertion, so the
+          // FIRST sheet row already contains Assign. This reserves exactly one
+          // SWRR turn per Flow Run, shared later by the Assign Person step.
+          if (run.contact_id) {
+            await reserveAssignmentsForTagTrigger(db, run.account_id, run.id, cfg.tag_id).catch(() => {});
+          }
           // Let this tag add drive a 'tag_added' automation (e.g. a
           // follow-up reminder). Fire-and-forget so a downstream automation
           // never stalls the flow's advance to the next node.

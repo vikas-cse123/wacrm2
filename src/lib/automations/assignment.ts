@@ -170,6 +170,71 @@ export async function claimAssignmentPick(
     if (existing) return existing as AssignmentPickRow
   }
 
+  // Early reservation fast-path: if this Flow Run already has a reserved assignment
+  // (created synchronously at set_tag before sheet insertion), reuse it without
+  // running SWRR again. This ensures the sheet's initial row and the later
+  // Assign Person step use the SAME person, and exactly one SWRR turn is consumed.
+  if (args.flowRunId) {
+    const { data: reserved } = await db
+      .from('automation_assignment_reservations')
+      .select('*')
+      .eq('flow_run_id', args.flowRunId)
+      .eq('automation_id', args.automationId)
+      .eq('step_key', args.stepKey)
+      .maybeSingle()
+      .catch(() => ({ data: null } as { data: unknown }))
+    const r = reserved as AssignmentReservationRow | null
+    if (r) {
+      // Create execution-level pick from reservation snapshot if not already exists
+      // (retry already handled above, so this is first execution for this log_id)
+      if (args.logId) {
+        const payload = {
+          automation_id: args.automationId,
+          account_id: args.accountId,
+          contact_id: args.contactId,
+          flow_run_id: args.flowRunId,
+          log_id: args.logId,
+          step_key: args.stepKey,
+          person_name: r.person_name,
+          person_index: r.person_index,
+          percentage: Number(r.percentage),
+          message: r.message,
+          message_type: r.message_type,
+          media_url: r.media_url,
+          tag_id: r.tag_id,
+        }
+        await db
+          .from('automation_assignment_picks')
+          .upsert(payload, { onConflict: 'automation_id,log_id,step_key', ignoreDuplicates: true })
+        const { data: winner } = await db
+          .from('automation_assignment_picks')
+          .select('*')
+          .eq('automation_id', args.automationId)
+          .eq('log_id', args.logId)
+          .eq('step_key', args.stepKey)
+          .maybeSingle()
+        if (winner) return winner as AssignmentPickRow
+        return {
+          id: `fallback-reserved-${Date.now()}`,
+          automation_id: args.automationId,
+          account_id: args.accountId,
+          contact_id: args.contactId,
+          flow_run_id: args.flowRunId,
+          log_id: args.logId,
+          step_key: args.stepKey,
+          person_name: r.person_name,
+          person_index: r.person_index,
+          percentage: Number(r.percentage),
+          message: r.message,
+          message_type: r.message_type,
+          media_url: r.media_url,
+          tag_id: r.tag_id,
+          created_at: new Date().toISOString(),
+        }
+      }
+    }
+  }
+
   // Degraded mode (no log row — should not happen in practice):
   // return a transient pick via SWRR so the send can still proceed; without a
   // log_id there is no unique key to dedupe retries against.
@@ -302,10 +367,117 @@ export async function claimAssignmentPick(
   }
 }
 
+export interface AssignmentReservationRow {
+  id: string
+  flow_run_id: string
+  automation_id: string
+  step_key: string
+  person_index: number
+  person_name: string
+  percentage: number
+  message: string
+  message_type: string
+  media_url: string | null
+  tag_id: string | null
+  created_at: string
+}
+
+/**
+ * Early reservation: synchronously reserve SWRR winner for a Flow Run's
+ * future Assign Person execution, before the Flow inserts its sheet row.
+ * Uses atomic RPC reserve_assignment_for_flow_run (070+071) which locks
+ * SWRR state and inserts reservation ON CONFLICT DO NOTHING.
+ * Same flow_run+automation+step → one SWRR turn, both callers get same winner.
+ */
+export async function reserveAssignmentForFlowRun(
+  db: DbLike,
+  args: {
+    flowRunId: string
+    automationId: string
+    stepKey: string
+    persons: AssignPerson[]
+  },
+): Promise<number | null> {
+  const persons = normalizePersons(args.persons)
+  const names = persons.map((p) => p.name)
+  const weights = persons.map((p) => Number(p.percentage))
+  const messages = persons.map((p) => p.message)
+  const messageTypes = persons.map((p) => p.message_type ?? 'text')
+  const mediaUrls = persons.map((p) => p.media_url ?? '')
+  const tagIds = persons.map((p) => p.tag_id)
+  const percentages = weights
+  if (db.rpc) {
+    const { data, error } = await db.rpc('reserve_assignment_for_flow_run', {
+      p_flow_run_id: args.flowRunId,
+      p_automation_id: args.automationId,
+      p_step_key: args.stepKey,
+      p_person_names: names,
+      p_person_weights: weights,
+      p_person_messages: messages,
+      p_person_message_types: messageTypes,
+      p_person_media_urls: mediaUrls,
+      p_person_tag_ids: tagIds,
+      p_person_percentages: percentages,
+    })
+    if (!error && typeof data === 'number' && Number.isInteger(data) && data >= 0 && data < persons.length) {
+      return data
+    }
+    if (error) console.error('[assignment] reserve RPC failed:', error)
+  }
+  return null
+}
+
+/**
+ * Reserve for all active assign_person automations triggered by a tag.
+ * Called synchronously from Flow set_tag before the Flow continues to
+ * sheet insertion. Uses same trigger matching as runAutomationsForTrigger
+ * (tag_added with exact tag_id). Fast and atomic per automation+step.
+ */
+export async function reserveAssignmentsForTagTrigger(
+  db: DbLike,
+  accountId: string,
+  flowRunId: string,
+  tagId: string,
+): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: automations, error } = (await (db as any).from('automations').select('id, trigger_config').eq('account_id', accountId).eq('trigger_type', 'tag_added').eq('is_active', true)) as { data: Array<{ id: string; trigger_config: unknown }> | null; error: unknown }
+    if (error || !automations || automations.length === 0) return
+    const matching = automations.filter((a) => {
+      const cfg = a.trigger_config as Record<string, unknown> | null
+      return cfg?.tag_id === tagId
+    })
+    if (matching.length === 0) return
+    // For each matching automation, find its assign_person step(s) (at most one after validation)
+    for (const auto of matching) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: steps } = (await (db as any).from('automation_steps').select('step_config, step_type').eq('automation_id', auto.id)) as { data: Array<{ step_config: unknown; step_type: string }> | null }
+      const assignSteps = (steps ?? []).filter((s) => s.step_type === 'assign_person')
+      // Enforce single assign_person per automation (validate.ts) — if multiple, pick first deterministically
+      const step = assignSteps[0]
+      if (!step) continue
+      const cfg = step.step_config as { assignment_key?: unknown; persons?: unknown }
+      const stepKey = typeof cfg.assignment_key === 'string' && cfg.assignment_key.trim() ? cfg.assignment_key.trim() : null
+      if (!stepKey) continue
+      const persons = cfg.persons
+      if (!Array.isArray(persons) || persons.length === 0) continue
+      // Fire reservation (atomic, handles concurrent same flow_run)
+      await reserveAssignmentForFlowRun(db, { flowRunId, automationId: auto.id, stepKey, persons: persons as AssignPerson[] }).catch(() => {})
+    }
+  } catch {
+    // Reservation is best-effort for sheet timing; never break Flow
+  }
+}
+
 /**
  * Sheets resolver — exact flow_run_id only. Never phone/contact/latest.
+ * Checks both reservations (early, before sheet insert) and picks (late,
+ * after execution). Reservations are visible to sheet before picks exist.
  * Last-successful-assignment wins when multiple automations/steps wrote
  * picks for the SAME run (documented deterministic rule; no name merging).
+ * For multiple automations on same run, deterministic priority is
+ * latest created_at (same as 069) — ideally prevented at activation
+ * (see validate.ts single assign_person per automation).
  */
 export async function getAssignForFlowRun(
   db: DbLike,
@@ -317,8 +489,9 @@ export async function getAssignForFlowRun(
 }
 
 /**
- * Batch resolver for sync paths (one indexed query for N runs).
- * Returns runId → person_name for runs with a pick; absent = no pick.
+ * Batch resolver for sync paths (one indexed query for N runs per table).
+ * Returns runId → person_name for runs with a pick or reservation; absent = no pick.
+ * Prefers most recent created_at across both tables, deterministic.
  */
 export async function getAssignsForFlowRuns(
   db: DbLike,
@@ -327,18 +500,30 @@ export async function getAssignsForFlowRuns(
   const out = new Map<string, string>()
   const ids = [...new Set(flowRunIds.filter(Boolean))]
   if (ids.length === 0) return out
-  const { data } = await db
-    .from('automation_assignment_picks')
-    .select('flow_run_id, person_name, created_at')
-    .in('flow_run_id', ids)
-    .order('created_at', { ascending: false })
-  for (const row of ((data ?? []) as Array<{
-    flow_run_id?: unknown
-    person_name?: unknown
-  }>)) {
+  // Query both reservations (early) and picks (late) — union, latest wins
+  const [picksRes, resvRes] = await Promise.all([
+    db
+      .from('automation_assignment_picks')
+      .select('flow_run_id, person_name, created_at')
+      .in('flow_run_id', ids)
+      .order('created_at', { ascending: false }),
+    db
+      .from('automation_assignment_reservations')
+      .select('flow_run_id, person_name, created_at')
+      .in('flow_run_id', ids)
+      .order('created_at', { ascending: false }),
+  ])
+  const picksData = (picksRes as { data?: unknown[] })?.data ?? []
+  const resvData = (resvRes as { data?: unknown[] })?.data ?? []
+  // Merge both, sort by created_at DESC so latest across both wins deterministically
+  const all = [...(picksData as Array<Record<string, unknown>>), ...(resvData as Array<Record<string, unknown>>)].sort((a, b) => {
+    const av = String(a.created_at ?? '')
+    const bv = String(b.created_at ?? '')
+    return av < bv ? 1 : av > bv ? -1 : 0
+  })
+  for (const row of all as Array<{ flow_run_id?: unknown; person_name?: unknown }>) {
     const id = typeof row.flow_run_id === 'string' ? row.flow_run_id : null
     const name = typeof row.person_name === 'string' ? row.person_name : null
-    // DESC order → first occurrence per run wins (latest pick).
     if (id && name && !out.has(id)) out.set(id, name)
   }
   return out
