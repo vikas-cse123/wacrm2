@@ -7,6 +7,7 @@ import {
   type BuilderStepInput,
 } from '@/lib/automations/steps-tree'
 import {
+  validateAssignmentTrigger,
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
@@ -92,6 +93,7 @@ export async function PATCH(
     const issues = [
       ...validateTriggerForActivation(mergedTriggerType, mergedTriggerConfig),
       ...validateStepsForActivation(mergedSteps),
+      ...validateAssignmentTrigger(mergedSteps, mergedTriggerType, mergedTriggerConfig),
     ]
     if (issues.length > 0) {
       return NextResponse.json(

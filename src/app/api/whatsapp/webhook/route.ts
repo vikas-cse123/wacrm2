@@ -1132,7 +1132,12 @@ async function processMessage(
       context: {
         message_text: inboundText,
         conversation_id: conversation.id,
+        ...(flowResult.flow_run_id ? { flow_run_id: flowResult.flow_run_id } : {}),
       },
+      // Exact Flow-run pin (validated inside the engine against
+      // account+contact). Especially relevant for first_inbound /
+      // new_contact paths that still fire after flow consumption.
+      flowRunId: flowResult.flow_run_id ?? null,
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
 

@@ -208,6 +208,42 @@ export async function appendRows(
   }
 }
 
+/**
+ * Write one data cell without touching any other cell — used to enrich
+ * an already-synced row (e.g. Assign) located by its exact hidden Run ID.
+ * Each call is `{colIndex 0-based, rowNumber 1-based, value}`.
+ */
+export async function updateDataCell(
+  accessToken: string,
+  spreadsheetId: string,
+  tab: string,
+  colIndex: number,
+  rowNumber: number,
+  value: string | number,
+): Promise<void> {
+  if (rowNumber < 2) {
+    throw new Error('Refusing to update a sheet header row');
+  }
+  const letter = columnLetter(colIndex);
+  const cellRange = `${encodeURIComponent(tab)}!${letter}${rowNumber}`;
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}/values/${cellRange}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ values: [[value]] }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Sheets cell update failed (${res.status}): ${await res.text()}`,
+    );
+  }
+}
+
 /** 0-based column index → A1 letters (0 → A, 25 → Z, 26 → AA, …). */
 export function columnLetter(index: number): string {
   let n = index + 1;

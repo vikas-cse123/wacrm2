@@ -444,6 +444,7 @@ export type AutomationStepType =
   | 'add_tag'
   | 'remove_tag'
   | 'assign_conversation'
+  | 'assign_person'
   | 'update_contact_field'
   | 'create_deal'
   | 'wait'
@@ -555,6 +556,43 @@ export interface AssignConversationStepConfig {
   agent_id?: string;
 }
 
+/**
+ * Lightweight automation-specific person (NOT a CRM user/agent).
+ * Configuration belongs to one automation only; another automation
+ * has its own independent list.
+ */
+/** How an assignment person's message is sent. Absent = 'text' (legacy configs). */
+export type AssignPersonMessageType = 'text' | 'image';
+
+export interface AssignPerson {
+  /** Display name written to sheets Assign column. Unique per automation. */
+  name: string;
+  /** Weight 0 < p <= 100. Totals must sum to 100 per automation step. */
+  percentage: number;
+  /** 'text' = WhatsApp text; 'image' = image with caption (message). */
+  message_type?: AssignPersonMessageType;
+  /** Message sent when this person is selected (caption when image). */
+  message: string;
+  /** Public image URL Meta fetches. Required when message_type is 'image'.
+   *  Uploaded via the builder's file picker (same bucket as Send Media). */
+  media_url?: string;
+  /** Tag added ONLY after successful send. Contacts tag UUID. */
+  tag_id: string;
+}
+
+/**
+ * New assignment step: picks exactly ONE person by configured
+ * percentages, persists the pick BEFORE sending, sends that person's
+ * message via existing Meta infra, then tags ONLY on send success.
+ * Stable `assignment_key` survives step-row re-inserts (same reason
+ * as send_media `rotation_key`).
+ */
+export interface AssignPersonStepConfig {
+  persons: AssignPerson[];
+  /** Stable node identity (survives step re-inserts). */
+  assignment_key?: string;
+}
+
 export interface UpdateContactFieldStepConfig {
   /**
    * Either a built-in contact column (`name` | `email` | `company`) or a
@@ -606,6 +644,7 @@ export type AutomationStepConfig =
   | SendMediaStepConfig
   | TagStepConfig
   | AssignConversationStepConfig
+  | AssignPersonStepConfig
   | UpdateContactFieldStepConfig
   | CreateDealStepConfig
   | WaitStepConfig

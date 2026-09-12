@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { getTemplate } from '@/lib/automations/templates'
 import { insertSteps, type BuilderStepInput } from '@/lib/automations/steps-tree'
 import {
+  validateAssignmentTrigger,
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
@@ -80,11 +81,14 @@ export async function POST(request: Request) {
   // (is_active=false) are allowed to be incomplete so users can save
   // progress mid-build.
   if (is_active) {
+    const stepLikes = (effectiveSteps ?? []) as unknown as {
+      step_type: string
+      step_config: Record<string, unknown>
+    }[]
     const issues = [
       ...validateTriggerForActivation(effectiveTriggerType, effectiveTriggerConfig ?? {}),
-      ...validateStepsForActivation(
-        (effectiveSteps ?? []) as unknown as { step_type: string; step_config: Record<string, unknown> }[],
-      ),
+      ...validateStepsForActivation(stepLikes),
+      ...validateAssignmentTrigger(stepLikes, effectiveTriggerType, effectiveTriggerConfig ?? {}),
     ]
     if (issues.length > 0) {
       return NextResponse.json(

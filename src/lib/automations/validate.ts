@@ -121,6 +121,53 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         })
       }
       break
+    case 'assign_person': {
+      const persons = Array.isArray(c.persons) ? c.persons : []
+      if (persons.length === 0) {
+        issues.push({ path: `${path}.persons`, message: 'at least one person is required' })
+        break
+      }
+      const seen = new Set<string>()
+      let total = 0
+      persons.forEach((p, i) => {
+        const name = typeof p?.name === 'string' ? p.name.trim() : ''
+        if (!name) {
+          issues.push({ path: `${path}.persons[${i}].name`, message: `person ${i + 1}: name is required` })
+        } else {
+          const lower = name.toLowerCase()
+          if (seen.has(lower)) {
+            issues.push({ path: `${path}.persons[${i}].name`, message: `person ${i + 1}: names must be unique` })
+          }
+          seen.add(lower)
+        }
+        const pct = Number(p?.percentage)
+        if (!Number.isFinite(pct) || pct <= 0) {
+          issues.push({ path: `${path}.persons[${i}].percentage`, message: `person ${i + 1}: percentage must be greater than 0` })
+        } else {
+          total += pct
+        }
+        // Absent = text (configs saved before message types existed).
+        const rawType = p?.message_type
+        if (rawType !== undefined && rawType !== 'text' && rawType !== 'image') {
+          issues.push({ path: `${path}.persons[${i}].message_type`, message: `person ${i + 1}: message type must be text or image` })
+        }
+        const messageType = rawType === 'image' ? 'image' : 'text'
+        if (!nonEmpty(p?.message)) {
+          issues.push({ path: `${path}.persons[${i}].message`, message: `person ${i + 1}: message is required` })
+        }
+        if (messageType === 'image' && !nonEmpty(p?.media_url)) {
+          issues.push({ path: `${path}.persons[${i}].media_url`, message: `person ${i + 1}: image is required` })
+        }
+        if (!nonEmpty(p?.tag_id)) {
+          issues.push({ path: `${path}.persons[${i}].tag_id`, message: `person ${i + 1}: tag is required` })
+        }
+      })
+      // Total must equal 100 (small epsilon for float input from UI).
+      if (persons.length > 0 && Math.abs(total - 100) > 0.001) {
+        issues.push({ path: `${path}.persons`, message: `percentages must total 100 (currently ${total})` })
+      }
+      break
+    }
     case 'update_contact_field':
       if (!nonEmpty(c.field)) {
         issues.push({ path: `${path}.field`, message: 'field name is required' })
@@ -225,4 +272,45 @@ export function validateTriggerForActivation(
 
 function nonEmpty(v: unknown): boolean {
   return typeof v === 'string' && v.trim().length > 0
+}
+
+/**
+ * Cross-check: warn when an assign_person's tag IS the automation's own
+ * tag_added trigger (the engine skips that dispatch at runtime to avoid
+ * a self-loop, so activating it is almost certainly a misconfiguration).
+ * Returns issues (activation-blocking) — drafts can still save.
+ */
+export function validateAssignmentTrigger(
+  steps: StepLike[],
+  triggerType: string,
+  triggerConfig: unknown,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  if (triggerType !== 'tag_added') return issues
+  const triggerTag = (triggerConfig as Record<string, unknown> | null)?.tag_id
+  if (typeof triggerTag !== 'string' || !triggerTag.trim()) return issues
+  const walkSteps = (list: StepLike[], prefix: string): void => {
+    list.forEach((s, i) => {
+      const path = `${prefix}steps[${i}]`
+      if (s.step_type === 'assign_person' && s.step_config) {
+        const persons = Array.isArray((s.step_config as Record<string, unknown>).persons)
+          ? ((s.step_config as Record<string, unknown>).persons as Array<Record<string, unknown>>)
+          : []
+        persons.forEach((p, j) => {
+          if (typeof p?.tag_id === 'string' && p.tag_id === triggerTag) {
+            issues.push({
+              path: `${path}.persons[${j}].tag_id`,
+              message: 'this tag is the automation’s own trigger — pick a different tag to avoid a loop',
+            })
+          }
+        })
+      }
+      if (s.step_type === 'condition' && s.branches) {
+        if (s.branches.yes) walkSteps(s.branches.yes, `${path}.yes.`)
+        if (s.branches.no) walkSteps(s.branches.no, `${path}.no.`)
+      }
+    })
+  }
+  walkSteps(steps, '')
+  return issues
 }

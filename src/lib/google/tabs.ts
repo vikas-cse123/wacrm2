@@ -264,6 +264,40 @@ export async function updateTabHeaderCells(
 }
 
 /**
+ * Write one data cell of one tab without touching any other cell — the
+ * tab-scoped equivalent of `updateDataCell`. Takes the RAW title and
+ * quotes it for literal A1 in the URL path (like other values/* reads;
+ * callers must not pre-quote). Used for exact Run-ID-based Assign updates.
+ */
+export async function updateTabDataCell(
+  accessToken: string,
+  spreadsheetId: string,
+  rawTitle: string,
+  colIndex: number,
+  rowNumber: number,
+  value: string | number,
+): Promise<void> {
+  if (rowNumber < 2) {
+    throw new Error("Refusing to update a sheet header row");
+  }
+  // Match the existing All Sheets read pattern (see
+  // findIncompleteRowsPresent): quoted title, URL-encoded as one segment.
+  const cellRange = `${encodeURIComponent(quoteSheetTitle(rawTitle))}!${columnLetter(colIndex)}${rowNumber}`;
+  const res = await fetch(
+    `${SHEETS_API}/${spreadsheetId}/values/${cellRange}?valueInputOption=USER_ENTERED`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values: [[value]] }),
+    },
+  );
+  if (!res.ok) await throwOnError(res, "Google Sheets tab cell update failed");
+}
+
+/**
  * Permanently delete a spreadsheet file from Google Drive.
  *
  * Allowed under the `drive.file` scope for spreadsheets this app created.

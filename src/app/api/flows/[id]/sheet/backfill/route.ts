@@ -23,6 +23,13 @@ import {
   buildCompletedRow,
   stringifySheetCell,
 } from "@/lib/flows/sheet-layout";
+import {
+  ASSIGN_KEY,
+  COMPLETED_RUN_ID_KEY,
+  getAssignsForFlowRuns,
+} from "@/lib/automations/assignment";
+import { completedAnswerOffset } from "@/lib/flows/sheet-layout";
+import { setSheetColumnHidden } from "@/lib/google/sheets";
 
 function parseIsoDate(value: unknown): string | null {
   if (typeof value !== "string" || !value) return null;
@@ -52,19 +59,9 @@ export async function POST(
       );
     }
 
-    // Ownership + sheet link, reconciled against the flow's current nodes
-    // (picks up any question added/renamed since the sheet was linked).
-    const resolved = await resolveFlowSheetColumns(ctx.supabase, id, token);
-    if (!resolved || resolved.sheet.account_id !== ctx.accountId) {
-      return NextResponse.json(
-        { error: "Link a spreadsheet first." },
-        { status: 400 },
-      );
-    }
-    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
-
     // All completed runs for this flow, oldest first, optionally
-    // bounded by the requested started_at window.
+    // bounded by the requested started_at window. Loaded BEFORE column
+    // resolution so Assign healing knows whether any run carries a pick.
     let runsQuery = ctx.supabase
       .from("flow_runs")
       .select("id, contact_id, vars, started_at, ended_at")
@@ -79,6 +76,26 @@ export async function POST(
     if (!runs || runs.length === 0) {
       return NextResponse.json({ imported: 0 });
     }
+
+    // Exact-run Assign values (never contact/phone/latest). Healing is
+    // conditional so flows without assignments keep identical layouts.
+    const assignMap = await getAssignsForFlowRuns(
+      ctx.supabase,
+      (runs as Array<{ id: string }>).map((r) => r.id),
+    ).catch(() => new Map<string, string>());
+
+    // Ownership + sheet link, reconciled against the flow's current nodes
+    // (picks up any question added/renamed since the sheet was linked).
+    const resolved = await resolveFlowSheetColumns(ctx.supabase, id, token, {
+      includeAssign: assignMap.size > 0,
+    });
+    if (!resolved || resolved.sheet.account_id !== ctx.accountId) {
+      return NextResponse.json(
+        { error: "Link a spreadsheet first." },
+        { status: 400 },
+      );
+    }
+    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
     // Batch-load the contacts referenced by those runs (phone only — the
     // WhatsApp profile name is no longer synced; see the "remove
@@ -118,6 +135,13 @@ export async function POST(
     const rows: (string | number)[][] = runs.map((run) => {
       const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
+      const varsWithAssign: Record<string, unknown> = { ...vars };
+      if (answerColumns.includes(ASSIGN_KEY)) {
+        varsWithAssign[ASSIGN_KEY] = assignMap.get(run.id) ?? "";
+      }
+      if (answerColumns.includes(COMPLETED_RUN_ID_KEY)) {
+        varsWithAssign[COMPLETED_RUN_ID_KEY] = run.id;
+      }
       return buildCompletedRow({
         schemaVersion: sheet.schema_version ?? 1,
         nameHeader: resolvedNameHeader,
@@ -129,7 +153,7 @@ export async function POST(
         answerKeys: answerColumns,
         answerHeaders,
         activeKeys,
-        vars,
+        vars: varsWithAssign,
       });
     });
 
@@ -157,6 +181,23 @@ export async function POST(
         .from("flow_sheet_configs")
         .update({ header_written: true })
         .eq("flow_id", id);
+    }
+
+    if (answerColumns.includes(COMPLETED_RUN_ID_KEY)) {
+      try {
+        const runIdCol =
+          completedAnswerOffset(sheet.schema_version ?? 1, !!resolvedNameHeader) +
+          answerColumns.indexOf(COMPLETED_RUN_ID_KEY);
+        await setSheetColumnHidden(
+          token,
+          sheet.spreadsheet_id,
+          sheet.sheet_tab,
+          runIdCol,
+          true,
+        );
+      } catch (err) {
+        console.error("[backfill] could not hide Completed Run ID column:", err);
+      }
     }
 
     return NextResponse.json({ imported: rows.length });

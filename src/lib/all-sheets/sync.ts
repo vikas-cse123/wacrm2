@@ -31,12 +31,19 @@ import {
   buildCompletedRow,
   buildIncompleteHeader,
   buildIncompleteRow,
+  completedAnswerOffset,
   INCOMPLETE_RUN_ID_HEADER,
   incompleteBaseOffset,
   incompleteRunIdColumnIndex,
   partitionSheetKeys,
   stringifySheetCell,
 } from "@/lib/flows/sheet-layout";
+import {
+  ASSIGN_HEADER,
+  ASSIGN_KEY,
+  COMPLETED_RUN_ID_KEY,
+  getAssignsForFlowRuns,
+} from "@/lib/automations/assignment";
 import {
   deriveFlowColumns,
   headerByKey,
@@ -125,10 +132,6 @@ export async function importAllSheetCompleted(
 ): Promise<{ imported: number }> {
   if (collection.kind !== "completed") throw new Error("Collection is not for completed runs");
 
-  const resolved = await resolveAllTabColumns(db, tab, collection.spreadsheet_id, accessToken);
-  const sheet = resolved.tab;
-  const quotedTitle = quoteSheetTitle(sheet.worksheet_title);
-
   let query = db
     .from("flow_runs")
     .select("id, contact_id, vars, started_at, ended_at")
@@ -145,6 +148,19 @@ export async function importAllSheetCompleted(
   const pending = ((runs ?? []) as RunRow[]).filter((r) => !already.has(r.id));
   if (pending.length === 0) return { imported: 0 };
 
+  // Exact-run Assign values (never contact/phone/latest). Conditional
+  // healing keeps tabs without assignments byte-identical.
+  const assignMap = await getAssignsForFlowRuns(
+    db,
+    pending.map((r) => r.id),
+  ).catch(() => new Map<string, string>());
+
+  const resolved = await resolveAllTabColumns(db, tab, collection.spreadsheet_id, accessToken, {
+    includeAssign: assignMap.size > 0,
+  });
+  const sheet = resolved.tab;
+  const quotedTitle = quoteSheetTitle(sheet.worksheet_title);
+
   const contactIds = [...new Set(pending.map((r) => r.contact_id).filter(Boolean))] as string[];
   const contactMap = new Map<string, { phone?: string | null }>();
   if (contactIds.length > 0) {
@@ -158,6 +174,13 @@ export async function importAllSheetCompleted(
   const rows = pending.map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
     const vars = (run.vars ?? {}) as Record<string, unknown>;
+    const varsWithAssign: Record<string, unknown> = { ...vars };
+    if (resolved.keys.includes(ASSIGN_KEY)) {
+      varsWithAssign[ASSIGN_KEY] = assignMap.get(run.id) ?? "";
+    }
+    if (resolved.keys.includes(COMPLETED_RUN_ID_KEY)) {
+      varsWithAssign[COMPLETED_RUN_ID_KEY] = run.id;
+    }
     return buildCompletedRow({
       schemaVersion: sheet.schema_version ?? 3,
       nameHeader,
@@ -169,7 +192,7 @@ export async function importAllSheetCompleted(
       answerKeys: resolved.keys,
       answerHeaders: resolved.headers,
       activeKeys: resolved.activeKeys,
-      vars,
+      vars: varsWithAssign,
     });
   });
 
@@ -192,12 +215,30 @@ export async function importAllSheetCompleted(
   // Completed rows carry no stable id, so the tab-state stamp after the
   // row append is the dedup key (same accepted trade-off as the existing
   // system: duplicates over silent data loss on narrow crash windows).
+  // Assign-enabled tabs additionally carry a hidden Flow Run ID for
+  // exact post-sync Assign updates.
   try {
     if (!sheet.header_written) {
       await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, [header]);
       await db.from("all_sheet_flow_tabs").update({ header_written: true }).eq("id", tab.id);
     }
     await appendRows(accessToken, collection.spreadsheet_id, quotedTitle, rows);
+    if (resolved.keys.includes(COMPLETED_RUN_ID_KEY)) {
+      try {
+        const runIdCol =
+          completedAnswerOffset(sheet.schema_version ?? 3, !!nameHeader) +
+          resolved.keys.indexOf(COMPLETED_RUN_ID_KEY);
+        await setSheetColumnHidden(
+          accessToken,
+          collection.spreadsheet_id,
+          sheet.worksheet_title,
+          runIdCol,
+          true,
+        );
+      } catch (err) {
+        console.error("[all-sheets] could not hide Completed Run ID column:", err);
+      }
+    }
   } catch (err) {
     await logFailure(db, sheet, collection.account_id, tab.flow_id, null, null, { count: rows.length }, err);
     throw err;
@@ -278,6 +319,20 @@ export async function refreshAllSheetIncomplete(
   }
   const newKeys = sortKeysByFlowOrder(rawNew, [...headerMap.keys()]);
   const answerColumns = [...storedKeys, ...newKeys];
+  // Assign enrichment (069): exact-run values before the hidden Run ID.
+  // Conditional only so tabs without assignments keep identical layouts.
+  const assignMapInc = await getAssignsForFlowRuns(
+    db,
+    pending.map((r) => r.id),
+  ).catch(() => new Map<string, string>());
+  const includeAssignInc =
+    assignMapInc.size > 0 || storedKeys.includes(ASSIGN_KEY);
+  if (includeAssignInc && !answerColumns.includes(ASSIGN_KEY)) {
+    answerColumns.push(ASSIGN_KEY);
+    newKeys.push(ASSIGN_KEY);
+  }
+  const headerForAssignInc = (k: string): string =>
+    k === ASSIGN_KEY ? ASSIGN_HEADER : headerFor(k);
   const schemaVersion = tab.schema_version ?? 6;
   const quotedTitle = quoteSheetTitle(tab.worksheet_title);
 
@@ -293,7 +348,7 @@ export async function refreshAllSheetIncomplete(
       .from("all_sheet_flow_tabs")
       .update({
         answer_columns: answerColumns.filter((k) => k !== promotedKey),
-        answer_headers: answerColumns.filter((k) => k !== promotedKey).map(headerFor),
+        answer_headers: answerColumns.filter((k) => k !== promotedKey).map(headerForAssignInc),
         name_column_key: promotedKey,
         name_column_header: promotedHeader,
       })
@@ -314,16 +369,16 @@ export async function refreshAllSheetIncomplete(
       accessToken,
       collection.spreadsheet_id,
       tab.worksheet_title,
-      newKeys.map((k, i) => ({ colIndex: answerInsertCol + i, value: headerFor(k) })),
+      newKeys.map((k, i) => ({ colIndex: answerInsertCol + i, value: headerForAssignInc(k) })),
     );
     await db
       .from("all_sheet_flow_tabs")
-      .update({ answer_columns: answerColumns, answer_headers: answerColumns.map(headerFor) })
+      .update({ answer_columns: answerColumns, answer_headers: answerColumns.map(headerForAssignInc) })
       .eq("id", tab.id);
   }
 
   const finalCols = !tab.header_written ? answerColumns.filter((k) => k !== promotedKey) : answerColumns;
-  const finalHeaders = finalCols.map(headerFor);
+  const finalHeaders = finalCols.map(headerForAssignInc);
 
   const contactIds = [...new Set(pending.map((r) => r.contact_id).filter(Boolean))] as string[];
   const contactMap = new Map<string, { name?: string | null; phone?: string | null }>();
@@ -354,6 +409,10 @@ export async function refreshAllSheetIncomplete(
   const toWriteRows = fresh.map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
     const vars = (run.vars ?? {}) as Record<string, unknown>;
+    const varsWithAssign: Record<string, unknown> =
+      finalCols.includes(ASSIGN_KEY)
+        ? { ...vars, [ASSIGN_KEY]: assignMapInc.get(run.id) ?? "" }
+        : vars;
     return buildIncompleteRow({
       schemaVersion,
       contactName: contact?.name ?? "",
@@ -361,7 +420,7 @@ export async function refreshAllSheetIncomplete(
       flowName: "",
       submissionTime: formatSubmissionTimeIST(run.ended_at ?? run.started_at),
       contactId: run.contact_id ?? "",
-      vars,
+      vars: varsWithAssign,
       answerColumns: finalCols,
       runId: run.id,
       inactiveKeys: disabledKeys,

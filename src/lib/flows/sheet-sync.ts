@@ -16,7 +16,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { deriveFlowColumns, orderNodesForSheets, type FlowNodeLite } from "./sheet-columns";
 import { completedAnswerOffset } from "./sheet-layout";
-import { updateHeaderCells } from "@/lib/google/sheets";
+import { setSheetColumnHidden, updateHeaderCells } from "@/lib/google/sheets";
+import {
+  ASSIGN_HEADER,
+  ASSIGN_KEY,
+  COMPLETED_RUN_ID_HEADER,
+  COMPLETED_RUN_ID_KEY,
+} from "@/lib/automations/assignment";
 
 export interface FlowSheetConfigRow {
   flow_id: string;
@@ -68,6 +74,7 @@ export async function resolveFlowSheetColumns(
   db: SupabaseClient,
   flowId: string,
   accessToken: string | null,
+  opts?: { includeAssign?: boolean },
 ): Promise<ResolvedFlowSheetColumns | null> {
   const { data: sheet } = await db
     .from("flow_sheet_configs")
@@ -136,6 +143,34 @@ export async function resolveFlowSheetColumns(
   const mergedKeys = [...storedKeys, ...newCols.map((c) => c.key)];
   mergedHeaders.push(...newCols.map((c) => c.header));
 
+  // Assign enrichment (automation-specific assignment, 069): trailing
+  // Assign (visible) + hidden Flow Run ID (exact update identity for
+  // already-synced Completed rows). Healed ONLY when requested — flows
+  // without assignments keep byte-identical layouts. When the stored
+  // header already adopted them, they ride along via storedKeys above.
+  const assignNeedsHealing =
+    !!opts?.includeAssign &&
+    (!storedKeySet.has(ASSIGN_KEY) || !storedKeySet.has(COMPLETED_RUN_ID_KEY));
+  const assignExtra: Array<{ key: string; header: string }> = []
+  if (assignNeedsHealing) {
+    if (!storedKeySet.has(ASSIGN_KEY) && !mergedKeys.includes(ASSIGN_KEY)) {
+      assignExtra.push({ key: ASSIGN_KEY, header: ASSIGN_HEADER });
+    }
+    if (!storedKeySet.has(COMPLETED_RUN_ID_KEY) && !mergedKeys.includes(COMPLETED_RUN_ID_KEY)) {
+      assignExtra.push({ key: COMPLETED_RUN_ID_KEY, header: COMPLETED_RUN_ID_HEADER });
+    }
+    for (const c of assignExtra) {
+      mergedKeys.push(c.key);
+      mergedHeaders.push(c.header);
+      activeKeys.add(c.key);
+    }
+  } else {
+    // Column already adopted: keep it active so rows stay aligned (blank
+    // when the run has no assignment) even when this sync has no pick.
+    if (storedKeySet.has(ASSIGN_KEY)) activeKeys.add(ASSIGN_KEY);
+    if (storedKeySet.has(COMPLETED_RUN_ID_KEY)) activeKeys.add(COMPLETED_RUN_ID_KEY);
+  }
+
   const nameSlotChanged =
     nameKey !== (sheet.name_column_key ?? null) ||
     nameHeader !== (sheet.name_column_header ?? null);
@@ -151,7 +186,8 @@ export async function resolveFlowSheetColumns(
     newCols.length > 0 ||
     nameSlotChanged ||
     renamedIndices.length > 0 ||
-    !!nameHeaderRenamed;
+    !!nameHeaderRenamed ||
+    assignExtra.length > 0;
 
   if (!columnsChanged) {
     return {
@@ -181,6 +217,12 @@ export async function resolveFlowSheetColumns(
     newCols.forEach((c, i) => {
       cellUpdates.push({ colIndex: baseOffset + storedKeys.length + i, value: c.header });
     });
+    assignExtra.forEach((c, i) => {
+      cellUpdates.push({
+        colIndex: baseOffset + storedKeys.length + newCols.length + i,
+        value: c.header,
+      });
+    });
     if (nameHeaderRenamed) {
       cellUpdates.push({ colIndex: 0, value: effectiveNameHeader! });
     }
@@ -192,6 +234,23 @@ export async function resolveFlowSheetColumns(
         // Non-fatal — persisted state below still gets updated so the next
         // sync retries the header write; only the label edit failed here.
         console.error("[sheet-sync] header update failed:", err);
+      }
+    }
+
+    // Hide the Completed Run ID column (exact update identity for
+    // already-synced rows). Best-effort cosmetic like incomplete sheets.
+    if (assignExtra.some((c) => c.key === COMPLETED_RUN_ID_KEY)) {
+      try {
+        const runIdCol = baseOffset + mergedKeys.length - 1;
+        await setSheetColumnHidden(
+          accessToken,
+          sheet.spreadsheet_id,
+          sheet.sheet_tab,
+          runIdCol,
+          true,
+        );
+      } catch (err) {
+        console.error("[sheet-sync] could not hide Completed Run ID column:", err);
       }
     }
   }

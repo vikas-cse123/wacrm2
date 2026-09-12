@@ -22,11 +22,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'trigger_type required' }, { status: 400 })
   }
 
+  const ctx = (body.context ?? {}) as Record<string, unknown>
   await runAutomationsForTrigger({
     accountId,
     triggerType: body.trigger_type as AutomationTriggerType,
     contactId: body.contact_id ?? null,
-    context: body.context ?? {},
+    context: ctx as never,
+    flowRunId: (body.flow_run_id as string | null | undefined) ?? (ctx.flow_run_id as string | null | undefined) ?? null,
   })
 
   return NextResponse.json({ ok: true })

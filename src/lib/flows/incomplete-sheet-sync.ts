@@ -48,6 +48,11 @@ import {
   sortKeysByFlowOrder,
 } from "./sheet-columns";
 import type { FlowNodeLite } from "./sheet-columns";
+import {
+  ASSIGN_HEADER,
+  ASSIGN_KEY,
+  getAssignsForFlowRuns,
+} from "@/lib/automations/assignment";
 
 /** Terminal statuses that count as "incomplete" for the live sheet. */
 export const INCOMPLETE_STATUSES = ["timed_out", "failed", "handed_off"];
@@ -218,6 +223,23 @@ export async function syncIncompleteRunsForFlow(
   );
   const answerColumns = [...storedKeys, ...newKeys];
 
+  // Assign enrichment (069): exact-run values, never contact/phone/latest.
+  // Healed as a trailing answer (before the hidden Run ID) only when some
+  // run in this batch carries a pick — or when the sheet already adopted
+  // the column (then rows stay aligned with blanks). Never in vars scan.
+  const assignMap = await getAssignsForFlowRuns(
+    db,
+    (runs as RunRow[]).map((r) => r.id),
+  ).catch(() => new Map<string, string>());
+  const includeAssign =
+    assignMap.size > 0 || storedKeys.includes(ASSIGN_KEY);
+  if (includeAssign && !answerColumns.includes(ASSIGN_KEY)) {
+    answerColumns.push(ASSIGN_KEY);
+    newKeys.push(ASSIGN_KEY);
+  }
+  const headerForAssign = (k: string): string =>
+    k === ASSIGN_KEY ? ASSIGN_HEADER : headerFor(k);
+
   // The hidden run-id column is a stable row key. A contact may abandon the
   // same flow more than once, so phone/contact id alone cannot safely identify
   // which incomplete row to remove after a later completion. Offsets derive
@@ -226,7 +248,7 @@ export async function syncIncompleteRunsForFlow(
   const headers = buildIncompleteHeader(
     schemaVersion,
     answerColumns,
-    answerColumns.map(headerFor),
+    answerColumns.map(headerForAssign),
     promotedHeader,
   );
   const previousRunIdCol = incompleteRunIdColumnIndex(
@@ -269,7 +291,7 @@ export async function syncIncompleteRunsForFlow(
         config.sheet_tab,
         newKeys.map((k, i) => ({
           colIndex: answerInsertCol + i,
-          value: headerFor(k),
+          value: headerForAssign(k),
         })),
       );
     }
@@ -290,6 +312,12 @@ export async function syncIncompleteRunsForFlow(
   const rows: (string | number)[][] = (runs as RunRow[]).map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
     const vars = (run.vars ?? {}) as Record<string, unknown>;
+    // Virtual Assign var (never persisted to flow_runs.vars): blank when
+    // this run has no pick, so adopted columns stay aligned.
+    const varsWithAssign: Record<string, unknown> =
+      answerColumns.includes(ASSIGN_KEY)
+        ? { ...vars, [ASSIGN_KEY]: assignMap.get(run.id) ?? "" }
+        : vars;
     return buildIncompleteRow({
       schemaVersion,
       contactName: contact?.name ?? "",
@@ -297,7 +325,7 @@ export async function syncIncompleteRunsForFlow(
       flowName: flow?.name ?? "",
       submissionTime: formatSubmissionTimeIST(run.ended_at ?? run.started_at),
       contactId: run.contact_id ?? "",
-      vars,
+      vars: varsWithAssign,
       answerColumns,
       runId: run.id,
       inactiveKeys: disabledKeys,

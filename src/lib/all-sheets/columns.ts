@@ -12,6 +12,7 @@
 //   sheet-columns.ts, sheet-layout.ts, google/sheets.ts, google/tabs.ts
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { setSheetColumnHidden } from "@/lib/google/sheets";
 import { updateTabHeaderCells } from "@/lib/google/tabs";
 import {
   deriveFlowColumns,
@@ -19,6 +20,12 @@ import {
   type FlowNodeLite,
 } from "@/lib/flows/sheet-columns";
 import { completedAnswerOffset } from "@/lib/flows/sheet-layout";
+import {
+  ASSIGN_HEADER,
+  ASSIGN_KEY,
+  COMPLETED_RUN_ID_HEADER,
+  COMPLETED_RUN_ID_KEY,
+} from "@/lib/automations/assignment";
 import type { AllSheetFlowTabRow } from "./types";
 
 export interface ResolvedAllTabColumns {
@@ -41,6 +48,7 @@ export async function resolveAllTabColumns(
   tab: AllSheetFlowTabRow,
   spreadsheetId: string,
   accessToken: string | null,
+  opts?: { includeAssign?: boolean },
 ): Promise<ResolvedAllTabColumns> {
   const [{ data: nodes }, { data: flow }] = await Promise.all([
     db
@@ -90,6 +98,30 @@ export async function resolveAllTabColumns(
   const mergedKeys = [...storedKeys, ...newCols.map((c) => c.key)];
   mergedHeaders.push(...newCols.map((c) => c.header));
 
+  // Assign enrichment (069): trailing Assign + hidden Flow Run ID for
+  // already-synced Completed row updates. Conditional only — tabs
+  // without assignments keep byte-identical layouts.
+  const assignExtra: Array<{ key: string; header: string }> = [];
+  if (
+    opts?.includeAssign &&
+    (!storedKeySet.has(ASSIGN_KEY) || !storedKeySet.has(COMPLETED_RUN_ID_KEY))
+  ) {
+    if (!storedKeySet.has(ASSIGN_KEY) && !mergedKeys.includes(ASSIGN_KEY)) {
+      assignExtra.push({ key: ASSIGN_KEY, header: ASSIGN_HEADER });
+    }
+    if (!storedKeySet.has(COMPLETED_RUN_ID_KEY) && !mergedKeys.includes(COMPLETED_RUN_ID_KEY)) {
+      assignExtra.push({ key: COMPLETED_RUN_ID_KEY, header: COMPLETED_RUN_ID_HEADER });
+    }
+    for (const c of assignExtra) {
+      mergedKeys.push(c.key);
+      mergedHeaders.push(c.header);
+      activeKeys.add(c.key);
+    }
+  } else {
+    if (storedKeySet.has(ASSIGN_KEY)) activeKeys.add(ASSIGN_KEY);
+    if (storedKeySet.has(COMPLETED_RUN_ID_KEY)) activeKeys.add(COMPLETED_RUN_ID_KEY);
+  }
+
   const nameSlotChanged =
     nameKey !== (tab.name_column_key ?? null) ||
     nameHeader !== (tab.name_column_header ?? null);
@@ -104,7 +136,8 @@ export async function resolveAllTabColumns(
     newCols.length > 0 ||
     nameSlotChanged ||
     renamedIndices.length > 0 ||
-    !!nameHeaderRenamed;
+    !!nameHeaderRenamed ||
+    assignExtra.length > 0;
 
   if (!changed) {
     return {
@@ -129,6 +162,12 @@ export async function resolveAllTabColumns(
         value: c.header,
       });
     });
+    assignExtra.forEach((c, i) => {
+      cellUpdates.push({
+        colIndex: baseOffset + storedKeys.length + newCols.length + i,
+        value: c.header,
+      });
+    });
     if (nameHeaderRenamed && effectiveNameHeader) {
       cellUpdates.push({ colIndex: 0, value: effectiveNameHeader });
     }
@@ -145,6 +184,21 @@ export async function resolveAllTabColumns(
         );
       } catch (err) {
         console.error("[all-sheets] tab header update failed:", err);
+      }
+    }
+
+    if (assignExtra.some((c) => c.key === COMPLETED_RUN_ID_KEY)) {
+      try {
+        const runIdCol = baseOffset + mergedKeys.length - 1;
+        await setSheetColumnHidden(
+          accessToken,
+          spreadsheetId,
+          tab.worksheet_title,
+          runIdCol,
+          true,
+        );
+      } catch (err) {
+        console.error("[all-sheets] could not hide Completed Run ID column:", err);
       }
     }
   }

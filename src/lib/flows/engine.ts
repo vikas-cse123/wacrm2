@@ -42,8 +42,15 @@ import { getValidAccessToken } from "@/lib/google/oauth";
 import {
   appendRow,
   formatSubmissionTimeIST,
+  setSheetColumnHidden,
 } from "@/lib/google/sheets";
 import { resolveFlowSheetColumns } from "./sheet-sync";
+import {
+  ASSIGN_KEY,
+  COMPLETED_RUN_ID_KEY,
+  getAssignForFlowRun,
+} from "@/lib/automations/assignment";
+import { completedAnswerOffset } from "./sheet-layout";
 import {
   buildCompletedHeader,
   buildCompletedRow,
@@ -183,10 +190,18 @@ async function syncRunToGoogleSheet(
 ): Promise<"synced" | "not_linked"> {
   const token = await getValidAccessToken(db, run.account_id).catch(() => null);
 
+  // Assign value for this EXACT run (never contact/phone/latest). When
+  // present we heal the trailing Assign (+ hidden Run ID) columns so the
+  // row carries it; when absent but the sheet already adopted those
+  // columns, the row still renders blank cells to stay aligned.
+  const assignName = await getAssignForFlowRun(db, run.id).catch(() => null);
+
   // Reconcile columns against the flow's CURRENT nodes before building the
   // row — a question added (or newly marked "include in sheet") after the
   // sheet was linked shows up starting this sync, no manual relink needed.
-  const resolved = await resolveFlowSheetColumns(db, run.flow_id, token);
+  const resolved = await resolveFlowSheetColumns(db, run.flow_id, token, {
+    includeAssign: !!assignName,
+  });
   if (!resolved) return "not_linked"; // no sheet linked — not an error.
   const { sheet, nameKey, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
@@ -204,6 +219,15 @@ async function syncRunToGoogleSheet(
   ]);
 
   const nameHeader = nameKey ? (resolved.nameHeader ?? "Name") : null;
+  // Virtual vars: Assign/RunID ride as trailing answer columns without
+  // touching flow_runs.vars (which stays user-data-only). Only inject
+  // when the healed header actually carries them, so row width always
+  // matches the header exactly.
+  const varsWithAssign: Record<string, unknown> = {
+    ...((run.vars ?? {}) as Record<string, unknown>),
+  };
+  if (answerColumns.includes(ASSIGN_KEY)) varsWithAssign[ASSIGN_KEY] = assignName ?? "";
+  if (answerColumns.includes(COMPLETED_RUN_ID_KEY)) varsWithAssign[COMPLETED_RUN_ID_KEY] = run.id;
   const layout = {
     schemaVersion: sheet.schema_version ?? 1,
     nameHeader,
@@ -215,7 +239,7 @@ async function syncRunToGoogleSheet(
     answerKeys: answerColumns,
     answerHeaders,
     activeKeys,
-    vars: (run.vars ?? {}) as Record<string, unknown>,
+    vars: varsWithAssign,
   };
   const headers = buildCompletedHeader(layout);
   const values = buildCompletedRow(layout);
@@ -232,6 +256,24 @@ async function syncRunToGoogleSheet(
     }
 
     await appendRow(token, sheet.spreadsheet_id, sheet.sheet_tab, values);
+    // New Completed Run ID column (Assign-enabled sheets only): keep it
+    // hidden like incomplete sheets. Best-effort cosmetic.
+    if (answerColumns.includes(COMPLETED_RUN_ID_KEY)) {
+      try {
+        const runIdCol =
+          completedAnswerOffset(sheet.schema_version ?? 1, !!nameHeader) +
+          answerColumns.indexOf(COMPLETED_RUN_ID_KEY);
+        await setSheetColumnHidden(
+          token,
+          sheet.spreadsheet_id,
+          sheet.sheet_tab,
+          runIdCol,
+          true,
+        );
+      } catch (err) {
+        console.error("[flows] could not hide Completed Run ID column:", err);
+      }
+    }
     return "synced";
   } catch (err) {
     // Preserve the row so nothing is lost to a transient API failure.
@@ -950,6 +992,7 @@ async function advanceFromNodeKey(
               cfg.tag_id,
               run.conversation_id ?? undefined,
               run.vars,
+              run.id,
             );
           }
         } else {
