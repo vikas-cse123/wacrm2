@@ -26,6 +26,7 @@ import {
   Tag,
   TagIcon,
   UserCheck,
+  Users,
   PencilLine,
   Briefcase,
   Hourglass,
@@ -49,6 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import type {
   AccountMember,
+  AssignPerson,
   AutomationStepType,
   AutomationTriggerType,
   CustomField,
@@ -103,6 +105,7 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   add_tag: { label: "Add Tag", icon: Tag, border: "border-l-primary" },
   remove_tag: { label: "Remove Tag", icon: TagIcon, border: "border-l-primary" },
   assign_conversation: { label: "Assign Conversation", icon: UserCheck, border: "border-l-primary" },
+  assign_person: { label: "Assign Person", icon: Users, border: "border-l-primary" },
   update_contact_field: { label: "Update Contact Field", icon: PencilLine, border: "border-l-primary" },
   create_deal: { label: "Create Deal", icon: Briefcase, border: "border-l-primary" },
   wait: { label: "Wait", icon: Hourglass, border: "border-l-border" },
@@ -118,6 +121,7 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "add_tag",
   "remove_tag",
   "assign_conversation",
+  "assign_person",
   "update_contact_field",
   "create_deal",
   "wait",
@@ -162,6 +166,11 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { tag_id: "" }
     case "assign_conversation":
       return { mode: "round_robin" }
+    case "assign_person":
+      return {
+        assignment_key: cid(),
+        persons: [{ name: "", percentage: 100, message_type: "text", message: "", tag_id: "" }],
+      }
     case "update_contact_field":
       return { field: "name", value: "" }
     case "create_deal":
@@ -420,6 +429,261 @@ function AgentSelect({
         <option value={value}>{value} (unknown agent)</option>
       )}
     </select>
+  )
+}
+
+/**
+ * Image picker for one assignment person (Text with Image). Same proven
+ * transport as Send Media steps: `uploadAccountMedia` into the shared
+ * automation media bucket, storing the public URL Meta fetches at send
+ * time. No new media system.
+ */
+function PersonImageField({
+  mediaUrl,
+  onChange,
+}: {
+  mediaUrl: string
+  onChange: (media_url: string) => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+
+  const handleFile = async (file: File) => {
+    if (file.size > MEDIA_MAX_BYTES) {
+      toast.error(
+        `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — limit is 16 MB.`,
+      )
+      return
+    }
+    setUploading(true)
+    try {
+      const { publicUrl } = await uploadAccountMedia(AUTOMATION_MEDIA_BUCKET, file)
+      onChange(publicUrl)
+      toast.success("Image uploaded.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed.")
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  if (mediaUrl) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs">
+        <Paperclip className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
+        <a
+          href={mediaUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="min-w-0 flex-1 truncate text-foreground hover:text-cyan-300"
+          title={mediaUrl}
+        >
+          {mediaUrl.split("/").pop() ?? mediaUrl}
+        </a>
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="Remove image"
+          disabled={uploading}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={uploading}
+        className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border bg-card px-3 py-4 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {uploading ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Uploading…
+          </>
+        ) : (
+          <>
+            <Upload className="h-3.5 w-3.5" />
+            Click to upload image (max 16 MB)
+          </>
+        )}
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={AUTOMATION_MEDIA_ACCEPT.image}
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) void handleFile(f)
+          e.target.value = ""
+        }}
+      />
+    </>
+  )
+}
+
+/**
+ * Lightweight assignment people list — one card per person (name,
+ * percentage, message type, message/caption, optional image, tag).
+ * Modelled on SendMediaFields rotation list: per-entry sub-form,
+ * add/remove/reorder, stale entries preserved.
+ * These are NOT CRM users — configuration belonging to this automation
+ * only. Percentages must total 100 (validated at activation).
+ */
+function AssignmentPersonsFields({
+  persons,
+  onChange,
+}: {
+  persons: AssignPerson[]
+  onChange: (patch: Record<string, unknown>) => void
+}) {
+  const list = Array.isArray(persons) ? persons : []
+  const total = list.reduce((s, p) => s + (Number(p?.percentage) || 0), 0)
+
+  const setPerson = (index: number, patch: Partial<AssignPerson>) => {
+    onChange({ persons: list.map((p, i) => (i === index ? { ...p, ...patch } : p)) })
+  }
+  const addPerson = () => {
+    onChange({
+      persons: [
+        ...list,
+        { name: "", percentage: 0, message_type: "text", message: "", tag_id: "" },
+      ],
+    })
+  }
+  const removePerson = (index: number) => {
+    onChange({ persons: list.filter((_, i) => i !== index) })
+  }
+  const movePerson = (index: number, direction: -1 | 1) => {
+    const j = index + direction
+    if (j < 0 || j >= list.length) return
+    const copy = [...list]
+    ;[copy[index], copy[j]] = [copy[j], copy[index]]
+    onChange({ persons: copy })
+  }
+
+  return (
+    <>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Lightweight people for this automation only — not CRM users. One person is
+        picked per run by percentage, their message is sent, then their tag is added.
+        Avoid using this automation&apos;s own trigger tag to prevent loops.
+      </p>
+      {list.map((p, i) => (
+        <div key={i} className="mb-2 rounded-md border border-border bg-card/50 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-semibold text-foreground">Person {i + 1}</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => movePerson(i, -1)}
+                disabled={i === 0}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={`Move person ${i + 1} up`}
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => movePerson(i, 1)}
+                disabled={i === list.length - 1}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={`Move person ${i + 1} down`}
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => removePerson(i)}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label={`Remove person ${i + 1}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          <FieldBlock label="Name">
+            <Input
+              value={p?.name ?? ""}
+              onChange={(e) => setPerson(i, { name: e.target.value })}
+              placeholder="Rahul"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label="Percentage">
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={String(p?.percentage ?? 0)}
+              onChange={(e) => setPerson(i, { percentage: Number(e.target.value) })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label="Message Type">
+            <select
+              value={p?.message_type ?? "text"}
+              onChange={(e) =>
+                setPerson(i, {
+                  message_type: e.target.value as AssignPerson["message_type"],
+                  // Switching back to text drops the image so a stale URL
+                  // can never send an unintended picture.
+                  ...(e.target.value === "text" ? { media_url: "" } : {}),
+                })
+              }
+              className={SELECT_CLASS}
+            >
+              <option value="text">Text</option>
+              <option value="image">Text with Image</option>
+            </select>
+          </FieldBlock>
+          {(p?.message_type ?? "text") === "image" && (
+            <FieldBlock label="Image">
+              <PersonImageField
+                mediaUrl={p?.media_url ?? ""}
+                onChange={(media_url) => setPerson(i, { media_url })}
+              />
+            </FieldBlock>
+          )}
+          <FieldBlock label={(p?.message_type ?? "text") === "image" ? "Caption" : "Message"}>
+            <Textarea
+              value={p?.message ?? ""}
+              onChange={(e) => setPerson(i, { message: e.target.value })}
+              placeholder="Hi, I'm Rahul..."
+              className="min-h-20 bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label="Tag">
+            <TagSelect
+              value={p?.tag_id ?? ""}
+              onChange={(v) => setPerson(i, { tag_id: v })}
+            />
+          </FieldBlock>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addPerson}
+        className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:bg-muted hover:text-foreground"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Add Person
+      </button>
+      <p
+        className={cn(
+          "mt-2 text-xs",
+          Math.abs(total - 100) > 0.001 ? "font-semibold text-destructive" : "text-muted-foreground",
+        )}
+      >
+        Total: {total}%{Math.abs(total - 100) > 0.001 ? " — must total 100%" : ""}
+      </p>
+    </>
   )
 }
 
@@ -1623,6 +1887,20 @@ function StepEditor({
           )}
         </>
       )
+    case "assign_person": {
+      const persons = (cfg.persons as AssignPerson[] | undefined) ?? []
+      return (
+        <AssignmentPersonsFields
+          persons={persons}
+          onChange={(patch) => {
+            // Stable step identity for the durable pick (same reason as
+            // send_media rotation_key — row UUIDs churn on every save).
+            if (!cfg.assignment_key) set({ assignment_key: cid() })
+            set(patch)
+          }}
+        />
+      )
+    }
     case "update_contact_field":
       return (
         <>
@@ -1799,6 +2077,11 @@ function previewFor(step: BuilderStep): string {
         ((step.step_config.media_url as string) ?? "").split("/").pop() ||
         ""
       return `send ${mt || "media"}${name ? `: ${name}` : ""}`
+    }
+    case "assign_person": {
+      const persons = (step.step_config.persons as AssignPerson[] | undefined) ?? []
+      if (persons.length === 0) return "no people yet"
+      return persons.map((p) => `${p?.name || "?"} ${Number(p?.percentage) || 0}%`).join(" · ")
     }
     case "wait":
       return `${step.step_config.amount ?? "?"} ${step.step_config.unit ?? ""}`

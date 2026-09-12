@@ -410,7 +410,7 @@ describe("concurrent duplicate tap (production Pooja shape)", () => {
     expect(dispatchTagAdded).toHaveBeenCalledTimes(1);
     expect(dispatchTagAdded).toHaveBeenCalledWith(ACCT, CONTACT, "tag-T", CONV, {
       menu: "Yes",
-    });
+    }, "run-1");
     // Exactly one branch completed the run; the loser found nothing to advance.
     const outcomes = [a.outcome, b.outcome].sort();
     expect(outcomes).toEqual(["completed", "no_match"]);

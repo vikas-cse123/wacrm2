@@ -8,8 +8,15 @@ import { resolveFlowSheetColumns } from "@/lib/flows/sheet-sync";
 import {
   buildCompletedHeader,
   buildCompletedRow,
+  completedAnswerOffset,
   stringifySheetCell,
 } from "@/lib/flows/sheet-layout";
+import {
+  ASSIGN_KEY,
+  COMPLETED_RUN_ID_KEY,
+  getAssignsForFlowRuns,
+} from "@/lib/automations/assignment";
+import { setSheetColumnHidden } from "@/lib/google/sheets";
 import { NextResponse } from "next/server";
 
 function parseIsoDate(value: unknown): string | null {
@@ -41,16 +48,6 @@ export async function POST(
       );
     }
 
-    const resolved = await resolveFlowSheetColumns(ctx.supabase, flowId, token);
-    if (!resolved || resolved.sheet.account_id !== ctx.accountId) {
-      return NextResponse.json(
-        { error: "Sheet not linked for this flow." },
-        { status: 400 },
-      );
-    }
-
-    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
-
     let runsQuery = ctx.supabase
       .from("flow_runs")
       .select("id, contact_id, vars, started_at, ended_at")
@@ -65,6 +62,23 @@ export async function POST(
     if (!runs || runs.length === 0) {
       return NextResponse.json({ imported: 0 });
     }
+
+    const assignMap = await getAssignsForFlowRuns(
+      ctx.supabase,
+      (runs as Array<{ id: string }>).map((r) => r.id),
+    ).catch(() => new Map<string, string>());
+
+    const resolved = await resolveFlowSheetColumns(ctx.supabase, flowId, token, {
+      includeAssign: assignMap.size > 0,
+    });
+    if (!resolved || resolved.sheet.account_id !== ctx.accountId) {
+      return NextResponse.json(
+        { error: "Sheet not linked for this flow." },
+        { status: 400 },
+      );
+    }
+
+    const { sheet, nameKey, nameHeader, keys: answerColumns, headers: answerHeaders, activeKeys } = resolved;
 
     const contactIds = [...new Set(runs.map((r) => r.contact_id).filter(Boolean))];
     const contactMap = new Map<string, { phone?: string }>();
@@ -95,6 +109,13 @@ export async function POST(
     const rows: (string | number)[][] = runs.map((run: any) => {
       const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
       const vars = (run.vars ?? {}) as Record<string, unknown>;
+      const varsWithAssign: Record<string, unknown> = { ...vars };
+      if (answerColumns.includes(ASSIGN_KEY)) {
+        varsWithAssign[ASSIGN_KEY] = assignMap.get(run.id) ?? "";
+      }
+      if (answerColumns.includes(COMPLETED_RUN_ID_KEY)) {
+        varsWithAssign[COMPLETED_RUN_ID_KEY] = run.id;
+      }
       return buildCompletedRow({
         schemaVersion: sheet.schema_version ?? 1,
         nameHeader: resolvedNameHeader,
@@ -106,7 +127,7 @@ export async function POST(
         answerKeys: answerColumns,
         answerHeaders,
         activeKeys,
-        vars,
+        vars: varsWithAssign,
       });
     });
 
@@ -133,6 +154,23 @@ export async function POST(
         .from("flow_sheet_configs")
         .update({ header_written: true })
         .eq("flow_id", flowId);
+    }
+
+    if (answerColumns.includes(COMPLETED_RUN_ID_KEY)) {
+      try {
+        const runIdCol =
+          completedAnswerOffset(sheet.schema_version ?? 1, !!resolvedNameHeader) +
+          answerColumns.indexOf(COMPLETED_RUN_ID_KEY);
+        await setSheetColumnHidden(
+          token,
+          sheet.spreadsheet_id,
+          sheet.sheet_tab,
+          runIdCol,
+          true,
+        );
+      } catch (err) {
+        console.error("[import] could not hide Completed Run ID column:", err);
+      }
     }
 
     return NextResponse.json({ imported: rows.length });

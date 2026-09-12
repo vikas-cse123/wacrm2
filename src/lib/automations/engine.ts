@@ -3,6 +3,7 @@ import type {
   AutomationLogStepResult,
   AutomationStep,
   AutomationTriggerType,
+  AssignPersonStepConfig,
   ConditionStepConfig,
   KeywordMatchTriggerConfig,
   SendMediaRotationMessage,
@@ -19,6 +20,12 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import {
+  claimAssignmentPick,
+  normalizePersons,
+  resolveFlowRunId,
+} from './assignment'
+import { enrichAssignmentSheets } from '@/lib/sheets/assign-enrich'
 // The Flows engine's media sender is fully shared: it performs the same
 // account-scoped contact/config lookup, phone-variant retry, Meta send,
 // message-row persistence, and conversation preview update that the
@@ -42,6 +49,12 @@ export interface AutomationContext {
   tag_id?: string
   /** Agent the conversation was assigned to, for conversation_assigned. */
   agent_id?: string
+  /**
+   * Exact Flow run this execution belongs to, when applicable.
+   * Identity for sheet enrichment — never derived from contact/phone.
+   * NULL = independent automation (message/tag still work, no sheets).
+   */
+  flow_run_id?: string | null
 }
 
 export interface DispatchInput {
@@ -54,6 +67,12 @@ export interface DispatchInput {
   triggerType: AutomationTriggerType
   contactId?: string | null
   context?: AutomationContext
+  /**
+   * Exact Flow run id when the trigger originates from a Flow context.
+   * Validated against (account_id, contact_id) before use; preferred
+   * over context.flow_run_id when both are present.
+   */
+  flowRunId?: string | null
 }
 
 /**
@@ -105,10 +124,22 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
     }
     if (!automations || automations.length === 0) return
 
+    // Exact Flow-run linkage (never contact/phone/latest). Prefer the
+    // explicit flowRunId, fall back to context.flow_run_id for callers
+    // that embed it (manual POSTs, chained dispatches). Validated
+    // against (account_id, contact_id); invalid → NULL (independent).
+    const candidateFlowRunId = input.flowRunId ?? input.context?.flow_run_id ?? null
+    const flowRunId = await resolveFlowRunId(
+      db,
+      input.accountId,
+      input.contactId ?? null,
+      candidateFlowRunId,
+    )
+
     for (const automation of automations as Automation[]) {
       if (!triggerMatches(automation, input.context)) continue
       try {
-        await executeAutomation(automation, input)
+        await executeAutomation(automation, input, flowRunId)
       } catch (err) {
         console.error('[automations] execute failed:', automation.id, err)
       }
@@ -132,12 +163,19 @@ export function dispatchTagAdded(
   tagId: string,
   conversationId?: string,
   vars?: Record<string, unknown>,
+  flowRunId?: string | null,
 ): void {
   void runAutomationsForTrigger({
     accountId,
     triggerType: 'tag_added',
     contactId,
-    context: { tag_id: tagId, conversation_id: conversationId, ...(vars ? { vars } : {}) },
+    context: {
+      tag_id: tagId,
+      conversation_id: conversationId,
+      ...(vars ? { vars } : {}),
+      ...(flowRunId ? { flow_run_id: flowRunId } : {}),
+    },
+    flowRunId: flowRunId ?? null,
   }).catch((err) => console.error('[automations] tag_added dispatch failed:', err))
 }
 
@@ -160,6 +198,7 @@ export async function resumePendingExecution(pending: {
   branch: 'yes' | 'no' | null
   next_step_position: number
   context: AutomationContext
+  flow_run_id?: string | null
 }): Promise<void> {
   const db = supabaseAdmin()
   const { data: automation, error } = await db
@@ -197,11 +236,19 @@ export async function resumePendingExecution(pending: {
     }
   }
 
+  // Re-inject the persisted flow_run_id so resumed steps stay pinned
+  // to the exact Flow run even if the stored context was compacted.
+  // Explicit column wins; fall back to whatever the context carries.
+  const resumedFlowRunId =
+    (pending as { flow_run_id?: string | null }).flow_run_id ??
+    pending.context?.flow_run_id ??
+    null
+
   try {
     await executeStepsFrom({
       automation: automation as Automation,
       contactId: pending.contact_id,
-      context: pending.context ?? {},
+      context: { ...(pending.context ?? {}), flow_run_id: resumedFlowRunId },
       parentStepId: pending.parent_step_id,
       branch: pending.branch,
       startPosition: pending.next_step_position,
@@ -219,26 +266,46 @@ export async function resumePendingExecution(pending: {
 // Internal execution
 // ------------------------------------------------------------
 
-async function executeAutomation(automation: Automation, input: DispatchInput) {
+async function executeAutomation(
+  automation: Automation,
+  input: DispatchInput,
+  flowRunId: string | null = null,
+) {
   const db = supabaseAdmin()
 
-  const { data: log, error: logErr } = await db
+  const baseLogRow = {
+    automation_id: automation.id,
+    // Tenancy: matches automation.account_id (NOT NULL post-017).
+    account_id: automation.account_id,
+    // Audit: keeps the historical "author of this automation"
+    // pointer so logs still attribute to the right user even
+    // after teammates join the account.
+    user_id: automation.user_id,
+    contact_id: input.contactId ?? null,
+    trigger_event: input.triggerType,
+    steps_executed: [],
+    status: 'success',
+    // Exact Flow run linkage (NULL = independent automation).
+    // Column added in migration 069.
+    flow_run_id: flowRunId,
+  }
+  let { data: log, error: logErr } = await db
     .from('automation_logs')
-    .insert({
-      automation_id: automation.id,
-      // Tenancy: matches automation.account_id (NOT NULL post-017).
-      account_id: automation.account_id,
-      // Audit: keeps the historical "author of this automation"
-      // pointer so logs still attribute to the right user even
-      // after teammates join the account.
-      user_id: automation.user_id,
-      contact_id: input.contactId ?? null,
-      trigger_event: input.triggerType,
-      steps_executed: [],
-      status: 'success',
-    })
+    .insert(baseLogRow)
     .select()
     .single()
+
+  // Deploy-ordering tolerance: if this code runs against a DB where
+  // migration 069 has not applied yet, retry without the new column so
+  // automations keep running (the execution simply becomes independent
+  // for sheets). Any other insert failure still aborts below.
+  if (logErr && /flow_run_id/i.test(logErr.message ?? '')) {
+    const { flow_run_id: _dropped, ...legacyRow } = baseLogRow
+    void _dropped
+    const retry = await db.from('automation_logs').insert(legacyRow).select().single()
+    log = retry.data
+    logErr = retry.error
+  }
 
   if (logErr || !log) {
     console.error('[automations] cannot create log:', logErr)
@@ -248,7 +315,7 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
   await executeStepsFrom({
     automation,
     contactId: input.contactId ?? null,
-    context: input.context ?? {},
+    context: { ...(input.context ?? {}), flow_run_id: flowRunId },
     parentStepId: null,
     branch: null,
     startPosition: 0,
@@ -317,7 +384,7 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
     if (step.step_type === 'wait') {
       const cfg = step.step_config as WaitStepConfig
       const ms = waitMs(cfg)
-      await db.from('automation_pending_executions').insert({
+      const pendingRow = {
         automation_id: args.automation.id,
         // Tenancy: account_id required NOT NULL post-017.
         account_id: args.automation.account_id,
@@ -328,9 +395,20 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
         branch: args.branch,
         next_step_position: step.position + 1,
         context: args.context,
+        // Exact Flow-run pin survives resume via column + context.
+        // Column added in migration 069 (see executeAutomation fallback).
+        flow_run_id: args.context?.flow_run_id ?? null,
         run_at: new Date(Date.now() + ms).toISOString(),
         status: 'pending',
-      })
+      }
+      const { error: pendingErr } = await db
+        .from('automation_pending_executions')
+        .insert(pendingRow)
+      if (pendingErr && /flow_run_id/i.test(pendingErr.message ?? '')) {
+        const { flow_run_id: _dropped, ...legacyPending } = pendingRow
+        void _dropped
+        await db.from('automation_pending_executions').insert(legacyPending)
+      }
       results.push({
         step_id: step.id,
         step_type: step.step_type,
@@ -570,7 +648,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // downstream automation doesn't block this run. (No cycle detection:
       // an add_tag step that adds this automation's own trigger tag will
       // loop — the same footgun the docs already warn about for waits.)
-      dispatchTagAdded(args.automation.account_id, args.contactId, cfg.tag_id, args.context.conversation_id)
+      // Forward the exact flow_run_id + vars so chained automations stay
+      // pinned to the same Flow run instead of becoming independent.
+      dispatchTagAdded(
+        args.automation.account_id,
+        args.contactId,
+        cfg.tag_id,
+        args.context.conversation_id,
+        args.context.vars,
+        args.context.flow_run_id ?? null,
+      )
       return `tag ${cfg.tag_id} added`
     }
 
@@ -609,6 +696,115 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         .eq('account_id', args.automation.account_id)
         .eq('contact_id', args.contactId)
       return `assigned to ${agentId}`
+    }
+
+    case 'assign_person': {
+      // Lightweight automation-specific assignment (NOT a CRM agent).
+      // Exactly ONE person per execution: durable claim BEFORE send,
+      // that person's message via existing Meta infra, tag ONLY after
+      // send + message persistence succeed. Retries reuse the stored
+      // winner via UNIQUE(automation_id, log_id, step_key).
+      const cfg = step.step_config as AssignPersonStepConfig
+      if (!args.contactId) throw new Error('assign_person needs a contact')
+      const persons = normalizePersons(cfg)
+      // Stable step identity: step rows are re-inserted with fresh UUIDs
+      // on every save (steps-tree.ts) — same reason as rotation_key.
+      const stepKey =
+        typeof cfg.assignment_key === 'string' && cfg.assignment_key.trim()
+          ? cfg.assignment_key.trim()
+          : step.id
+      const flowRunId = args.context?.flow_run_id ?? null
+      const pick = await claimAssignmentPick(db, {
+        automationId: args.automation.id,
+        accountId: args.automation.account_id,
+        contactId: args.contactId,
+        flowRunId,
+        logId: args.logId,
+        stepKey,
+        persons,
+      })
+      const text = interpolate(pick.message, args)
+      if (!text.trim()) throw new Error('assign_person message is empty')
+      const conversationId = await resolveConversationId(args)
+      // Text uses the existing text-message path; Text with Image uses
+      // the existing image/media path (same transport as Send Media
+      // steps: account-scoped lookup, phone-variant retry, Meta send,
+      // message-row persistence). The person's message is the caption.
+      const isImage = (pick.message_type ?? 'text') === 'image'
+      if (isImage && !pick.media_url?.trim()) {
+        throw new Error('assign_person image message needs media_url')
+      }
+      let whatsappId: string
+      try {
+        if (isImage) {
+          const sent = await engineSendMedia({
+            accountId: args.automation.account_id,
+            userId: args.automation.user_id,
+            conversationId,
+            contactId: args.contactId,
+            kind: 'image',
+            link: pick.media_url!,
+            caption: text,
+          })
+          whatsappId = sent.whatsapp_message_id
+        } else {
+          const sent = await engineSendText({
+            accountId: args.automation.account_id,
+            userId: args.automation.user_id,
+            conversationId,
+            contactId: args.contactId,
+            text,
+          })
+          whatsappId = sent.whatsapp_message_id
+        }
+      } catch (err) {
+        // Durable pick is kept for retry; tag is NOT added on failure.
+        // Best-effort sheets enrichment still runs so an already-synced
+        // row can show Assign even when the send failed (pick exists).
+        await enrichAssignmentSheets(args.automation.account_id, pick.flow_run_id).catch(() => {})
+        throw err
+      }
+      // Tag ONLY after successful send + persistence (engineSendText
+      // throws when the messages INSERT fails, so reaching here means
+      // both Meta 2xx and DB persistence succeeded).
+      if (pick.tag_id) {
+        const { count } = await db
+          .from('contact_tags')
+          .select('id', { count: 'exact', head: true })
+          .eq('contact_id', args.contactId)
+          .eq('tag_id', pick.tag_id)
+        if ((count ?? 0) === 0) {
+          await db.from('contact_tags').insert({
+            contact_id: args.contactId,
+            tag_id: pick.tag_id,
+          })
+          // Only dispatch when a NEW row was created — a contact that
+          // already had the tag must not refire tag_added automations
+          // (recursion protection scoped to this new step; existing
+          // add_tag fan-out is intentionally untouched). Additionally,
+          // never dispatch when the person's tag IS this automation's
+          // own tag_added trigger (self-loop guard for the new step).
+          const ownTriggerTag =
+            args.automation.trigger_type === 'tag_added'
+              ? ((args.automation.trigger_config as TagTriggerConfig | undefined)?.tag_id ?? null)
+              : null
+          if (pick.tag_id !== ownTriggerTag) {
+            dispatchTagAdded(
+              args.automation.account_id,
+              args.contactId,
+              pick.tag_id,
+              args.context.conversation_id,
+              args.context.vars,
+              flowRunId,
+            )
+          }
+        }
+      }
+      // Best-effort sheets enrichment for already-synced rows (exact
+      // flow_run_id identity only; never phone/contact fallback).
+      // Never fails the step — sync-time resolver covers not-yet-synced.
+      await enrichAssignmentSheets(args.automation.account_id, pick.flow_run_id).catch(() => {})
+      return `assigned ${pick.person_name} via Meta (${whatsappId})`
     }
 
     case 'update_contact_field': {
