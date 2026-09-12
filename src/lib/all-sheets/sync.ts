@@ -41,6 +41,7 @@ import {
 import {
   ASSIGN_HEADER,
   ASSIGN_KEY,
+  COMPLETED_RUN_ID_HEADER,
   COMPLETED_RUN_ID_KEY,
   getAssignsForFlowRuns,
 } from "@/lib/automations/assignment";
@@ -148,11 +149,23 @@ export async function importAllSheetCompleted(
   const pending = ((runs ?? []) as RunRow[]).filter((r) => !already.has(r.id));
   if (pending.length === 0) return { imported: 0 };
 
+  // Sheet-idempotent check: detect rows already physically present via hidden
+  // Flow Run ID (same pattern as refreshAllSheetIncomplete). Handles crash
+  // after appendRows but before markSynced, and concurrent writers.
+  const presentCompleted = tab.header_written
+    ? await findCompletedRowsPresent(accessToken, collection.spreadsheet_id, tab.worksheet_title, pending.map((r) => r.id))
+    : new Set<string>();
+  if (presentCompleted.size > 0) {
+    await markSynced(db, tab.id, [...presentCompleted]);
+  }
+  const fresh = pending.filter((r) => !presentCompleted.has(r.id));
+  if (fresh.length === 0) return { imported: 0 };
+
   // Exact-run Assign values (never contact/phone/latest). Conditional
   // healing keeps tabs without assignments byte-identical.
   const assignMap = await getAssignsForFlowRuns(
     db,
-    pending.map((r) => r.id),
+    fresh.map((r) => r.id),
   ).catch(() => new Map<string, string>());
 
   const resolved = await resolveAllTabColumns(db, tab, collection.spreadsheet_id, accessToken, {
@@ -161,7 +174,7 @@ export async function importAllSheetCompleted(
   const sheet = resolved.tab;
   const quotedTitle = quoteSheetTitle(sheet.worksheet_title);
 
-  const contactIds = [...new Set(pending.map((r) => r.contact_id).filter(Boolean))] as string[];
+  const contactIds = [...new Set(fresh.map((r) => r.contact_id).filter(Boolean))] as string[];
   const contactMap = new Map<string, { phone?: string | null }>();
   if (contactIds.length > 0) {
     const { data: contacts } = await db.from("contacts").select("id, phone").in("id", contactIds);
@@ -171,7 +184,7 @@ export async function importAllSheetCompleted(
   }
 
   const nameHeader = resolved.nameKey ? (resolved.nameHeader ?? "Name") : null;
-  const rows = pending.map((run) => {
+  const rows = fresh.map((run) => {
     const contact = run.contact_id ? contactMap.get(run.contact_id) : null;
     const vars = (run.vars ?? {}) as Record<string, unknown>;
     const varsWithAssign: Record<string, unknown> = { ...vars };
@@ -244,16 +257,16 @@ export async function importAllSheetCompleted(
     throw err;
   }
 
-  await markSynced(db, tab.id, pending.map((r) => r.id));
+  await markSynced(db, tab.id, fresh.map((r) => r.id));
 
   // Own-spreadsheet-only cleanup: runs that completed are removed from
   // this flow's tab in the INCOMPLETE collection (never the existing
   // incomplete-sheet configs or watermarks).
-  await cleanupAllSheetIncompleteForRuns(db, collection, pending.map((r) => r.id), accessToken).catch(
+  await cleanupAllSheetIncompleteForRuns(db, collection, fresh.map((r) => r.id), accessToken).catch(
     (err) => console.error("[all-sheets] own cleanup failed:", err),
   );
 
-  return { imported: pending.length };
+  return { imported: fresh.length };
 }
 
 /**
@@ -472,6 +485,30 @@ export async function findIncompleteRowsPresent(
     spreadsheetId,
     quoteSheetTitle(rawWorksheetTitle),
     INCOMPLETE_RUN_ID_HEADER,
+  ).catch(() => null);
+  if (runIdCol === null) return new Set();
+  const found = await findExactValueRows(
+    accessToken,
+    spreadsheetId,
+    quoteSheetTitle(rawWorksheetTitle),
+    runIdCol,
+    runIds,
+  ).catch(() => new Map<string, number>());
+  return new Set(found.keys());
+}
+
+export async function findCompletedRowsPresent(
+  accessToken: string,
+  spreadsheetId: string,
+  rawWorksheetTitle: string,
+  runIds: string[],
+): Promise<Set<string>> {
+  if (runIds.length === 0) return new Set();
+  const runIdCol = await findHeaderColumn(
+    accessToken,
+    spreadsheetId,
+    quoteSheetTitle(rawWorksheetTitle),
+    COMPLETED_RUN_ID_HEADER,
   ).catch(() => null);
   if (runIdCol === null) return new Set();
   const found = await findExactValueRows(
