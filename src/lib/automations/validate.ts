@@ -36,6 +36,21 @@ export function validateStepsForActivation(steps: StepLike[]): ValidationIssue[]
     return issues
   }
   walk(steps, '', issues)
+  // Single Assign column → at most one assign_person per automation
+  let assignCount = 0
+  const countAssign = (list: StepLike[]) => {
+    for (const s of list) {
+      if (s.step_type === 'assign_person') assignCount += 1
+      if (s.step_type === 'condition' && s.branches) {
+        if (s.branches.yes) countAssign(s.branches.yes)
+        if (s.branches.no) countAssign(s.branches.no)
+      }
+    }
+  }
+  countAssign(steps)
+  if (assignCount > 1) {
+    issues.push({ path: 'steps', message: 'only one Assign Person step is allowed per automation (single Assign column)' })
+  }
   return issues
 }
 
