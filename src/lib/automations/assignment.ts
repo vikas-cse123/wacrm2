@@ -175,14 +175,19 @@ export async function claimAssignmentPick(
   // running SWRR again. This ensures the sheet's initial row and the later
   // Assign Person step use the SAME person, and exactly one SWRR turn is consumed.
   if (args.flowRunId) {
-    const { data: reserved } = await db
-      .from('automation_assignment_reservations')
-      .select('*')
-      .eq('flow_run_id', args.flowRunId)
-      .eq('automation_id', args.automationId)
-      .eq('step_key', args.stepKey)
-      .maybeSingle()
-      .catch(() => ({ data: null } as { data: unknown }))
+    let reserved: unknown = null
+    try {
+      const res = await db
+        .from('automation_assignment_reservations')
+        .select('*')
+        .eq('flow_run_id', args.flowRunId)
+        .eq('automation_id', args.automationId)
+        .eq('step_key', args.stepKey)
+        .maybeSingle()
+      reserved = res.data
+    } catch {
+      reserved = null
+    }
     const r = reserved as AssignmentReservationRow | null
     if (r) {
       // Create execution-level pick from reservation snapshot if not already exists
