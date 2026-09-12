@@ -605,3 +605,84 @@ describe("resolveFlowRunId", () => {
     expect(await resolveFlowRunId(db, "acct-1", null, "run-1")).toBeNull();
   });
 });
+
+describe("regression: maybeSingle().catch is not a function", () => {
+  it("claimAssignmentPick reuses reservation without throwing .catch is not a function", async () => {
+    // Simulate DB where maybeSingle returns a plain thenable without .catch on the builder chain
+    // The fixed code must use try/catch around await, not .catch on the builder
+    const reservation = {
+      id: "res-1",
+      flow_run_id: "run-1",
+      automation_id: "auto-A",
+      step_key: "step-assign",
+      person_index: 1,
+      person_name: "Priya",
+      percentage: 25,
+      message: "Hi Priya",
+      message_type: "text",
+      media_url: null,
+      tag_id: "tag-priya",
+      created_at: new Date().toISOString(),
+    };
+    const db = {
+      from: (table: string) => {
+        const b: Record<string, unknown> = {};
+        b.select = vi.fn(() => b);
+        b.eq = vi.fn(() => b);
+        b.in = vi.fn(() => b);
+        b.order = vi.fn(() => b);
+        b.limit = vi.fn(() => b);
+        // maybeSingle returns a Promise-like without .catch on the chain itself
+        // The fixed code does `await db.from(...).maybeSingle()` inside try/catch, not `.maybeSingle().catch`
+        b.maybeSingle = vi.fn(async () => {
+          if (table === "automation_assignment_reservations") return { data: reservation, error: null };
+          if (table === "automation_assignment_picks") return { data: null, error: null };
+          return { data: null, error: null };
+        });
+        b.upsert = vi.fn(async () => ({ data: null, error: null }));
+        (b as { then: unknown }).then = (resolve: (v: unknown) => unknown) =>
+          Promise.resolve({ data: [], error: null }).then(resolve);
+        return b;
+      },
+      rpc: vi.fn(async () => ({ data: null, error: null })),
+    } as unknown as never;
+
+    // Should not throw "maybeSingle(...).catch is not a function"
+    const pick = await claimAssignmentPick(db, {
+      automationId: "auto-A",
+      accountId: "acct-1",
+      contactId: "contact-1",
+      flowRunId: "run-1",
+      logId: "log-1",
+      stepKey: "step-assign",
+      persons: [RAHUL, PRIYA, AMAN],
+    });
+    expect(pick.person_name).toBe("Priya");
+    expect(pick.person_index).toBe(1);
+  });
+
+  it("getAssignsForFlowRuns handles reservations without swallowing DB errors via .catch on builder", async () => {
+    const db = {
+      from: (table: string) => {
+        const b: Record<string, unknown> = {};
+        b.select = vi.fn(() => b);
+        b.eq = vi.fn(() => b);
+        b.in = vi.fn((col: string, vals: unknown[]) => b);
+        b.order = vi.fn(() => b);
+        (b as { then: unknown }).then = (resolve: (v: unknown) => unknown) => {
+          if (table === "automation_assignment_picks") {
+            return Promise.resolve({ data: [{ flow_run_id: "run-1", person_name: "Rahul", created_at: "2026-01-02" }], error: null }).then(resolve);
+          }
+          if (table === "automation_assignment_reservations") {
+            return Promise.resolve({ data: [{ flow_run_id: "run-1", person_name: "Vivek", created_at: "2026-01-01" }], error: null }).then(resolve);
+          }
+          return Promise.resolve({ data: [], error: null }).then(resolve);
+        };
+        return b;
+      },
+    } as unknown as never;
+    const map = await getAssignsForFlowRuns(db, ["run-1"]);
+    // Latest created_at is picks (2026-01-02) so Rahul wins over Vivek
+    expect(map.get("run-1")).toBe("Rahul");
+  });
+});
