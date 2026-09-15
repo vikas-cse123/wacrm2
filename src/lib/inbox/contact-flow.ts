@@ -10,12 +10,15 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** Minimal shape of a flow_run row joined with its flow's id + name. */
+/** Minimal shape of a flow_run row joined with its flow's id + name.
+ * Supabase may return `flow` as object or single-element array depending on
+ * PostgREST inference; handle both.
+ */
 export interface ContactFlowRun {
   id: string;
   status: string;
   started_at: string;
-  flow: { id: string; name: string } | null;
+  flow: { id: string; name: string } | { id: string; name: string }[] | null;
 }
 
 /**
@@ -38,7 +41,13 @@ export interface ContactFlowRun {
 export function pickContactFlowRun(
   runs: ContactFlowRun[],
 ): ContactFlowRun | null {
-  const withFlow = runs.filter((run) => run.flow?.name);
+  const getFlowName = (run: ContactFlowRun): string | undefined => {
+    const f = run.flow;
+    if (!f) return undefined;
+    if (Array.isArray(f)) return f[0]?.name;
+    return f.name;
+  };
+  const withFlow = runs.filter((run) => getFlowName(run));
   if (withFlow.length === 0) return null;
 
   const newest = (a: ContactFlowRun, b: ContactFlowRun) =>
@@ -50,7 +59,11 @@ export function pickContactFlowRun(
 
 /** Flow name variant of {@link pickContactFlowRun} for display. */
 export function pickContactFlow(runs: ContactFlowRun[]): string | null {
-  return pickContactFlowRun(runs)?.flow?.name ?? null;
+  const run = pickContactFlowRun(runs);
+  if (!run?.flow) return null;
+  const f = run.flow;
+  if (Array.isArray(f)) return f[0]?.name ?? null;
+  return f.name ?? null;
 }
 
 /**

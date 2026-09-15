@@ -56,7 +56,7 @@ export async function GET(request: Request) {
     );
     return okList(
       items.map((r) =>
-        serializeConversation(normalizeConversation(r as Conversation))
+        serializeConversation(normalizeConversation(r as unknown as Parameters<typeof normalizeConversation>[0]))
       ),
       nextCursor
     );
