@@ -98,8 +98,9 @@ describe("pickContactFlow", () => {
 describe("pickContactFlowRun", () => {
   it("returns the selected run with its flow id for filter matching", () => {
     const run = pickContactFlowRun([makeRun()]);
-    expect(run?.flow?.id).toBe("flow-1");
-    expect(run?.flow?.name).toBe("Bali Automation");
+    const flow = Array.isArray(run?.flow) ? run?.flow[0] : run?.flow;
+    expect(flow?.id).toBe("flow-1");
+    expect(flow?.name).toBe("Bali Automation");
   });
 
   it("returns null when there is nothing to select", () => {

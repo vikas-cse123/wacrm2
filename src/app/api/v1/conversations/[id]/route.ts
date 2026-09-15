@@ -33,7 +33,7 @@ export async function GET(
     }
     if (!data) return fail('not_found', 'Conversation not found', 404);
 
-    return ok(serializeConversation(normalizeConversation(data as Conversation)));
+    return ok(serializeConversation(normalizeConversation(data as unknown as Parameters<typeof normalizeConversation>[0])));
   } catch (err) {
     return toApiErrorResponse(err);
   }

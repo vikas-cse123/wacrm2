@@ -44,11 +44,11 @@ export default function InboxPage() {
     null
   );
   /**
-   * Bumped whenever we want children (ConversationList, MessageThread)
-   * to refetch from the DB — used as a safety net against missed
-   * realtime events. Bumped on WS reconnect and on tab visibility →
-   * visible. The initial mount fetches don't depend on this; they fire
-   * once on conversationId-change as usual.
+   * Bumped only when the user explicitly requests a refresh via the
+   * thread-header refresh button (handleManualRefresh). The initial
+   * mount fetches and Realtime patches keep the Inbox live; tab
+   * visibility and Realtime reconnect no longer bump this token
+   * (removed for egress — see effects below).
    */
   const [resyncToken, setResyncToken] = useState(0);
 
@@ -392,10 +392,10 @@ export default function InboxPage() {
     [activeConversation, hydrateConversation]
   );
 
-  // Subscribe to realtime. The `isConnected` flag below feeds the
-  // reconnect resync: realtime is best-effort and events sent while the
-  // WS was disconnected (laptop sleep, network blip, background-tab
-  // throttle) are simply lost. We need a way to catch up.
+  // Subscribe to realtime. `isConnected` is tracked below for the
+  // offline indicator only — reconnect no longer triggers a full
+  // resync (removed for egress). Realtime patches via
+  // handleMessageEvent/handleConversationEvent keep the Inbox live.
   const { isConnected } = useRealtime({
     channelName: "inbox-realtime",
     onMessageEvent: handleMessageEvent,
@@ -403,47 +403,38 @@ export default function InboxPage() {
     enabled: true,
   });
 
-  /**
-   * Bump `resyncToken` whenever the realtime channel transitions from
-   * disconnected → connected *after* the initial connect. The initial
-   * connect is covered by the children's on-mount fetches; only later
-   * reconnects need a manual refetch to fill the gap.
-   *
-   * Tracked via a `was-connected` ref rather than a count so that React
-   * strict-mode's dev-only effect double-fire doesn't read as a
-   * reconnect.
-   */
+  // Realtime connection tracking — no automatic full refetch.
+  // Previously we bumped `resyncToken` on both WS reconnect and
+  // visibilitychange → visible, which caused a full conversation-list
+  // + 500-message + pins/members/tags/flows refetch on every tab return
+  // (the confirmed 3 GB egress root cause). That behavior is removed.
+  // Normal Realtime INSERT/UPDATE/DELETE patches local state via
+  // handleMessageEvent/handleConversationEvent + hydrateConversation.
+  // Only an explicit user action (the refresh button) now bumps
+  // resyncToken. We keep the refs to track connection state for the
+  // offline indicator if needed, but do not trigger a full refetch.
   const wasConnectedRef = useRef(false);
   const initialConnectDoneRef = useRef(false);
   useEffect(() => {
     if (isConnected && !wasConnectedRef.current) {
-      // false → true transition
-      if (initialConnectDoneRef.current) {
-        setResyncToken((n) => n + 1);
-      } else {
+      if (!initialConnectDoneRef.current) {
         initialConnectDoneRef.current = true;
       }
+      // Intentionally NOT bumping resyncToken on reconnect.
+      // Full-list + full-history refetches are handled only by
+      // handleManualRefresh (user-initiated). Realtime patching
+      // keeps the list consistent; missed events during a brief
+      // disconnect converge on the next Realtime event or manual refresh.
     }
     wasConnectedRef.current = isConnected;
   }, [isConnected]);
 
-  /**
-   * Refetch when the tab regains focus. Background tabs may have their
-   * WS throttled by the browser even without a full disconnect, so a
-   * visibilitychange → visible is a reliable signal that we may have
-   * missed events. Cheap to fire; the children dedupe on their own.
-   */
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        setResyncToken((n) => n + 1);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, []);
+  // visibilitychange → visible no longer triggers a full refetch.
+  // The previous unconditional setResyncToken(n+1) on every tab return
+  // downloaded the entire conversation list (heavy CONVERSATION_SELECT)
+  // and the active thread's 500 messages again, even when nothing
+  // changed, driving Postgres egress. Removed for egress reduction.
+  // Inbox correctness is preserved via Realtime patches.
 
   /**
    * Manual refresh trigger for the thread-header refresh button.

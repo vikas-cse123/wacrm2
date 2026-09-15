@@ -83,9 +83,9 @@ interface MessageThreadProps {
   onBack?: () => void;
   /**
    * Increment to force the messages + reactions fetch effects to refire.
-   * Parent bumps this on realtime reconnect / tab visibility → visible
-   * so the open thread catches up on any events sent while the WS was
-   * disconnected or the tab was throttled. Optional so existing callers
+   * Parent bumps this only on explicit manual refresh
+   * (handleManualRefresh). Tab visibility and Realtime reconnect no
+   * longer bump it (removed for egress). Optional so existing callers
    * keep working.
    */
   resyncToken?: number;
@@ -300,16 +300,16 @@ export function MessageThread({
     return () => {
       cancelled = true;
     };
-    // `resyncToken` is included so the parent can force a refetch when
-    // the realtime channel reconnects or the tab regains focus —
-    // realtime is best-effort and any message events sent while the WS
-    // was disconnected or throttled are otherwise lost.
+    // `resyncToken` is included so the thread-header manual-refresh
+    // button can force a refetch. It no longer bumps on tab return
+    // (removed for egress); tab visibility alone does not re-download
+    // the 500-message window. Realtime INSERT patches the thread live.
   }, [conversationId, resyncToken]);
 
   // Reactions fetch — pulls the current state from the DB. Kept separate
-  // from the channel subscription below so a `resyncToken` bump just
-  // refetches the rows without also tearing down and rebuilding the
-  // realtime channel.
+  // from the channel subscription below so a `resyncToken` bump (now
+  // only manual refresh) refetches the rows without also tearing down
+  // and rebuilding the realtime channel.
   useEffect(() => {
     if (!conversationId) {
       setReactions([]);

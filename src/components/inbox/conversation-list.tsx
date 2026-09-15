@@ -56,9 +56,9 @@ interface ConversationListProps {
   onConversationsLoaded: (conversations: Conversation[]) => void;
   /**
    * Increment to force the fetch effect below to refire. The parent
-   * bumps this on realtime reconnect / tab visibility → visible so the
-   * list catches up on any events sent while the WS was disconnected
-   * or the tab was throttled. Optional so existing callers keep working.
+   * bumps this only on explicit manual refresh (handleManualRefresh).
+   * Tab visibility and Realtime reconnect no longer bump it (removed
+   * for egress). Optional so existing callers keep working.
    */
   resyncToken?: number;
 }
@@ -188,14 +188,15 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-    // `resyncToken` is included so the parent can force a refetch when
-    // the realtime channel reconnects or the tab regains focus — catches
-    // up on any events sent while the WS was disconnected or throttled.
+    // `resyncToken` is included so the parent's manual-refresh button
+    // can force a refetch. It no longer bumps on visibilitychange or
+    // reconnect (removed for egress — Realtime patching keeps the list
+    // consistent), so tab return does not re-download the list.
   }, [resyncToken, dateFilter, customFrom, customTo]);
 
-  // Load the caller's pinned chats. Runs on mount and on resync so the
-  // pin state stays correct after a reconnect / tab refocus, and so
-  // opening the inbox on another device reflects pins made elsewhere.
+  // Load the caller's pinned chats. Runs on mount and on manual
+  // refresh (resyncToken). No longer re-fetches on tab return or
+  // Realtime reconnect — manual refresh is the only resync path.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -214,8 +215,9 @@ export function ConversationList({
     };
   }, [resyncToken]);
 
-  // Assignment is account-wide, so load the roster through the scoped API
-  // instead of exposing profile queries from this client component.
+  // Assignment roster — loaded on mount and on manual refresh.
+  // Previously re-fetched on every tab return / reconnect (driving egress);
+  // now only on explicit manual refresh.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -230,13 +232,14 @@ export function ConversationList({
     };
   }, [resyncToken]);
 
-  // Tag definitions for the filter picker — loaded once so labels/colours
-  // stay stable regardless of which conversations happen to be loaded.
+  // Tag definitions for the filter picker — loaded on mount and on
+  // manual refresh. Narrowed from select("*") to explicit id,name,color
+  // to reduce egress.
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from("tags").select("*").order("name");
+      const { data } = await supabase.from("tags").select("id, name, color").order("name");
       if (!cancelled && data) setTags(data as Tag[]);
     })();
     return () => {
@@ -244,9 +247,8 @@ export function ConversationList({
     };
   }, [resyncToken]);
 
-  // Flow definitions for the filter picker — same pattern as tags. RLS
-  // scopes this to the account; a conversation can only ever match one
-  // of the account's own flows.
+  // Flow definitions for the filter picker — loaded on mount and on
+  // manual refresh (same as tags).
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
