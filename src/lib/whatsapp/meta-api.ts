@@ -280,7 +280,7 @@ export async function sendTextMessage(
   return { messageId: data.messages[0].id }
 }
 
-export type MediaKind = 'image' | 'video' | 'document' | 'audio'
+export type MediaKind = 'image' | 'video' | 'document' | 'audio' | 'sticker'
 
 export interface SendMediaMessageArgs {
   phoneNumberId: string
@@ -315,11 +315,10 @@ export async function sendMediaMessage(
   if (!link) throw new Error('sendMediaMessage requires a link.')
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
 
-  // Audio accepts neither caption nor filename per Meta's spec — adding
-  // either yields a 400. image/video/document accept a caption; only
-  // document accepts a filename.
+  // Audio and sticker accept neither caption nor filename per Meta's spec.
+  // image/video/document accept a caption; only document accepts a filename.
   const media: Record<string, unknown> = { link }
-  if (caption && kind !== 'audio') media.caption = caption
+  if (caption && kind !== 'audio' && kind !== 'sticker') media.caption = caption
   if (kind === 'document' && filename) media.filename = filename
 
   const body: Record<string, unknown> = {

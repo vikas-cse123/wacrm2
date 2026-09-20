@@ -46,7 +46,7 @@ import {
 import type { Contact } from "@/types";
 
 /** Media content types an agent can send from the composer. */
-export type ComposerMediaKind = "image" | "video" | "document" | "audio";
+export type ComposerMediaKind = "image" | "video" | "document" | "audio" | "sticker";
 
 /** Supabase Storage bucket holding agent-sent chat attachments (migration 023). */
 export const CHAT_MEDIA_BUCKET = "chat-media";
@@ -293,23 +293,61 @@ export function MessageComposer({
     }
   }, [text, sending, sessionExpired, onSend, replyTo?.id]);
 
-  // When a quick reply is selected, insert its text into the composer
+  // Quick Reply selection — text inserts, media sends immediately via same pipeline as staged drafts
   const handleQuickReplySelect = useCallback(
-    (message: string) => {
-      setText(message);
+    (selection: string | { kind: string; text: string; mediaUrl?: string | null; filename?: string | null }) => {
+      // Backward compat: picker once passed plain string
+      const isString = typeof selection === "string";
+      const sel = isString
+        ? { kind: "text" as const, text: selection, mediaUrl: null, filename: null }
+        : selection as { kind: string; text: string; mediaUrl?: string | null; filename?: string | null };
+      const kind = (sel.kind || "text") as ComposerMediaKind | "text";
+      if (kind === "text") {
+        setText(sel.text);
+        setSlashOpen(false);
+        setSlashQuery("");
+        setQrModalOpen(false);
+        requestAnimationFrame(() => {
+          adjustHeight();
+          const el = textareaRef.current;
+          if (el) {
+            el.focus();
+            el.setSelectionRange(el.value.length, el.value.length);
+          }
+        });
+        return;
+      }
+      // Media quick reply — send immediately. Composer's onSendMedia already handles optimistic UI,
+      // WhatsApp window checks (Meta will return 24h error which surfaces as toast), and storage GC.
+      // We fabricate a synthetic path="" for quick-reply-owned media — the object is persistent (not a draft),
+      // so failure must NOT delete it. MessageThread handleSendMedia guards delete when path falsy.
+      if (sessionExpired) {
+        toast.error("24-hour session expired. Use a template to re-engage.");
+        setSlashOpen(false);
+        setQrModalOpen(false);
+        return;
+      }
+      const mediaUrl = sel.mediaUrl;
+      if (!mediaUrl) {
+        toast.error("This quick reply has no media attached.");
+        setSlashOpen(false);
+        setQrModalOpen(false);
+        return;
+      }
       setSlashOpen(false);
       setSlashQuery("");
       setQrModalOpen(false);
-      requestAnimationFrame(() => {
-        adjustHeight();
-        const el = textareaRef.current;
-        if (el) {
-          el.focus();
-          el.setSelectionRange(el.value.length, el.value.length);
-        }
+      // Caption is sel.text (already variable-substituted in picker)
+      onSendMedia({
+        kind: kind as ComposerMediaKind,
+        mediaUrl,
+        path: "", // persistent quick-reply media — don't GC on failure
+        caption: kind === "audio" || kind === "sticker" ? undefined : sel.text || undefined,
+        filename: kind === "document" ? sel.filename || undefined : undefined,
+        replyToId: replyTo?.id,
       });
     },
-    [adjustHeight],
+    [adjustHeight, sessionExpired, onSendMedia, replyTo?.id],
   );
 
   const handleKeyDown = useCallback(

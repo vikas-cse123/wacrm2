@@ -1963,6 +1963,7 @@ function StepEditor({
               onChange={(e) => set({ unit: e.target.value })}
               className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm text-foreground"
             >
+              <option value="seconds">Seconds</option>
               <option value="minutes">Minutes</option>
               <option value="hours">Hours</option>
               <option value="days">Days</option>

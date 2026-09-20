@@ -31,6 +31,7 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
   video: 16 * 1024 * 1024,
   audio: 16 * 1024 * 1024,
   document: 16 * 1024 * 1024,
+  sticker: 512 * 1024,
 } as const;
 
 /**
