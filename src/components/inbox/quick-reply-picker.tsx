@@ -17,11 +17,26 @@ import {
   Search,
   X,
   MessageSquareText,
+  Image as ImageIcon,
+  Video,
+  Music,
+  FileText,
+  Sticker,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Contact } from "@/types";
+import type { QuickReplyMessageType } from "@/lib/quick-replies/media-validation";
 
 // ── Types ──────────────────────────────────────────────────────────────
+
+export type QuickReplyMedia = {
+  media_url: string | null;
+  media_path: string | null;
+  media_mime_type: string | null;
+  media_file_name: string | null;
+  media_file_size: number | null;
+  media_caption: string | null;
+};
 
 export interface QuickReply {
   id: string;
@@ -37,16 +52,34 @@ export interface QuickReply {
   last_used_at: string | null;
   created_at: string;
   updated_at: string;
+  message_type: QuickReplyMessageType;
+  media_url: string | null;
+  media_path: string | null;
+  media_mime_type: string | null;
+  media_file_name: string | null;
+  media_file_size: number | null;
+  media_caption: string | null;
+  whatsapp_media_id: string | null;
 }
 
 export interface QuickReplyPickerHandle {
   handleKey: (key: string) => void;
 }
 
+export interface QuickReplySelection {
+  kind: QuickReplyMessageType;
+  text: string; // for text: substituted message; for media: caption
+  mediaUrl?: string | null;
+  filename?: string | null;
+  reply: QuickReply;
+}
+
 interface QuickReplyPickerProps {
   contact: Contact | null;
   agentName: string | null;
-  onSelect: (text: string) => void;
+  onSelect: (selection: QuickReplySelection) => void;
+  /** Legacy text-only callers: still supported */
+  onSelectText?: (text: string) => void;
   /** Inline slash-command mode: position above the input. */
   mode: "modal" | "inline";
   /** For inline mode: the current slash query (e.g. "greet" from "/greet"). */
@@ -76,6 +109,54 @@ function substituteVariables(
   });
 }
 
+export function quickReplyCaption(reply: QuickReply, contact: Contact | null, agentName: string | null): string {
+  const raw = reply.media_caption ?? reply.message ?? "";
+  return substituteVariables(raw, contact, agentName);
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────
+
+export function QuickReplyTypeIcon({ type, className }: { type: string; className?: string }) {
+  switch (type) {
+    case "image":
+      return <ImageIcon className={cn("h-3.5 w-3.5", className)} />;
+    case "video":
+      return <Video className={cn("h-3.5 w-3.5", className)} />;
+    case "audio":
+      return <Music className={cn("h-3.5 w-3.5", className)} />;
+    case "document":
+      return <FileText className={cn("h-3.5 w-3.5", className)} />;
+    case "sticker":
+      return <Sticker className={cn("h-3.5 w-3.5", className)} />;
+    default:
+      return <MessageSquareText className={cn("h-3.5 w-3.5", className)} />;
+  }
+}
+
+function typeLabel(reply: QuickReply): string {
+  const t = (reply.message_type || "text") as QuickReplyMessageType;
+  if (t === "text") return "Text";
+  if (t === "image") return "Image";
+  if (t === "video") return "Video";
+  if (t === "audio") return "Audio";
+  if (t === "document") return reply.media_file_name?.split(".").pop()?.toUpperCase() || "Document";
+  if (t === "sticker") return "Sticker";
+  return t;
+}
+
+function previewSnippet(reply: QuickReply, contact: Contact | null, agentName: string | null): string {
+  const mt = (reply.message_type || "text") as QuickReplyMessageType;
+  if (mt === "text") return substituteVariables(reply.message || "", contact, agentName).slice(0, 80);
+  if (mt === "image" || mt === "video" || mt === "document") {
+    const cap = quickReplyCaption(reply, contact, agentName);
+    if (cap) return cap.slice(0, 80);
+    return reply.media_file_name || reply.media_url || "";
+  }
+  if (mt === "audio") return reply.media_file_name || "Audio";
+  if (mt === "sticker") return reply.media_file_name || "Sticker";
+  return "";
+}
+
 // ── Recently-used storage ──────────────────────────────────────────────
 
 const RECENT_KEY = "interscale:quick-reply:recent";
@@ -102,10 +183,10 @@ export const QuickReplyPicker = forwardRef<
   QuickReplyPickerHandle,
   QuickReplyPickerProps
 >(function QuickReplyPicker(
-  { contact, agentName, onSelect, mode, slashQuery, onClose, open },
+  { contact, agentName, onSelect, onSelectText, mode, slashQuery, onClose, open },
   ref,
 ) {
-  const { accountId, user } = useAuth();
+  const { accountId } = useAuth();
   const [replies, setReplies] = useState<QuickReply[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -124,7 +205,12 @@ export const QuickReplyPicker = forwardRef<
       .select("*")
       .eq("account_id", accountId)
       .order("title");
-    setReplies((data as QuickReply[]) || []);
+    // Backward compat: ensure message_type defaults to text
+    const normalized = ((data as QuickReply[]) || []).map((r) => ({
+      ...r,
+      message_type: (r.message_type as QuickReplyMessageType) || "text",
+    }));
+    setReplies(normalized);
     setLoading(false);
   }, [accountId]);
 
@@ -174,12 +260,14 @@ export const QuickReplyPicker = forwardRef<
           r.shortcut.toLowerCase().includes(q) ||
           r.title.toLowerCase().includes(q) ||
           r.message.toLowerCase().includes(q) ||
+          (r.media_caption && r.media_caption.toLowerCase().includes(q)) ||
+          (r.media_file_name && r.media_file_name.toLowerCase().includes(q)) ||
           r.category.toLowerCase().includes(q),
       );
     }
 
     // Sort: favorites first, then shortcut match > title match > rest
-    return list.sort((a, b) => {
+    return [...list].sort((a, b) => {
       if (a.is_favorite !== b.is_favorite) return a.is_favorite ? -1 : 1;
       if (q) {
         const aShortcut = a.shortcut.toLowerCase().startsWith(q);
@@ -227,11 +315,26 @@ export const QuickReplyPicker = forwardRef<
     setActiveIdx(0);
   }, [search, slashQuery, activeCategory]);
 
-  // Handle selection
+  // Handle selection — supports both media and text
   const handleSelect = useCallback(
     (reply: QuickReply) => {
-      const text = substituteVariables(reply.message, contact, agentName);
-      onSelect(text);
+      const mt = (reply.message_type || "text") as QuickReplyMessageType;
+      const text = mt === "text"
+        ? substituteVariables(reply.message || "", contact, agentName)
+        : quickReplyCaption(reply, contact, agentName);
+      const selection: QuickReplySelection = {
+        kind: mt,
+        text,
+        mediaUrl: reply.media_url,
+        filename: reply.media_file_name,
+        reply,
+      };
+      // Preserve legacy contract: if caller still expects string, also call onSelectText
+      if (onSelectText && mt === "text") onSelectText(text);
+      // New contract: always call onSelect with structured selection
+      (onSelect as unknown as (s: QuickReplySelection | string) => void)(
+        selection as unknown as QuickReplySelection,
+      );
       pushRecentId(reply.id);
 
       // Bump use_count and last_used_at in the background
@@ -247,7 +350,7 @@ export const QuickReplyPicker = forwardRef<
 
       onClose();
     },
-    [contact, agentName, onSelect, onClose],
+    [contact, agentName, onSelect, onSelectText, onClose],
   );
 
   // Expose imperative handle for parent to forward keyboard events
@@ -336,6 +439,9 @@ export const QuickReplyPicker = forwardRef<
                       : "text-foreground hover:bg-muted",
                   )}
                 >
+                  <span className="shrink-0 text-muted-foreground">
+                    <QuickReplyTypeIcon type={reply.message_type || "text"} className="h-3.5 w-3.5" />
+                  </span>
                   {reply.is_favorite && (
                     <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />
                   )}
@@ -345,9 +451,10 @@ export const QuickReplyPicker = forwardRef<
                       <span className="text-xs text-muted-foreground">
                         /{reply.shortcut}
                       </span>
+                      <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{typeLabel(reply)}</span>
                     </div>
                     <p className="truncate text-xs text-muted-foreground">
-                      {substituteVariables(reply.message, contact, agentName).slice(0, 80)}
+                      {previewSnippet(reply, contact, agentName)}
                     </p>
                   </div>
                   {reply.category && (
@@ -490,6 +597,9 @@ export const QuickReplyPicker = forwardRef<
                         : "hover:bg-muted/50",
                     )}
                   >
+                    <span className="mt-1 shrink-0 text-muted-foreground">
+                      <QuickReplyTypeIcon type={reply.message_type || "text"} />
+                    </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         {reply.is_favorite && (
@@ -501,6 +611,9 @@ export const QuickReplyPicker = forwardRef<
                         <span className="text-xs text-muted-foreground">
                           /{reply.shortcut}
                         </span>
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {typeLabel(reply)}
+                        </span>
                         {reply.visibility === "personal" && (
                           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                             Personal
@@ -508,11 +621,7 @@ export const QuickReplyPicker = forwardRef<
                         )}
                       </div>
                       <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                        {substituteVariables(
-                          reply.message,
-                          contact,
-                          agentName,
-                        )}
+                        {previewSnippet(reply, contact, agentName)}
                       </p>
                       {reply.category && (
                         <div className="mt-1">

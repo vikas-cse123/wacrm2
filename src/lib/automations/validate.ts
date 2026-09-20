@@ -206,10 +206,10 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       if (typeof c.amount !== 'number' || !Number.isFinite(c.amount) || c.amount <= 0) {
         issues.push({ path: `${path}.amount`, message: 'wait amount must be greater than 0' })
       }
-      if (!['minutes', 'hours', 'days'].includes(String(c.unit))) {
+      if (!['seconds', 'minutes', 'hours', 'days'].includes(String(c.unit))) {
         issues.push({
           path: `${path}.unit`,
-          message: 'wait unit must be minutes, hours, or days',
+          message: 'wait unit must be seconds, minutes, hours, or days',
         })
       }
       break

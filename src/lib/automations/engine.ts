@@ -1015,7 +1015,14 @@ async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): P
 }
 
 function waitMs(cfg: WaitStepConfig): number {
-  const unitMs = cfg.unit === 'days' ? 86_400_000 : cfg.unit === 'hours' ? 3_600_000 : 60_000
+  const unitMs =
+    cfg.unit === 'seconds'
+      ? 1_000
+      : cfg.unit === 'days'
+        ? 86_400_000
+        : cfg.unit === 'hours'
+          ? 3_600_000
+          : 60_000
   return Math.max(1_000, cfg.amount * unitMs)
 }
 

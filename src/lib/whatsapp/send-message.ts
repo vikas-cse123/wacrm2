@@ -38,7 +38,7 @@ import {
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 
-export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
+export const MEDIA_KINDS = ['image', 'video', 'document', 'audio', 'sticker'] as const;
 export const VALID_MESSAGE_TYPES = [
   'text',
   'template',
@@ -144,10 +144,11 @@ export function validateSendMessageParams(params: {
     );
   }
 
-  // Meta caps media captions at 1024 chars (audio carries none).
+  // Meta caps media captions at 1024 chars (audio/sticker carry none).
   if (
     isMediaKind &&
     messageType !== 'audio' &&
+    messageType !== 'sticker' &&
     typeof contentText === 'string' &&
     contentText.length > 1024
   ) {

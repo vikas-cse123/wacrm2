@@ -216,6 +216,7 @@ export type ContentType =
   | 'document'
   | 'audio'
   | 'video'
+  | 'sticker'
   | 'location'
   | 'template'
   /** Customer tapped a reply button or list row on a message we sent. */
@@ -615,7 +616,7 @@ export interface CreateDealStepConfig {
 
 export interface WaitStepConfig {
   amount: number;
-  unit: 'minutes' | 'hours' | 'days';
+  unit: 'seconds' | 'minutes' | 'hours' | 'days';
 }
 
 export type ConditionSubject =

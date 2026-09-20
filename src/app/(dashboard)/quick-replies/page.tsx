@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { useCan } from "@/hooks/use-can";
@@ -14,6 +14,13 @@ import {
   Lock,
   Globe,
   X,
+  Image as ImageIcon,
+  Video,
+  Music,
+  FileText,
+  Sticker,
+  Upload,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -27,6 +34,14 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { QuickReply } from "@/components/inbox/quick-reply-picker";
+import { QuickReplyTypeIcon } from "@/components/inbox/quick-reply-picker";
+import {
+  validateQuickReplyMedia,
+  humanFileSize,
+  QUICK_REPLY_MEDIA_BUCKET,
+  type QuickReplyMessageType,
+} from "@/lib/quick-replies/media-validation";
+import { uploadAccountMedia, deleteAccountMedia } from "@/lib/storage/upload-media";
 
 type FormData = {
   title: string;
@@ -35,6 +50,13 @@ type FormData = {
   category: string;
   visibility: "personal" | "shared";
   is_favorite: boolean;
+  message_type: QuickReplyMessageType;
+  media_url: string | null;
+  media_path: string | null;
+  media_mime_type: string | null;
+  media_file_name: string | null;
+  media_file_size: number | null;
+  media_caption: string;
 };
 
 const EMPTY_FORM: FormData = {
@@ -44,7 +66,39 @@ const EMPTY_FORM: FormData = {
   category: "",
   visibility: "shared",
   is_favorite: false,
+  message_type: "text",
+  media_url: null,
+  media_path: null,
+  media_mime_type: null,
+  media_file_name: null,
+  media_file_size: null,
+  media_caption: "",
 };
+
+const MESSAGE_TYPES: { value: QuickReplyMessageType; label: string; icon: React.ReactNode }[] = [
+  { value: "text", label: "Text", icon: <MessageSquareText className="h-3 w-3" /> },
+  { value: "image", label: "Image", icon: <ImageIcon className="h-3 w-3" /> },
+  { value: "video", label: "Video", icon: <Video className="h-3 w-3" /> },
+  { value: "audio", label: "Audio", icon: <Music className="h-3 w-3" /> },
+  { value: "document", label: "Document", icon: <FileText className="h-3 w-3" /> },
+  { value: "sticker", label: "Sticker", icon: <Sticker className="h-3 w-3" /> },
+];
+
+const ACCEPT_BY_TYPE: Record<Exclude<QuickReplyMessageType, "text">, string> = {
+  image: "image/jpeg,image/png,image/jpg",
+  video: "video/mp4,video/3gpp,video/3gp",
+  audio: "audio/aac,audio/amr,audio/mpeg,audio/mp3,audio/mp4,audio/m4a,audio/ogg,audio/opus,audio/3gpp",
+  document: "application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.text,application/vnd.oasis.opendocument.spreadsheet,application/vnd.oasis.opendocument.presentation,text/csv",
+  sticker: "image/webp",
+};
+
+function typeTag(reply: QuickReply): string {
+  const t = (reply.message_type || "text") as QuickReplyMessageType;
+  if (t === "document" && reply.media_file_name) {
+    return reply.media_file_name.split(".").pop()?.toUpperCase() || "Document";
+  }
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 export default function QuickRepliesPage() {
   const { accountId, user, isOwner, isAdmin } = useAuth();
@@ -61,6 +115,9 @@ export default function QuickRepliesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<QuickReply | null>(null);
@@ -81,7 +138,12 @@ export default function QuickRepliesPage() {
       toast.error("Failed to load quick replies");
       console.error(error);
     }
-    setReplies((data as QuickReply[]) || []);
+    // Normalize message_type for legacy rows
+    const normalized = ((data as QuickReply[]) || []).map((r) => ({
+      ...r,
+      message_type: (r.message_type as QuickReplyMessageType) || "text",
+    }));
+    setReplies(normalized);
     setLoading(false);
   }, [accountId, supabase]);
 
@@ -116,7 +178,9 @@ export default function QuickRepliesPage() {
         (r) =>
           r.shortcut.toLowerCase().includes(q) ||
           r.title.toLowerCase().includes(q) ||
-          r.message.toLowerCase().includes(q) ||
+          (r.message && r.message.toLowerCase().includes(q)) ||
+          (r.media_caption && r.media_caption.toLowerCase().includes(q)) ||
+          (r.media_file_name && r.media_file_name.toLowerCase().includes(q)) ||
           r.category.toLowerCase().includes(q),
       );
     }
@@ -147,19 +211,102 @@ export default function QuickRepliesPage() {
     setForm({
       title: reply.title,
       shortcut: reply.shortcut,
-      message: reply.message,
+      message: reply.message || "",
       category: reply.category,
       visibility: reply.visibility,
       is_favorite: reply.is_favorite,
+      message_type: (reply.message_type as QuickReplyMessageType) || "text",
+      media_url: reply.media_url,
+      media_path: reply.media_path,
+      media_mime_type: reply.media_mime_type,
+      media_file_name: reply.media_file_name,
+      media_file_size: reply.media_file_size,
+      media_caption: reply.media_caption || "",
     });
     setDialogOpen(true);
+  };
+
+  // Handle file selection + validation + upload
+  const handleFile = async (file: File) => {
+    if (form.message_type === "text") return;
+    const mt = form.message_type as Exclude<QuickReplyMessageType, "text">;
+    const validation = validateQuickReplyMedia({ name: file.name, size: file.size, type: file.type }, mt);
+    if (!validation.ok) {
+      toast.error(validation.error);
+      return;
+    }
+    setUploading(true);
+    try {
+      // GC previous staged media if replacing (only if not yet saved? We GC old path after successful new upload)
+      const prevPath = form.media_path;
+      const { publicUrl, path } = await uploadAccountMedia(QUICK_REPLY_MEDIA_BUCKET, file);
+      setForm((f) => ({
+        ...f,
+        media_url: publicUrl,
+        media_path: path,
+        media_mime_type: validation.mime || file.type,
+        media_file_name: file.name,
+        media_file_size: file.size,
+      }));
+      toast.success("File uploaded");
+      // If editing existing reply, don't delete old object yet — wait until save succeeds and then GC.
+      // For new reply replace, GC previous staged upload
+      if (prevPath && !editingId) {
+        void deleteAccountMedia(QUICK_REPLY_MEDIA_BUCKET, prevPath).catch(() => {});
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void handleFile(file);
+    e.target.value = "";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void handleFile(file);
+  };
+
+  const handleRemoveMedia = () => {
+    // GC staged upload if not yet persisted (path under account's folder, RLS allows delete)
+    if (form.media_path && !editingId) {
+      void deleteAccountMedia(QUICK_REPLY_MEDIA_BUCKET, form.media_path).catch(() => {});
+    }
+    setForm((f) => ({
+      ...f,
+      media_url: null,
+      media_path: null,
+      media_mime_type: null,
+      media_file_name: null,
+      media_file_size: null,
+      media_caption: "",
+    }));
   };
 
   // Save (create or update)
   const handleSave = async () => {
     if (!accountId || !user) return;
-    if (!form.title.trim() || !form.shortcut.trim() || !form.message.trim()) {
-      toast.error("Title, shortcut, and message are required");
+    if (!form.title.trim() || !form.shortcut.trim()) {
+      toast.error("Title and shortcut are required");
+      return;
+    }
+    if (form.message_type === "text" && !form.message.trim()) {
+      toast.error("Message is required for text replies");
+      return;
+    }
+    if (form.message_type !== "text" && !form.media_url) {
+      toast.error("Please upload a file for this media reply");
+      return;
+    }
+    if (uploading) {
+      toast.error("Please wait for upload to finish");
       return;
     }
 
@@ -171,16 +318,40 @@ export default function QuickRepliesPage() {
 
     setSaving(true);
 
+    // Re-validate server-side before DB write (don't trust client)
+    if (form.message_type !== "text" && form.media_file_name && form.media_file_size) {
+      const v = validateQuickReplyMedia(
+        { name: form.media_file_name, size: form.media_file_size, type: form.media_mime_type || "" },
+        form.message_type as Exclude<QuickReplyMessageType, "text">,
+      );
+      if (!v.ok) {
+        toast.error(v.error);
+        setSaving(false);
+        return;
+      }
+    }
+
     const payload = {
       account_id: accountId,
       created_by: user.id,
       title: form.title.trim(),
       shortcut,
-      message: form.message.trim(),
+      message: form.message_type === "text" ? form.message.trim() : form.media_caption.trim() || form.message.trim() || "",
       category: form.category.trim(),
       visibility: form.visibility,
       is_favorite: form.is_favorite,
+      message_type: form.message_type,
+      media_url: form.message_type === "text" ? null : form.media_url,
+      media_path: form.message_type === "text" ? null : form.media_path,
+      media_mime_type: form.message_type === "text" ? null : form.media_mime_type,
+      media_file_name: form.message_type === "text" ? null : form.media_file_name,
+      media_file_size: form.message_type === "text" ? null : form.media_file_size,
+      media_caption: form.message_type === "text" ? null : form.media_caption.trim() || null,
     };
+
+    // For update: capture old media path to GC after success if replaced
+    const oldReply = editingId ? replies.find((r) => r.id === editingId) : null;
+    const oldPath = oldReply?.media_path;
 
     if (editingId) {
       const { created_by: _, account_id: __, ...updatePayload } = payload;
@@ -192,6 +363,10 @@ export default function QuickRepliesPage() {
         toast.error(error.message.includes("unique") ? "This shortcut is already taken" : "Failed to update");
         setSaving(false);
         return;
+      }
+      // GC old storage object if media was replaced (safe: old object belongs to same account path)
+      if (oldPath && oldPath !== form.media_path) {
+        void deleteAccountMedia(QUICK_REPLY_MEDIA_BUCKET, oldPath).catch(() => {});
       }
       toast.success("Quick reply updated");
     } else {
@@ -213,6 +388,8 @@ export default function QuickRepliesPage() {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
+    // GC storage if media reply
+    const path = deleteTarget.media_path;
     const { error } = await supabase
       .from("quick_replies")
       .delete()
@@ -220,6 +397,7 @@ export default function QuickRepliesPage() {
     if (error) {
       toast.error("Failed to delete");
     } else {
+      if (path) void deleteAccountMedia(QUICK_REPLY_MEDIA_BUCKET, path).catch(() => {});
       toast.success("Quick reply deleted");
     }
     setDeleting(false);
@@ -243,6 +421,8 @@ export default function QuickRepliesPage() {
       ),
     );
   };
+
+  const isMediaType = form.message_type !== "text";
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 p-4 sm:p-6">
@@ -362,6 +542,9 @@ export default function QuickRepliesPage() {
               className="group rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/30"
             >
               <div className="flex items-start gap-3">
+                <span className="mt-1 shrink-0 text-muted-foreground">
+                  <QuickReplyTypeIcon type={reply.message_type || "text"} />
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-foreground">
@@ -370,10 +553,21 @@ export default function QuickRepliesPage() {
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-muted-foreground">
                       /{reply.shortcut}
                     </span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {typeTag(reply)}
+                    </span>
                   </div>
                   <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {reply.message}
+                    {reply.message_type === "text"
+                      ? reply.message
+                      : reply.media_caption || reply.media_file_name || reply.media_url || ""}
                   </p>
+                  {reply.message_type !== "text" && reply.media_file_name && (
+                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                      <FileText className="h-3 w-3" />
+                      {reply.media_file_name} {reply.media_file_size ? `• ${humanFileSize(reply.media_file_size)}` : ""}
+                    </p>
+                  )}
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     {reply.visibility === "personal" ? (
                       <span className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
@@ -441,8 +635,12 @@ export default function QuickRepliesPage() {
       )}
 
       {/* Create / Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        if (!open && uploading) return;
+        setDialogOpen(open);
+        if (!open) setDragOver(false);
+      }}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editingId ? "Edit Quick Reply" : "New Quick Reply"}
@@ -484,20 +682,145 @@ export default function QuickRepliesPage() {
               </div>
             </div>
 
+            {/* Message Type */}
             <div>
-              <label className="mb-1 block text-xs font-medium text-foreground">
-                Message
-              </label>
-              <textarea
-                value={form.message}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, message: e.target.value }))
-                }
-                placeholder="Hello, Thank you for contacting us!"
-                rows={4}
-                className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
-              />
+              <label className="mb-1 block text-xs font-medium text-foreground">Message Type</label>
+              <div className="flex flex-wrap gap-1.5">
+                {MESSAGE_TYPES.map((t) => (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => {
+                      // If switching away from media, keep media in state but hidden; if switching to text, clear validation
+                      setForm((f) => ({ ...f, message_type: t.value }));
+                    }}
+                    className={cn(
+                      "flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium border transition-colors",
+                      form.message_type === t.value
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-muted text-muted-foreground border-border hover:bg-muted/80",
+                    )}
+                  >
+                    {t.icon} {t.label}
+                  </button>
+                ))}
+              </div>
             </div>
+
+            {/* Text message */}
+            {form.message_type === "text" && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-foreground">
+                  Message
+                </label>
+                <textarea
+                  value={form.message}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, message: e.target.value }))
+                  }
+                  placeholder="Hello, Thank you for contacting us! Use {{name}} for variables."
+                  rows={4}
+                  className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">Supports variables: {"{{name}}"}, {"{{phone}}"}, {"{{email}}"}, {"{{company}}"}, {"{{agent_name}}"}</p>
+              </div>
+            )}
+
+            {/* Media upload */}
+            {isMediaType && (
+              <div className="space-y-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ACCEPT_BY_TYPE[form.message_type as Exclude<QuickReplyMessageType, "text">]}
+                  className="hidden"
+                  onChange={onFileInputChange}
+                />
+                {!form.media_url ? (
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={() => setDragOver(false)}
+                    onDrop={handleDrop}
+                    className={cn(
+                      "flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed bg-muted/30 px-4 py-6 text-center transition-colors",
+                      dragOver ? "border-primary bg-primary/5" : "border-border",
+                    )}
+                  >
+                    <Upload className="h-6 w-6 text-muted-foreground" />
+                    <p className="text-sm text-foreground">Drag & drop file here</p>
+                    <p className="text-xs text-muted-foreground">or</p>
+                    <Button type="button" size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                      {uploading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                      Choose File
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      {form.message_type === "image" && "JPEG / PNG, max 5 MB"}
+                      {form.message_type === "video" && "MP4 / 3GP, max 16 MB"}
+                      {form.message_type === "audio" && "AAC / AMR / MP3 / M4A / OGG (Opus), max 16 MB"}
+                      {form.message_type === "document" && "PDF / DOCX / XLSX / PPTX / TXT / ODS / ODT / ODP, max 100 MB"}
+                      {form.message_type === "sticker" && "WebP only, max 512 KB (100 KB static)"}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-border bg-muted/30 p-3">
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        {form.message_type === "image" && form.media_url && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={form.media_url} alt={form.media_file_name || "preview"} className="max-h-40 rounded-lg object-cover" />
+                        )}
+                        {form.message_type === "video" && form.media_url && (
+                          <video src={form.media_url} controls className="max-h-40 rounded-lg" />
+                        )}
+                        {form.message_type === "audio" && form.media_url && (
+                          <audio src={form.media_url} controls className="w-full" />
+                        )}
+                        {form.message_type === "document" && (
+                          <div className="flex items-center gap-2 text-sm text-foreground">
+                            <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{form.media_file_name}</span>
+                            <span className="shrink-0 text-xs text-muted-foreground">{form.media_mime_type}</span>
+                          </div>
+                        )}
+                        {form.message_type === "sticker" && form.media_url && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={form.media_url} alt={form.media_file_name || "sticker"} className="h-32 w-32 object-contain rounded-lg bg-background" />
+                        )}
+                        {form.media_file_name && (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {form.media_file_name} • {form.media_file_size ? humanFileSize(form.media_file_size) : ""} {form.media_mime_type ? `• ${form.media_mime_type}` : ""}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button type="button" size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                          Replace
+                        </Button>
+                        <Button type="button" size="sm" variant="ghost" onClick={handleRemoveMedia} disabled={uploading}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {/* Caption */}
+                    {form.message_type !== "audio" && form.message_type !== "sticker" && (
+                      <div className="mt-3">
+                        <label className="mb-1 block text-xs font-medium text-foreground">Caption (optional)</label>
+                        <textarea
+                          value={form.media_caption}
+                          onChange={(e) => setForm((f) => ({ ...f, media_caption: e.target.value }))}
+                          placeholder="Add a caption…"
+                          maxLength={1024}
+                          rows={2}
+                          className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+                        />
+                        <p className="mt-1 text-[11px] text-muted-foreground">{form.media_caption.length}/1024</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {uploading && <p className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Uploading…</p>}
+              </div>
+            )}
 
             <div>
               <label className="mb-1 block text-xs font-medium text-foreground">
@@ -550,11 +873,12 @@ export default function QuickRepliesPage() {
               variant="outline"
               size="sm"
               onClick={() => setDialogOpen(false)}
+              disabled={uploading}
             >
               Cancel
             </Button>
-            <Button size="sm" onClick={handleSave} disabled={saving}>
-              {saving ? "Saving…" : editingId ? "Update" : "Create"}
+            <Button size="sm" onClick={handleSave} disabled={saving || uploading}>
+              {uploading ? "Uploading…" : saving ? "Saving…" : editingId ? "Update" : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>

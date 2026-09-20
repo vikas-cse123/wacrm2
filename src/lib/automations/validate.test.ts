@@ -183,7 +183,7 @@ describe("validateStepsForActivation", () => {
   it("checks wait amount and unit boundaries", () => {
     const issues = validateStepsForActivation([
       { step_type: "wait", step_config: { amount: 0, unit: "minutes" } },
-      { step_type: "wait", step_config: { amount: 5, unit: "seconds" } },
+      { step_type: "wait", step_config: { amount: 5, unit: "weeks" } },
       { step_type: "wait", step_config: { amount: -1, unit: "hours" } },
       {
         step_type: "wait",
@@ -196,6 +196,15 @@ describe("validateStepsForActivation", () => {
       "steps[2].amount",
       "steps[3].amount",
     ]);
+  });
+
+  it("accepts seconds as valid wait unit", () => {
+    const issues = validateStepsForActivation([
+      { step_type: "wait", step_config: { amount: 1, unit: "seconds" } },
+      { step_type: "wait", step_config: { amount: 30, unit: "seconds" } },
+      { step_type: "wait", step_config: { amount: 60, unit: "seconds" } },
+    ]);
+    expect(issues).toEqual([]);
   });
 
   it("validates webhook URLs", () => {

@@ -507,11 +507,13 @@ export function MessageThread({
 
       // Documents show their filename in our own bubble (and to the
       // recipient as the Meta caption when no caption was typed); other
-      // kinds use the caption as-is. Audio carries no caption.
+      // kinds use the caption as-is. Audio/sticker carry no caption.
       const contentText =
         payload.kind === "document"
           ? payload.caption || payload.filename || "Document"
-          : payload.caption;
+          : payload.kind === "audio" || payload.kind === "sticker"
+            ? undefined
+            : payload.caption;
 
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg: Message = {
@@ -551,7 +553,8 @@ export function MessageThread({
           onUpdateMessage(tempId, { status: "failed" });
           // The upload never reached the recipient — GC the orphaned
           // object rather than leaving it in the public bucket forever.
-          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+          // Quick-reply-owned media has path="" (persistent) — never delete.
+          if (payload.path) void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
           return;
         }
 
@@ -561,7 +564,7 @@ export function MessageThread({
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send: ${reason}`);
         onUpdateMessage(tempId, { status: "failed" });
-        void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+        if (payload.path) void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
       }
     },
     [conversation, onNewMessage, onUpdateMessage],
