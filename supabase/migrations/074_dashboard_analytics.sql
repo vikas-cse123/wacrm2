@@ -1,0 +1,317 @@
+-- ============================================================
+-- 074_dashboard_analytics.sql — single-call dashboard analytics
+--
+-- Problem (see src/lib/dashboard/queries.ts before this change):
+-- the redesigned dashboard computed every metric by downloading
+-- raw message stubs (`messages?select=conversation_id,created_at`,
+-- 1000 rows per page) into the browser, then mapping
+-- conversation -> contact in 200-id chunks. One dashboard load
+-- fanned out to ~89 Supabase requests / ~8.7 MB transferred:
+--   - loadDashboardKpis  — current + previous distinct-contact
+--     scans (each = N/1000 message pages + C/200 contact pages)
+--     on top of 6 cheap head-counts,
+--   - loadFlowBreakdown  — the SAME range re-downloaded, plus
+--     ALL flow_runs paginated (up to 20k) on every range change,
+--   - loadMonthlyUniques — the FULL YEAR re-downloaded again.
+-- The same message / conversation ids were fetched 3-4x by
+-- independent loaders with no sharing.
+--
+-- Fix: one SECURITY INVOKER RPC that aggregates everything
+-- inside Postgres and returns a single small JSON document.
+-- The browser makes ONE analytics request per dashboard load
+-- (via GET /api/dashboard/analytics) instead of ~89.
+--
+-- Security:
+--   - SECURITY INVOKER (the default, stated explicitly): all
+--     reads obey the caller's RLS exactly as if they queried
+--     the tables directly. No service-role bypass.
+--   - The function takes NO account_id parameter — it resolves
+--     the caller's account from profiles.user_id = auth.uid()
+--     and scopes every query to it, so a caller can never ask
+--     for another workspace's analytics.
+--   - GRANT EXECUTE to `authenticated` only.
+--
+-- Correctness (matches the previous client-side implementation):
+--   - TOTAL MESSAGES: COUNT(*) of messages with created_at in
+--     [start, end). Messages are scoped to the account through
+--     their conversation (messages has no account_id column).
+--   - UNIQUE CONTACTS: COUNT(DISTINCT conversations.contact_id)
+--     over messages in range (NULL contact ignored, as before).
+--   - NEW CONTACTS / NEW CONVERSATIONS: created_at in range.
+--   - FLOW BREAKDOWN: per-conversation attribution — exact
+--     conversation_id run first, else the contact's newest
+--     active run, else the newest run (same rule as Inbox
+--     pickContactFlowRun + the dashboard's pickRun). Only
+--     attributed messages appear (zero-message flows hidden);
+--     pct denominator is ALL messages in range, as before.
+--   - MONTHLY UNIQUES: per-month COUNT(DISTINCT contact_id).
+--     Month buckets use the caller's IANA timezone (p_tz),
+--     matching the old browser-local `getMonth()` bucketing.
+--
+-- Idempotent — safe to run multiple times.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- Supporting indexes for the aggregation hot path.
+-- All IF NOT EXISTS: purely additive, no behaviour change.
+-- ------------------------------------------------------------
+
+-- Range scans over messages.created_at (KPI + flow + monthly).
+CREATE INDEX IF NOT EXISTS idx_messages_created_at
+  ON messages(created_at);
+
+-- Range scans over contacts / conversations created_at.
+CREATE INDEX IF NOT EXISTS idx_contacts_account_created
+  ON contacts(account_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_account_created
+  ON conversations(account_id, created_at);
+
+-- Flow attribution lookups by conversation / contact.
+CREATE INDEX IF NOT EXISTS idx_flow_runs_account_conv
+  ON flow_runs(account_id, conversation_id);
+
+CREATE INDEX IF NOT EXISTS idx_flow_runs_account_contact
+  ON flow_runs(account_id, contact_id);
+
+-- ------------------------------------------------------------
+-- get_dashboard_analytics(...)
+-- ------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.get_dashboard_analytics(
+  p_start TIMESTAMPTZ,
+  p_end TIMESTAMPTZ,
+  p_prev_start TIMESTAMPTZ,
+  p_prev_end TIMESTAMPTZ,
+  p_year_start TIMESTAMPTZ,
+  p_year_end TIMESTAMPTZ,
+  p_year INT,
+  p_tz TEXT DEFAULT 'UTC'
+) RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+  v_account_id UUID;
+  v_tz TEXT := 'UTC';
+  v_result JSONB;
+BEGIN
+  -- Caller must be authenticated and linked to an account.
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT p.account_id INTO v_account_id
+  FROM profiles p
+  WHERE p.user_id = auth.uid();
+
+  IF v_account_id IS NULL THEN
+    RAISE EXCEPTION 'Caller has no account' USING ERRCODE = '42501';
+  END IF;
+
+  -- Trust but verify the timezone: an unknown name falls back
+  -- to UTC rather than erroring the whole dashboard.
+  IF p_tz IS NOT NULL AND EXISTS (
+    SELECT 1 FROM pg_timezone_names WHERE name = p_tz
+  ) THEN
+    v_tz := p_tz;
+  END IF;
+
+  WITH
+  -- Distinct conversations messaged in range (+ contact + count).
+  msg_convs AS (
+    SELECT
+      m.conversation_id AS conv_id,
+      c.contact_id AS contact_id,
+      COUNT(*)::INT AS msg_count
+    FROM messages m
+    JOIN conversations c ON c.id = m.conversation_id
+    WHERE c.account_id = v_account_id
+      AND m.created_at >= p_start
+      AND m.created_at < p_end
+    GROUP BY m.conversation_id, c.contact_id
+  ),
+  -- Best flow run per conversation: newest active, else newest.
+  conv_best AS (
+    SELECT DISTINCT ON (r.conversation_id)
+      r.conversation_id AS conv_id,
+      r.flow_id AS flow_id
+    FROM flow_runs r
+    JOIN flows f ON f.id = r.flow_id
+    WHERE r.account_id = v_account_id
+      AND f.account_id = v_account_id
+      AND r.conversation_id IS NOT NULL
+    ORDER BY
+      r.conversation_id,
+      (r.status = 'active') DESC,
+      r.started_at DESC,
+      r.id DESC
+  ),
+  -- Best flow run per contact: newest active, else newest.
+  contact_best AS (
+    SELECT DISTINCT ON (r.contact_id)
+      r.contact_id AS contact_id,
+      r.flow_id AS flow_id
+    FROM flow_runs r
+    JOIN flows f ON f.id = r.flow_id
+    WHERE r.account_id = v_account_id
+      AND f.account_id = v_account_id
+      AND r.contact_id IS NOT NULL
+    ORDER BY
+      r.contact_id,
+      (r.status = 'active') DESC,
+      r.started_at DESC,
+      r.id DESC
+  ),
+  -- Each in-range conversation attributed once (conv exact
+  -- match first, else contact fallback). Unattributed stays
+  -- NULL and is excluded from the breakdown, as before.
+  attributed AS (
+    SELECT
+      mc.msg_count AS msg_count,
+      mc.contact_id AS contact_id,
+      COALESCE(cb.flow_id, ctb.flow_id) AS flow_id
+    FROM msg_convs mc
+    LEFT JOIN conv_best cb ON cb.conv_id = mc.conv_id
+    LEFT JOIN contact_best ctb ON ctb.contact_id = mc.contact_id
+  ),
+  flow_agg AS (
+    SELECT
+      a.flow_id AS flow_id,
+      MAX(f.name) AS flow_name,
+      SUM(a.msg_count)::INT AS messages,
+      COUNT(DISTINCT a.contact_id)::INT AS unique_contacts
+    FROM attributed a
+    JOIN flows f ON f.id = a.flow_id
+    WHERE a.flow_id IS NOT NULL
+      AND f.account_id = v_account_id
+    GROUP BY a.flow_id
+  ),
+  -- Per-month distinct contacts for the year, bucketed in the
+  -- caller's timezone (matches browser-local getMonth()).
+  monthly AS (
+    SELECT
+      EXTRACT(MONTH FROM (m.created_at AT TIME ZONE v_tz))::INT AS mth,
+      COUNT(DISTINCT c.contact_id)::INT AS contacts
+    FROM messages m
+    JOIN conversations c ON c.id = m.conversation_id
+    WHERE c.account_id = v_account_id
+      AND c.contact_id IS NOT NULL
+      AND m.created_at >= p_year_start
+      AND m.created_at < p_year_end
+      AND EXTRACT(YEAR FROM (m.created_at AT TIME ZONE v_tz))::INT = p_year
+    GROUP BY 1
+  )
+  SELECT jsonb_build_object(
+    'kpis', jsonb_build_object(
+      'totalMessages', jsonb_build_object(
+        'current', (
+          SELECT COUNT(*)::INT FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.account_id = v_account_id
+            AND m.created_at >= p_start AND m.created_at < p_end
+        ),
+        'previous', (
+          SELECT COUNT(*)::INT FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.account_id = v_account_id
+            AND m.created_at >= p_prev_start AND m.created_at < p_prev_end
+        )
+      ),
+      'uniqueContacts', jsonb_build_object(
+        'current', (
+          SELECT COUNT(DISTINCT c.contact_id)::INT FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.account_id = v_account_id
+            AND c.contact_id IS NOT NULL
+            AND m.created_at >= p_start AND m.created_at < p_end
+        ),
+        'previous', (
+          SELECT COUNT(DISTINCT c.contact_id)::INT FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.account_id = v_account_id
+            AND c.contact_id IS NOT NULL
+            AND m.created_at >= p_prev_start AND m.created_at < p_prev_end
+        )
+      ),
+      'newContacts', jsonb_build_object(
+        'current', (
+          SELECT COUNT(*)::INT FROM contacts
+          WHERE account_id = v_account_id
+            AND created_at >= p_start AND created_at < p_end
+        ),
+        'previous', (
+          SELECT COUNT(*)::INT FROM contacts
+          WHERE account_id = v_account_id
+            AND created_at >= p_prev_start AND created_at < p_prev_end
+        )
+      ),
+      'newConversations', jsonb_build_object(
+        'current', (
+          SELECT COUNT(*)::INT FROM conversations
+          WHERE account_id = v_account_id
+            AND created_at >= p_start AND created_at < p_end
+        ),
+        'previous', (
+          SELECT COUNT(*)::INT FROM conversations
+          WHERE account_id = v_account_id
+            AND created_at >= p_prev_start AND created_at < p_prev_end
+        )
+      )
+    ),
+    'flowBreakdown', jsonb_build_object(
+      'totalMessages', (
+        SELECT COALESCE(SUM(msg_count), 0)::INT FROM msg_convs
+      ),
+      'rows', COALESCE((
+        SELECT jsonb_agg(item ORDER BY (item->>'messages')::INT DESC)
+        FROM (
+          SELECT jsonb_build_object(
+            'flowId', fa.flow_id,
+            'flowName', fa.flow_name,
+            'messages', fa.messages,
+            'uniqueContacts', fa.unique_contacts,
+            'pct', CASE
+              WHEN (SELECT COALESCE(SUM(msg_count), 0) FROM msg_convs) > 0
+              THEN (fa.messages::DOUBLE PRECISION
+                / (SELECT COALESCE(SUM(msg_count), 0)::DOUBLE PRECISION FROM msg_convs)) * 100
+              ELSE 0
+            END
+          ) AS item
+          FROM flow_agg fa
+          WHERE fa.messages > 0
+        ) s
+      ), '[]'::JSONB)
+    ),
+    'monthlyUniqueContacts', (
+      SELECT COALESCE(jsonb_agg(v ORDER BY ord), '[]'::JSONB)
+      FROM (
+        SELECT
+          gs.mth AS ord,
+          COALESCE(mo.contacts, 0) AS v
+        FROM generate_series(1, 12) AS gs(mth)
+        LEFT JOIN monthly mo ON mo.mth = gs.mth
+      ) s
+    )
+  ) INTO v_result;
+
+  RETURN v_result;
+END;
+$$;
+
+ALTER FUNCTION public.get_dashboard_analytics(
+  TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ,
+  TIMESTAMPTZ, TIMESTAMPTZ, INT, TEXT
+) OWNER TO postgres;
+
+REVOKE ALL ON FUNCTION public.get_dashboard_analytics(
+  TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ,
+  TIMESTAMPTZ, TIMESTAMPTZ, INT, TEXT
+) FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.get_dashboard_analytics(
+  TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ,
+  TIMESTAMPTZ, TIMESTAMPTZ, INT, TEXT
+) TO authenticated;

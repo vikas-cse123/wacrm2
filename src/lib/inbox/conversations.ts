@@ -88,9 +88,21 @@ export interface ContactFilters {
   tagIds: string[];
   /** Exact company match, or null for no company filter. */
   company: string | null;
-  /** Flow id (from contact.flow_id); null for no flow filter. */
+  /**
+   * Flow id (from contact.flow_id), NO_FLOW_FILTER_ID for conversations
+   * whose contact has no associated flow, or null for no flow filter.
+   */
   flowId?: string | null;
 }
+
+/**
+ * Sentinel flow-filter value for "No flow" (conversations whose contact
+ * has no associated flow run). A `__`-prefixed value can never collide
+ * with a real flow UUID. The flow resolution itself is untouched —
+ * matching reads the same hydrated `contact.flow_id` that
+ * {@link normalizeConversation} derives via `pickContactFlowRun`.
+ */
+export const NO_FLOW_FILTER_ID = "__no_flow__";
 
 export type ConversationDateFilter = "all" | "today" | "yesterday" | "custom";
 
@@ -212,9 +224,38 @@ export function matchesContactFilters(
     return false;
   }
 
-  if (flowId != null && conversation.contact?.flow_id !== flowId) {
-    return false;
+  if (flowId != null) {
+    if (flowId === NO_FLOW_FILTER_ID) {
+      // No associated flow: same `contact.flow_id` resolution, inverted.
+      if (conversation.contact?.flow_id != null) return false;
+    } else if (conversation.contact?.flow_id !== flowId) {
+      return false;
+    }
   }
 
   return true;
+}
+
+/**
+ * Whether an incoming conversation row represents genuine new activity
+ * relative to the row currently in the Inbox list.
+ *
+ * The Inbox sorts by `last_message_at` desc, so only a strictly newer
+ * `last_message_at` changes sort position. Read-state updates
+ * (`unread_count` → 0), status/assignment changes, and the incidental
+ * `updated_at` bump from the `set_updated_at` trigger carry the same
+ * (or no) `last_message_at` and must patch in place — bubbling them
+ * to the top is the "open chat jumps to position 1" bug.
+ */
+export function hasNewerConversationActivity(
+  current: Pick<Conversation, "last_message_at">,
+  incoming: Pick<Conversation, "last_message_at">
+): boolean {
+  if (!incoming.last_message_at) return false;
+  const incomingMs = Date.parse(incoming.last_message_at);
+  if (Number.isNaN(incomingMs)) return false;
+  if (!current.last_message_at) return true;
+  const currentMs = Date.parse(current.last_message_at);
+  if (Number.isNaN(currentMs)) return true;
+  return incomingMs > currentMs;
 }

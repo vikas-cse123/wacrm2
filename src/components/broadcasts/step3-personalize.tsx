@@ -269,7 +269,7 @@ export function Step3Personalize({
           />
           <p className="mt-1.5 text-xs text-muted-foreground">
             Public URL of the {mediaHeaderType} sent as the message header.
-            Used for every recipient in this broadcast.
+            Used for every recipient in this bulk message.
           </p>
           {mediaHeaderType === 'image' &&
             headerMediaError === null &&

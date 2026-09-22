@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl, downloadMediaStream } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 export async function GET(
@@ -64,21 +64,44 @@ export async function GET(
 
     const accessToken = decrypt(config.access_token)
 
-    // Get the download URL from Meta
+    // Get the download URL from Meta (short-lived — resolved fresh on
+    // every request, never persisted).
     const mediaInfo = await getMediaUrl({ mediaId, accessToken })
 
-    // Download the binary data
-    const { buffer, contentType } = await downloadMedia({
+    // Stream Meta's bytes straight through to the browser — nothing is
+    // buffered in Node memory, nothing is stored. The browser's Range
+    // header (video/audio seeking, progressive PDFs) is forwarded so
+    // Meta's 206 partial response relays back intact.
+    const upstream = await downloadMediaStream({
       downloadUrl: mediaInfo.url,
       accessToken,
+      range: request.headers.get('range'),
     })
 
-    return new Response(new Uint8Array(buffer), {
-      status: 200,
-      headers: {
-        'Content-Type': contentType || mediaInfo.mimeType || 'application/octet-stream',
-        'Cache-Control': 'public, max-age=86400',
-      },
+    const headers = new Headers()
+    const contentType =
+      upstream.headers.get('content-type') ||
+      mediaInfo.mimeType ||
+      'application/octet-stream'
+    headers.set('Content-Type', contentType)
+    const contentLength = upstream.headers.get('content-length')
+    if (contentLength) headers.set('Content-Length', contentLength)
+    const contentRange = upstream.headers.get('content-range')
+    if (contentRange) headers.set('Content-Range', contentRange)
+    const acceptRanges = upstream.headers.get('accept-ranges')
+    headers.set('Accept-Ranges', acceptRanges || 'bytes')
+    // Inline rendering by default (image/video/audio/PDF preview);
+    // the Inbox Download button passes ?download=1 (or uses the
+    // download attribute) to force an attachment instead.
+    const asAttachment = new URL(request.url).searchParams.get('download') === '1'
+    if (asAttachment) {
+      headers.set('Content-Disposition', 'attachment')
+    }
+    headers.set('Cache-Control', 'public, max-age=86400')
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers,
     })
   } catch (error) {
     console.error('Error in WhatsApp media GET:', error)

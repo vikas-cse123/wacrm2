@@ -122,3 +122,54 @@ describe('summarizeNode — send_buttons', () => {
     expect(preview).toBe(`${BODY.slice(0, 39)}… · Yes / No`);
   });
 });
+
+describe('summarizeNode — set_tag displays tag names, stores UUIDs', () => {
+  const names = new Map([
+    ["4d15b76f-aaaa-4b0a-a778-de8bc35af803", "testing1"],
+  ]);
+
+  it('resolves the stored UUID to the tag name (add + remove)', () => {
+    expect(
+      summarizeNode(
+        node("set_tag", { mode: "add", tag_id: "4d15b76f-aaaa-4b0a-a778-de8bc35af803" }),
+        { tagNames: names },
+      ),
+    ).toBe("Add tag testing1");
+    expect(
+      summarizeNode(
+        node("set_tag", { mode: "remove", tag_id: "4d15b76f-aaaa-4b0a-a778-de8bc35af803" }),
+        { tagNames: names },
+      ),
+    ).toBe("Remove tag testing1");
+  });
+
+  it('falls back to the truncated UUID when the tag is gone (config untouched)', () => {
+    const n = node("set_tag", { mode: "add", tag_id: "deadbeef-0000-1111-2222-333333333333" });
+    expect(summarizeNode(n, { tagNames: names })).toBe("Add tag deadbeef…");
+    expect(summarizeNode(n)).toBe("Add tag deadbeef…");
+    // The node config itself is never rewritten by the preview.
+    expect(n.config).toEqual({
+      mode: "add",
+      tag_id: "deadbeef-0000-1111-2222-333333333333",
+    });
+  });
+
+  it('shows the none-picked state without a tag id', () => {
+    expect(summarizeNode(node("set_tag", { mode: "add" }), { tagNames: names })).toBe(
+      "Add tag (none picked)",
+    );
+  });
+
+  it('condition tag subjects resolve the same way', () => {
+    expect(
+      summarizeNode(
+        node("condition", {
+          subject: "tag",
+          subject_key: "4d15b76f-aaaa-4b0a-a778-de8bc35af803",
+          operator: "present",
+        }),
+        { tagNames: names },
+      ),
+    ).toBe("has tag testing1");
+  });
+});

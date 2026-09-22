@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendMediaMessage } from "./meta-api";
+import { downloadMediaStream, sendMediaMessage } from "./meta-api";
 
 // Capture the JSON body each helper POSTs to Meta so we can assert the
 // exact payload shape per media kind without hitting the network.
@@ -75,5 +75,67 @@ describe("sendMediaMessage — payload shape", () => {
     await expect(
       sendMediaMessage({ ...BASE, link: "", kind: "image" }),
     ).rejects.toThrow(/requires a link/);
+  });
+});
+
+describe("downloadMediaStream — Range passthrough without buffering", () => {
+  let seenHeaders: Record<string, string> = {};
+
+  beforeEach(() => {
+    seenHeaders = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const headers = new Headers(init?.headers as Record<string, string>);
+        headers.forEach((value, key) => {
+          seenHeaders[key] = value;
+        });
+        return {
+          ok: true,
+          status: 206,
+          headers: new Headers({
+            "content-type": "video/mp4",
+            "content-range": "bytes 0-1023/5000",
+            "content-length": "1024",
+          }),
+          body: "stream-body",
+        } as unknown as Response;
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("forwards the browser Range header and returns Meta's 206 untouched", async () => {
+    const res = await downloadMediaStream({
+      downloadUrl: "https://cdn.meta/video",
+      accessToken: "tok",
+      range: "bytes=0-1023",
+    });
+    expect(seenHeaders["range"]).toBe("bytes=0-1023");
+    expect(seenHeaders["authorization"]).toBe("Bearer tok");
+    expect(res.status).toBe(206);
+    expect(res.headers.get("content-range")).toBe("bytes 0-1023/5000");
+    // Streams through — no buffering into memory.
+    expect(res.body).toBe("stream-body");
+  });
+
+  it("omits Range when the browser sent none", async () => {
+    await downloadMediaStream({
+      downloadUrl: "https://cdn.meta/video",
+      accessToken: "tok",
+    });
+    expect(seenHeaders["range"]).toBeUndefined();
+  });
+
+  it("throws on Meta errors so the route can 500 with a fallback", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404 }) as Response),
+    );
+    await expect(
+      downloadMediaStream({ downloadUrl: "https://cdn.meta/x", accessToken: "tok" }),
+    ).rejects.toThrow(/404/);
   });
 });

@@ -5,6 +5,7 @@ import { ChevronRight, Loader2 } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { getTravelCrmUrl } from '@/lib/travel-crm';
 import { useTheme } from '@/hooks/use-theme';
 import { FONTS, THEMES } from '@/lib/themes';
 import { CURRENCIES } from '@/lib/currency';
@@ -37,7 +38,7 @@ export function SettingsOverview({
   onSelect: (section: SettingsSection) => void;
   visibleSections?: ReadonlySet<SettingsSection>;
 }) {
-  const { user, profile, accountId, accountRole, defaultCurrency, canManageMembers } =
+  const { user, profile, account, accountId, accountRole, defaultCurrency, canManageMembers } =
     useAuth();
   const { mode, theme, font } = useTheme();
 
@@ -190,6 +191,13 @@ export function SettingsOverview({
       section: 'deals',
       loading: false,
       subtitle: `${defaultCurrency} — ${currencyLabel}`,
+    },
+    {
+      section: 'travel-crm',
+      loading: false,
+      subtitle: (
+        <span className="truncate">{getTravelCrmUrl(account)}</span>
+      ),
     },
     {
       section: 'fields',

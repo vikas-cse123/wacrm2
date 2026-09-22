@@ -381,7 +381,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
       if (broadcastError || !broadcast) {
         throw new Error(
-          `Failed to create broadcast: ${broadcastError?.message ?? 'unknown error'}`,
+          `Failed to create bulk message: ${broadcastError?.message ?? 'unknown error'}`,
         );
       }
 
@@ -425,7 +425,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         .eq('broadcast_id', broadcast.id);
 
       if (recipientsFetchError || !recipients) {
-        throw new Error('Failed to fetch broadcast recipients');
+        throw new Error('Failed to fetch bulk message recipients');
       }
 
       // One bulk fetch of custom values for every contact in this
@@ -487,7 +487,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           const data = await res.json();
 
           if (!res.ok) {
-            throw new Error(data.error || 'Broadcast API request failed');
+            throw new Error(data.error || 'Bulk message API request failed');
           }
 
           const resultsByPhone = new Map<string, BroadcastApiResult>();

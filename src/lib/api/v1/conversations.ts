@@ -38,6 +38,8 @@ export interface ApiMessage {
   content_type: string;
   content_text: string | null;
   media_url: string | null;
+  media_file_name: string | null;
+  media_mime_type: string | null;
   template_name: string | null;
   whatsapp_message_id: string | null;
   status: string;
@@ -90,6 +92,8 @@ export function serializeMessage(m: Message): ApiMessage {
     content_type: m.content_type,
     content_text: m.content_text ?? null,
     media_url: m.media_url ?? null,
+    media_file_name: m.media_file_name ?? null,
+    media_mime_type: m.media_mime_type ?? null,
     template_name: m.template_name ?? null,
     whatsapp_message_id: m.message_id ?? null,
     status: m.status,

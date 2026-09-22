@@ -1,5 +1,11 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import {
+  authFailureCode,
+  classifyAuthFailure,
+  isConfirmedUnauthenticated,
+  type AuthFailureKind,
+} from '@/lib/auth/auth-errors'
 
 export async function middleware(request: NextRequest) {
   // Public pages - always accessible, signed in or not. This check MUST
@@ -59,29 +65,52 @@ export async function middleware(request: NextRequest) {
   // first request to reach Supabase wins and gets a new token pair; the
   // others present an already-consumed refresh token and getUser()
   // throws (AuthApiError: Invalid Refresh Token: Refresh Token Not
-  // Found). Left uncaught, that throw escapes the middleware mid-request
-  // and can leave the response in a malformed state. Treat a failed
-  // refresh as "not authenticated for this request" instead of letting
-  // it bubble — the request that actually won the race will refresh the
-  // session, and the next request from this same client will pick up
-  // the new cookies normally.
+  // Found). Rotation stays enabled (with its 10s server-side reuse
+  // interval); the app side handles the losers below instead of
+  // treating them as logged out.
+  //
+  // Failure handling distinguishes two cases (see
+  // src/lib/auth/auth-errors.ts):
+  //   A. confirmed unauthenticated — getUser() resolved user:null, or
+  //      the server deterministically rejected the token (401/403).
+  //      These redirect to /login exactly as before.
+  //   B. temporary infrastructure failure — lookup timeout, network
+  //      blip, rate limit, 5xx, or the rotation race above. These PASS
+  //      THROUGH untouched: the dashboard shell (client) holds a
+  //      session of its own and re-verifies with a bounded check
+  //      before ever redirecting — a single slow request must not
+  //      decide the user's fate. This is safe: downstream server code
+  //      still enforces auth per-request (RLS everywhere), and a
+  //      truly dead session fails the client check within seconds.
   let user = null
+  let failure: AuthFailureKind | null = null
   try {
     // Bound the auth round-trip. When Supabase auth is slow or the
     // VPS→Supabase path is degraded, `getUser()` can hang (the Edge
     // sandbox's fetch has no built-in timeout) and wedge the request
-    // past Nginx's proxy_read_timeout → 504 on every page. Failing fast
-    // to "not authenticated" lets protected pages redirect to /login
-    // (which loads without auth) instead of hanging the site.
+    // past Nginx's proxy_read_timeout → 504 on every page. The 5s
+    // bound stays (it no longer causes logouts — see case B above),
+    // and the hung promise is simply abandoned, never awaited twice.
     const userOrTimeout = await Promise.race([
       supabase.auth.getUser(),
       new Promise<{ data: { user: null } }>((_, reject) =>
         setTimeout(() => reject(new Error('auth lookup timed out')), 5_000)
       ),
     ])
-    user = userOrTimeout.data.user
-  } catch {
-    user = null
+    const resolved = userOrTimeout.data.user
+    if (resolved) {
+      user = resolved
+    } else {
+      failure = 'anonymous'
+    }
+  } catch (err) {
+    failure = classifyAuthFailure(err)
+    // Log codes only — never tokens, cookies, or error internals that
+    // could carry credential fragments.
+    console.warn('[auth] middleware auth failure', {
+      code: authFailureCode(failure),
+      path: request.nextUrl.pathname,
+    })
   }
 
   // Auth pages - redirect to dashboard if already logged in.
@@ -111,9 +140,14 @@ export async function middleware(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // Protected pages - redirect to login if not authenticated
+  // Protected pages - redirect to login only when the session is
+  // proven dead (case A above). On transient failures the request
+  // passes through so the client can recover in place.
   const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
+    if (failure !== null && !isConfirmedUnauthenticated(failure)) {
+      return supabaseResponse
+    }
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return withRefreshedCookies(NextResponse.redirect(url))

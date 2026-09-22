@@ -136,6 +136,12 @@ html[data-font="nunito-sans"] {
 
 :root,
 html[data-mode="dark"] {
+  /* Tells the browser that native controls (date-picker indicator,
+     calendar popup, scrollbars) should render in their dark style.
+     Without this, Chromium falls back to the meta color-scheme
+     ("dark light") and may paint a light calendar glyph that is
+     invisible on dark inputs. */
+  color-scheme: dark;
   --background: oklch(0.13 0.01 260);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.18 0.01 260);
@@ -165,6 +171,11 @@ html[data-mode="dark"] {
 }
 
 html[data-mode="light"] {
+  /* Same as above, mirrored: native controls render in their light
+     style (dark glyph on light inputs) instead of following the
+     OS preference, which previously left the calendar icon
+     near-invisible on light inputs. */
+  color-scheme: light;
   --background: oklch(0.99 0.002 260);
   --foreground: oklch(0.21 0.01 260);
   --card: oklch(1 0 0);

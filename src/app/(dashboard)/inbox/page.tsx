@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
+  hasNewerConversationActivity,
   normalizeConversation,
 } from "@/lib/inbox/conversations";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
@@ -366,13 +367,29 @@ export default function InboxPage() {
           // back on for the ~100ms it takes for the reset effect's server
           // UPDATE to round-trip. Non-active convs take the value as-is.
           const isActive = activeConversation?.id === conv.id;
-          setConversations((prev) =>
-            bubbleToTop(prev, conv.id, (c) => ({
+          // Only genuine new activity (a strictly newer last_message_at)
+          // bubbles the row to the top — the list sorts by
+          // last_message_at desc. Read-state updates (unread_count → 0
+          // when opening a chat), status/assignment changes, and the
+          // incidental `updated_at` bump from the set_updated_at trigger
+          // carry the same last_message_at and must patch in place,
+          // otherwise opening an unread chat jumps it to position 1.
+          setConversations((prev) => {
+            const existing = prev.find((c) => c.id === conv.id);
+            const patch = (c: Conversation): Conversation => ({
               ...c,
               ...conv,
+              contact: conv.contact ?? c.contact,
               unread_count: isActive ? 0 : conv.unread_count,
-            })),
-          );
+            });
+            if (
+              existing &&
+              hasNewerConversationActivity(existing, conv)
+            ) {
+              return bubbleToTop(prev, conv.id, patch);
+            }
+            return prev.map((c) => (c.id === conv.id ? patch(c) : c));
+          });
         } else {
           // UPDATE arrived before the INSERT (or after a missed INSERT)
           // — fetch the row so it surfaces with its contact joined. The
@@ -681,11 +698,14 @@ export default function InboxPage() {
           />
         </div>
 
-        {/* Right panel: Contact sidebar — desktop only, and only when the
-            agent hasn't collapsed it via the thread-header toggle (#258).
+        {/* Right panel: Contact sidebar — desktop only, only when a
+            conversation is selected AND the agent hasn't collapsed it
+            via the thread-header toggle (#258). Deriving from
+            `hasActiveConv` (not CSS-hiding) means no width is reserved
+            when nothing is selected and the empty state expands.
             On mobile it's always hidden (the `lg:block` below), so the
             toggle — which is itself desktop-only — never affects it. */}
-     {contactPanelOpen && (
+      {contactPanelOpen && hasActiveConv && (
   <>
     {/* Desktop: permanent side column */}
     <div className="hidden lg:block">
