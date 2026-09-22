@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
 import {
+  Download,
   FileText,
   MapPin,
   LayoutTemplate,
@@ -87,11 +88,63 @@ function ImageLightbox({
   );
 }
 
-function MediaImage({ url, alt }: { url: string; alt: string }) {
+/**
+ * Display name for a document bubble. Prefers the persisted original
+ * filename (migration 077); falls back to the caption (inbound
+ * webhook documents store caption||filename there) and finally a
+ * generic label. Never derives from Storage object keys — those are
+ * `account-<id>/<ts>-<safe>` paths, not human names.
+ */
+export function documentDisplayName(message: {
+  media_file_name?: string | null;
+  content_text?: string | null;
+}): string {
+  return (
+    message.media_file_name?.trim() ||
+    message.content_text?.trim() ||
+    "Document"
+  );
+}
+
+function MediaImage({
+  url,
+  alt,
+  compact,
+}: {
+  url: string;
+  alt: string;
+  /** Stickers render smaller; same lazy fetch + lightbox. */
+  compact?: boolean;
+}) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
+  // Viewport-gated: proxy URLs are fetched (auth blob) only once the
+  // bubble scrolls near the viewport — opening a conversation with 50
+  // images must not fire 50 media requests up front.
+  const [visible, setVisible] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisible(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   const loadImage = useCallback(async () => {
     if (!url) return;
@@ -116,6 +169,7 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }, [url]);
 
   useEffect(() => {
+    if (!visible) return;
     loadImage();
     return () => {
       if (src?.startsWith("blob:")) {
@@ -123,37 +177,44 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadImage]);
+  }, [visible, loadImage]);
+
+  const frameClass = compact ? "h-32 w-32" : "h-40 w-60";
 
   if (error) {
     return (
-      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
+      <div ref={hostRef} className={cn("flex items-center justify-center rounded-lg bg-muted", frameClass)}>
         <ImageOff className="h-8 w-8 text-muted-foreground" />
       </div>
     );
   }
 
-  if (loading) {
+  if (!visible || loading) {
     return (
-      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
+      <div ref={hostRef} className={cn("flex items-center justify-center rounded-lg bg-muted", frameClass)}>
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <>
+    <div ref={hostRef}>
       <img
         src={src ?? ""}
         alt={alt}
-        className="max-h-64 max-w-60 cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
+        loading="lazy"
+        className={
+          compact
+            ? "h-32 w-32 cursor-pointer rounded-lg object-contain transition-opacity hover:opacity-90"
+            : "max-h-64 max-w-60 cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
+        }
         onClick={() => setIsExpanded(true)}
         onError={() => setError(true)}
       />
       {isExpanded && src && (
         <ImageLightbox src={src} alt={alt} onClose={() => setIsExpanded(false)} />
       )}
-    </>
+    </div>
   );
 }
 
@@ -224,13 +285,30 @@ function MessageContent({
         </div>
       );
 
+    case "sticker":
+      // Stickers are small square webp images. Same lazy MediaImage,
+      // compact frame, no caption (Meta stickers carry none).
+      return (
+        <div>
+          {message.media_url ? (
+            <MediaImage url={message.media_url} alt="Sticker" compact />
+          ) : (
+            <MediaUnavailable label="Sticker" />
+          )}
+        </div>
+      );
+
     case "video":
       return (
         <div>
           {message.media_url ? (
+            // preload="metadata" — the browser fetches only headers +
+            // first frames until the user hits play; with the proxy's
+            // Range support, playback then streams in chunks.
             <video
               src={message.media_url}
               controls
+              preload="metadata"
               className="max-h-64 max-w-60 rounded-lg"
             />
           ) : (
@@ -250,30 +328,50 @@ function MessageContent({
       return (
         <div>
           {message.media_url ? (
-            <audio src={message.media_url} controls className="max-w-60" />
+            // preload="none" — no bytes fetched until play. Seeking
+            // streams via Range through the proxy.
+            <audio src={message.media_url} controls preload="none" className="max-w-60" />
           ) : (
             <MediaUnavailable label="Audio" />
           )}
         </div>
       );
 
-    case "document":
+    case "document": {
       if (!message.media_url) {
-        return <MediaUnavailable label={message.content_text || "Document"} />;
+        return <MediaUnavailable label={documentDisplayName(message)} />;
       }
+      const fileName = documentDisplayName(message);
+      // The file itself is fetched only on user action: Open streams
+      // it in a new tab (Range-capable via the proxy), Download saves
+      // it. Merely opening the conversation downloads nothing.
+      const downloadHref = message.media_url.startsWith("/api/whatsapp/media/")
+        ? `${message.media_url}?download=1`
+        : message.media_url;
       return (
-        <a
-          href={message.media_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
-        >
-          <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <span className="truncate">
-            {message.content_text || "Document"}
-          </span>
-        </a>
+        <div className="flex items-center gap-1 rounded-lg bg-muted/50 px-2 py-1.5">
+          <a
+            href={message.media_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${fileName}`}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-muted"
+          >
+            <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{fileName}</span>
+          </a>
+          <a
+            href={downloadHref}
+            download={fileName}
+            title={`Download ${fileName}`}
+            aria-label={`Download ${fileName}`}
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Download className="h-4 w-4" />
+          </a>
+        </div>
       );
+    }
 
     case "template":
       return (

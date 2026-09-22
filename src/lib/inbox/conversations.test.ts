@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  NO_FLOW_FILTER_ID,
   getConversationDateRange,
+  hasNewerConversationActivity,
   matchesConversationDateFilter,
   matchesContactFilters,
   normalizeConversation,
@@ -124,6 +126,75 @@ describe("matchesContactFilters", () => {
     expect(
       matchesContactFilters(conv, { tagIds: [], company: null, flowId: null })
     ).toBe(true);
+  });
+
+  it("matches only flow-less conversations for the No-flow filter", () => {
+    const withFlow = makeConversation({ flow_id: "f1", flow_name: "GOA" });
+    const withoutFlow = makeConversation({ flow_id: null, flow_name: null });
+    const noContact = makeConversation(null);
+
+    // No flow → only conversations without an associated flow.
+    expect(
+      matchesContactFilters(withoutFlow, {
+        tagIds: [],
+        company: null,
+        flowId: NO_FLOW_FILTER_ID,
+      })
+    ).toBe(true);
+    expect(
+      matchesContactFilters(withFlow, {
+        tagIds: [],
+        company: null,
+        flowId: NO_FLOW_FILTER_ID,
+      })
+    ).toBe(false);
+    // No contact means no flow runs → counts as No flow.
+    expect(
+      matchesContactFilters(noContact, {
+        tagIds: [],
+        company: null,
+        flowId: NO_FLOW_FILTER_ID,
+      })
+    ).toBe(true);
+  });
+
+  it("combines the No-flow filter with tags and company (AND across facets)", () => {
+    const match = makeConversation({
+      company: "Acme",
+      tags: [tag("t1")],
+      flow_id: null,
+    });
+    const wrongFlow = makeConversation({
+      company: "Acme",
+      tags: [tag("t1")],
+      flow_id: "f1",
+    });
+    const wrongTag = makeConversation({
+      company: "Acme",
+      tags: [tag("t2")],
+      flow_id: null,
+    });
+    expect(
+      matchesContactFilters(match, {
+        tagIds: ["t1"],
+        company: "Acme",
+        flowId: NO_FLOW_FILTER_ID,
+      })
+    ).toBe(true);
+    expect(
+      matchesContactFilters(wrongFlow, {
+        tagIds: ["t1"],
+        company: "Acme",
+        flowId: NO_FLOW_FILTER_ID,
+      })
+    ).toBe(false);
+    expect(
+      matchesContactFilters(wrongTag, {
+        tagIds: ["t1"],
+        company: "Acme",
+        flowId: NO_FLOW_FILTER_ID,
+      })
+    ).toBe(false);
   });
 });
 
@@ -339,5 +410,62 @@ describe("matchesConversationDateFilter", () => {
     });
 
     expect(matchesConversationDateFilter({}, range)).toBe(false);
+  });
+});
+
+describe("hasNewerConversationActivity", () => {
+  const T1 = "2026-08-20T10:00:00.000Z";
+  const T2 = "2026-08-21T10:00:00.000Z";
+
+  it("returns false when last_message_at is unchanged (read-state update)", () => {
+    expect(
+      hasNewerConversationActivity(
+        { last_message_at: T1 },
+        { last_message_at: T1 }
+      )
+    ).toBe(false);
+  });
+
+  it("returns true when the incoming row has strictly newer activity", () => {
+    expect(
+      hasNewerConversationActivity(
+        { last_message_at: T1 },
+        { last_message_at: T2 }
+      )
+    ).toBe(true);
+  });
+
+  it("returns false when the incoming row is older (out-of-order event)", () => {
+    expect(
+      hasNewerConversationActivity(
+        { last_message_at: T2 },
+        { last_message_at: T1 }
+      )
+    ).toBe(false);
+  });
+
+  it("returns false when the incoming row carries no activity timestamp", () => {
+    expect(hasNewerConversationActivity({ last_message_at: T1 }, {})).toBe(
+      false
+    );
+  });
+
+  it("returns true when the current row has no timestamp but incoming does", () => {
+    expect(hasNewerConversationActivity({}, { last_message_at: T1 })).toBe(
+      true
+    );
+  });
+
+  it("returns false when neither row has a timestamp", () => {
+    expect(hasNewerConversationActivity({}, {})).toBe(false);
+  });
+
+  it("returns false for unparseable incoming timestamps", () => {
+    expect(
+      hasNewerConversationActivity(
+        { last_message_at: T1 },
+        { last_message_at: "not-a-date" }
+      )
+    ).toBe(false);
   });
 });

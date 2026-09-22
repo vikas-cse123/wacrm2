@@ -15,10 +15,8 @@ import {
   Globe,
   X,
   Image as ImageIcon,
-  Video,
   Music,
   FileText,
-  Sticker,
   Upload,
   Loader2,
 } from "lucide-react";
@@ -78,10 +76,8 @@ const EMPTY_FORM: FormData = {
 const MESSAGE_TYPES: { value: QuickReplyMessageType; label: string; icon: React.ReactNode }[] = [
   { value: "text", label: "Text", icon: <MessageSquareText className="h-3 w-3" /> },
   { value: "image", label: "Image", icon: <ImageIcon className="h-3 w-3" /> },
-  { value: "video", label: "Video", icon: <Video className="h-3 w-3" /> },
   { value: "audio", label: "Audio", icon: <Music className="h-3 w-3" /> },
   { value: "document", label: "Document", icon: <FileText className="h-3 w-3" /> },
-  { value: "sticker", label: "Sticker", icon: <Sticker className="h-3 w-3" /> },
 ];
 
 const ACCEPT_BY_TYPE: Record<Exclude<QuickReplyMessageType, "text">, string> = {
@@ -801,23 +797,23 @@ export default function QuickRepliesPage() {
                         </Button>
                       </div>
                     </div>
-                    {/* Caption */}
-                    {form.message_type !== "audio" && form.message_type !== "sticker" && (
-                      <div className="mt-3">
-                        <label className="mb-1 block text-xs font-medium text-foreground">Caption (optional)</label>
-                        <textarea
-                          value={form.media_caption}
-                          onChange={(e) => setForm((f) => ({ ...f, media_caption: e.target.value }))}
-                          placeholder="Add a caption…"
-                          maxLength={1024}
-                          rows={2}
-                          className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
-                        />
-                        <p className="mt-1 text-[11px] text-muted-foreground">{form.media_caption.length}/1024</p>
-                      </div>
-                    )}
                   </div>
                 )}
+                {/* Caption — always visible for media types, with or without
+                    a selected file. Stored via the existing media_caption
+                    field; file selection never clears it. */}
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-foreground">Caption (optional)</label>
+                  <textarea
+                    value={form.media_caption}
+                    onChange={(e) => setForm((f) => ({ ...f, media_caption: e.target.value }))}
+                    placeholder="Add a caption…"
+                    maxLength={1024}
+                    rows={2}
+                    className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">{form.media_caption.length}/1024</p>
+                </div>
                 {uploading && <p className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Uploading…</p>}
               </div>
             )}

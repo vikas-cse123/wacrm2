@@ -1,4 +1,5 @@
 import {
+  ArrowLeftRight,
   Bell,
   Coins,
   KeyRound,
@@ -29,6 +30,7 @@ export const SETTINGS_SECTIONS = [
   'security',
   'appearance',
   'notifications',
+  'travel-crm',
   'whatsapp',
   'fields',
   'deals',
@@ -46,7 +48,7 @@ export interface SectionMeta {
   id: SettingsSection;
   label: string;
   icon: LucideIcon;
-  group: 'top' | 'account' | 'workspace';
+  group: 'top' | 'account' | 'integrations' | 'workspace';
 }
 
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
@@ -61,6 +63,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
   notifications: { id: 'notifications', label: 'Notifications', icon: Bell, group: 'account' },
+  'travel-crm': { id: 'travel-crm', label: 'Travel CRM', icon: ArrowLeftRight, group: 'integrations' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
@@ -72,6 +75,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
 export const RAIL_GROUPS: { label: string | null; group: SectionMeta['group'] }[] = [
   { label: null, group: 'top' },
   { label: 'Account', group: 'account' },
+  { label: 'Integrations', group: 'integrations' },
   { label: 'Workspace', group: 'workspace' },
 ];
 

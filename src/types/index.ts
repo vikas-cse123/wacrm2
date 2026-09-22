@@ -47,6 +47,9 @@ export interface Account {
   name: string;
   /** auth.users.id of the immutable owner. */
   owner_user_id: string;
+  /** Travel CRM URL for the sidebar cross-app card (migration 076).
+   *  Null/empty hides the card. */
+  travel_crm_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -231,6 +234,18 @@ export interface Message {
   content_type: ContentType;
   content_text?: string;
   media_url?: string;
+  /**
+   * Original filename (migration 077). Set on outbound sends that
+   * carry one (document flows, manual/quick-reply media) and on
+   * inbound webhook documents. Display-only for document cards —
+   * the bytes always stay outside the DB.
+   */
+  media_file_name?: string | null;
+  /**
+   * MIME type known at send/parse time (migration 077). Display and
+   * proxy Content-Type hint only; NULL for historical rows.
+   */
+  media_mime_type?: string | null;
   template_name?: string;
   message_id?: string;
   status: MessageStatus;

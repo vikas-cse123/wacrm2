@@ -65,8 +65,8 @@ export default function NewBroadcastPage() {
     } catch (err) {
       // Previously swallowed with console.error — the wizard would
       // just no-op, leaving the user confused. Surface the reason.
-      const message = err instanceof Error ? err.message : 'Broadcast failed';
-      console.error('Broadcast failed:', err);
+      const message = err instanceof Error ? err.message : 'Bulk message failed';
+      console.error('Bulk message failed:', err);
       toast.error(message);
     }
   }
@@ -82,7 +82,7 @@ export default function NewBroadcastPage() {
    */
   async function handleSaveDraft() {
     if (!template || !name.trim()) {
-      toast.error('Give the broadcast a name before saving a draft.');
+      toast.error('Give the bulk message a name before saving a draft.');
       return;
     }
     const supabase = createClient();
@@ -131,9 +131,9 @@ export default function NewBroadcastPage() {
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">New Broadcast</h1>
+        <h1 className="text-2xl font-bold text-foreground">New Bulk Message</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Create and send a broadcast message to your contacts.
+          Create and send a bulk message to your contacts.
         </p>
       </div>
 

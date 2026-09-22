@@ -13,6 +13,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { verifySessionActive } from "@/lib/auth/session-recovery";
 import {
   canEditSettings as canEditSettingsFor,
   canManageMembers as canManageMembersFor,
@@ -43,6 +44,10 @@ interface AccountSummary {
   /** Default deal currency (ISO-4217). NOT NULL DEFAULT 'USD' in the
    *  DB (migration 021); narrowed to DEFAULT_CURRENCY when absent. */
   default_currency: string;
+  /** Travel CRM URL for the sidebar cross-app card (migration 076).
+   *  Null (or empty) hides the card. Narrowed to null for older
+   *  schemas where the column doesn't exist yet. */
+  travel_crm_url: string | null;
 }
 
 interface AuthContextValue {
@@ -82,7 +87,8 @@ interface AuthContextValue {
   accountId: string | null;
   /** Role within that account. Null while loading. */
   accountRole: AccountRole | null;
-  /** Lightweight account meta — id + name + default_currency. Null while loading. */
+  /** Lightweight account meta — id + name + default_currency +
+   *  travel_crm_url. Null while loading. */
   account: AccountSummary | null;
   /** Account default deal currency. Falls back to DEFAULT_CURRENCY
    *  while loading or when no account is resolved, so callers can use
@@ -127,6 +133,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // profileLoading back to true on window focus events/token refresh.
   const lastFetchedUserIdRef = useRef<string | null>(null);
 
+  // True once an explicit signOut() is in flight. A null-session event
+  // landing in that window must not trigger recovery — wiping already
+  // won. (Reload on navigation discards the ref; a failed signOut
+  // resets it so later events still verify.)
+  const signingOutRef = useRef(false);
+  // Serializes recovery verifications: one bounded check at a time,
+  // so a burst of null-session events can't stack concurrent getUser
+  // calls and hammer Supabase during an outage.
+  const recoveringRef = useRef(false);
+  // True once init has settled (successfully or after verification).
+  // Lets the safety timer below stand down instead of double-settling.
+  const settledRef = useRef(false);
+
   // Shared across init, auth-state-change listener, and the exposed
   // refreshProfile() callback. Reads the current session's user id and
   // pulls the matching profile row along with its account summary.
@@ -169,9 +188,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.account_id) {
           const { data: account, error: accountErr } = await supabase
             .from("accounts")
-            // default_currency added in migration 021; narrowed to the
-            // USD fallback below for older schemas where it reads null.
-            .select("id, name, default_currency")
+            // default_currency added in migration 021, travel_crm_url
+            // in 076; both narrowed below for older schemas where
+            // they read null.
+            .select("id, name, default_currency, travel_crm_url")
             .eq("id", data.account_id)
             .maybeSingle();
           if (accountErr) {
@@ -186,6 +206,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               id: account.id,
               name: account.name,
               default_currency: account.default_currency ?? DEFAULT_CURRENCY,
+              travel_crm_url: account.travel_crm_url ?? null,
             };
           }
         }
@@ -229,12 +250,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const supabase = createClient();
     let mounted = true;
 
-    const safetyTimer = setTimeout(() => {
-      if (mounted) {
-        console.warn("[AuthProvider] getSession() timed out after 3s");
-        setLoading(false);
+    const safetyTimer = setTimeout(async () => {
+      // getSession() hasn't settled after 3s (lock contention or
+      // worse). The old code wiped auth state here unconditionally —
+      // a false logout on every slow read. Verify server-side first:
+      // only abandon the session when the server confirms it.
+      if (!mounted || settledRef.current) return;
+      console.warn("[auth] AUTH_INIT_TIMEOUT verifying session before giving up");
+      const verification = await verifySessionActive(supabase, {
+        getUserTimeoutMs: 4000,
+      });
+      if (!mounted || settledRef.current) return;
+      if (verification.status === "active") {
+        setUser(verification.user);
+        if (verification.user.id !== lastFetchedUserIdRef.current) {
+          fetchProfile(verification.user.id);
+        }
+      } else if (verification.status === "dead") {
+        setUser(null);
+        setProfile(null);
+        setAccount(null);
         setProfileLoading(false);
       }
+      // "unknown" (infrastructure failure) deliberately keeps state:
+      // a blip must not log the user out. The next auth event
+      // re-evaluates, and data fetches surface their own errors.
+      setLoading(false);
     }, 3000);
 
     const init = async () => {
@@ -265,6 +306,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         console.error("[AuthProvider] init threw:", err);
       } finally {
+        settledRef.current = true;
         if (mounted) setLoading(false);
         clearTimeout(safetyTimer);
       }
@@ -274,23 +316,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
 
-      if (currentUser) {
-        if (currentUser.id !== lastFetchedUserIdRef.current) {
-          fetchProfile(currentUser.id);
-        }
-      } else {
+      // Explicit, locally-confirmed sign-out (user clicked Sign out,
+      // another tab signed out, or the client revoked after a
+      // genuinely dead refresh): auth-js only emits SIGNED_OUT once
+      // the session is actually gone, so wipe immediately — no
+      // recovery attempts that could resurrect it.
+      if (event === "SIGNED_OUT") {
         lastFetchedUserIdRef.current = null;
+        setUser(null);
         setProfile(null);
         setAccount(null);
         setProfileLoading(false);
+        setLoading(false);
+        return;
       }
 
-      setLoading(false);
+      const currentUser = session?.user ?? null;
+      if (currentUser) {
+        setUser(currentUser);
+        if (currentUser.id !== lastFetchedUserIdRef.current) {
+          fetchProfile(currentUser.id);
+        }
+        setLoading(false);
+        return;
+      }
+
+      // Null session on any other event (INITIAL_SESSION before
+      // hydration, torn cookie read mid-rotation, cross-tab pickup):
+      // transient until proven otherwise. Verify with one bounded
+      // check instead of wiping — except while an explicit signOut()
+      // is in flight, where wiping already won.
+      if (signingOutRef.current || recoveringRef.current) return;
+      recoveringRef.current = true;
+      try {
+        const verification = await verifySessionActive(supabase, {
+          getUserTimeoutMs: 4000,
+        });
+        if (!mounted || signingOutRef.current) return;
+        if (verification.status === "active") {
+          console.warn("[auth] AUTH_SESSION_RECOVERED keeping current page");
+          setUser(verification.user);
+          if (verification.user.id !== lastFetchedUserIdRef.current) {
+            fetchProfile(verification.user.id);
+          }
+        } else if (verification.status === "dead") {
+          console.warn("[auth] AUTH_CONFIRMED_SIGNED_OUT redirecting to login");
+          lastFetchedUserIdRef.current = null;
+          setUser(null);
+          setProfile(null);
+          setAccount(null);
+          setProfileLoading(false);
+        }
+        // "unknown" (timeout/network/5xx): keep existing state. A blip
+        // must not log the user out; the next auth event re-evaluates,
+        // and data fetches surface their own errors meanwhile.
+      } finally {
+        recoveringRef.current = false;
+        if (mounted) setLoading(false);
+      }
     });
 
     return () => {
@@ -301,6 +387,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchProfile]);
 
   const signOut = useCallback(async () => {
+    // Mark the explicit sign-out FIRST: a null-session event landing
+    // in this window must not trigger recovery (which could restore
+    // state mid-logout). Reset only if signOut itself throws — the
+    // success path reloads to /login and discards all refs.
+    signingOutRef.current = true;
+    try {
     // Unsubscribe Web Push before signing out so the server stops
     // sending push notifications to this device for this user.
     if ("serviceWorker" in navigator && "PushManager" in window) {
@@ -329,6 +421,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
     setAccount(null);
     window.location.href = "/login";
+    } catch (err) {
+      signingOutRef.current = false;
+      throw err;
+    }
   }, []);
 
   const refreshProfile = useCallback(async () => {

@@ -10,6 +10,9 @@ import {
 import type {
   ActivityItem,
   ConversationsSeriesPoint,
+  DashboardKpis,
+  FlowBreakdown,
+  FlowBreakdownRow,
   MetricsBundle,
   PipelineDonutData,
   PipelineStageSlice,
@@ -395,4 +398,295 @@ export async function loadActivity(db: DB, limit = 20): Promise<ActivityItem[]> 
   return items
     .sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0))
     .slice(0, limit)
+}
+
+// ------------------------------------------------------------
+// Redesigned dashboard — SUPERSEDED by get_dashboard_analytics.
+// (supabase/migrations/074_dashboard_analytics.sql via
+// GET /api/dashboard/analytics + src/lib/dashboard/analytics-client.ts).
+// The chunked helpers below (fetchMessageConvsInRange /
+// fetchConvContactMap / distinctContactsInRange / fetchAllFlowRuns)
+// downloaded raw message stubs into the browser (~89 requests /
+// ~8.7 MB per load) and are no longer used by the dashboard page.
+// Kept for reference; do not call from new code.
+// Real message/contact/conversation/flow
+// data only. RLS scopes every query to the caller's account; we
+// never pass account_id explicitly.
+//
+// Timestamp semantics (matches spec):
+// - TOTAL MESSAGES: count of `messages` rows with created_at in range.
+// - UNIQUE CONTACTS MESSAGED: DISTINCT contacts with >=1 message in
+//   range (via messages -> conversations -> contact_id).
+// - NEW CONTACTS: `contacts.created_at` in range.
+// - NEW CONVERSATIONS: `conversations.created_at` in range.
+// - FLOW BREAKDOWN: messages attributed to flows via `flow_runs`
+//   (conversation_id exact match first, else contact's newest active
+//   run else newest run — same rule as the Inbox `pickContactFlowRun`).
+//   Messages rows only; never flow_runs/events counts.
+// - MONTHLY UNIQUES: per month, DISTINCT contacts messaged.
+// ------------------------------------------------------------
+
+const PAGE_SIZE = 1000
+const IN_CHUNK = 200
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+async function countInRange(
+  db: DB,
+  table: 'messages' | 'contacts' | 'conversations',
+  startISO: string,
+  endISO: string,
+): Promise<number> {
+  const { count } = await db
+    .from(table)
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', startISO)
+    .lt('created_at', endISO)
+  return count ?? 0
+}
+
+interface MessageConvRow {
+  conversation_id: string
+  created_at: string
+}
+
+/** All (conversation_id, created_at) for messages in range. ID-only — no bodies. */
+async function fetchMessageConvsInRange(
+  db: DB,
+  startISO: string,
+  endISO: string,
+): Promise<MessageConvRow[]> {
+  const out: MessageConvRow[] = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await db
+      .from('messages')
+      .select('conversation_id, created_at')
+      .gte('created_at', startISO)
+      .lt('created_at', endISO)
+      .order('created_at', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as MessageConvRow[]
+    out.push(...rows)
+    if (rows.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+    // Safety cap: 100k message ids per range is far beyond the
+    // travel-agency scale; prevents an accidental infinite loop.
+    if (from >= 100_000) break
+  }
+  return out
+}
+
+/** conversation_id -> contact_id (null when the conversation row is missing). */
+async function fetchConvContactMap(db: DB, convIds: string[]): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>()
+  const uniq = [...new Set(convIds)]
+  if (uniq.length === 0) return map
+  for (const part of chunk(uniq, IN_CHUNK)) {
+    const { data, error } = await db.from('conversations').select('id, contact_id').in('id', part)
+    if (error) throw error
+    for (const row of (data ?? []) as { id: string; contact_id: string | null }[]) {
+      map.set(row.id, row.contact_id)
+    }
+  }
+  return map
+}
+
+async function distinctContactsInRange(
+  db: DB,
+  startISO: string,
+  endISO: string,
+): Promise<number> {
+  const msgs = await fetchMessageConvsInRange(db, startISO, endISO)
+  if (msgs.length === 0) return 0
+  const convIds = [...new Set(msgs.map((m) => m.conversation_id))]
+  const convToContact = await fetchConvContactMap(db, convIds)
+  const contacts = new Set<string>()
+  for (const m of msgs) {
+    const c = convToContact.get(m.conversation_id)
+    if (c) contacts.add(c)
+  }
+  return contacts.size
+}
+
+export async function loadDashboardKpis(
+  db: DB,
+  startISO: string,
+  endISO: string,
+  prevStartISO: string,
+  prevEndISO: string,
+): Promise<DashboardKpis> {
+  const [totalCur, totalPrev, newContactsCur, newContactsPrev, newConvsCur, newConvsPrev, uniqCur, uniqPrev] =
+    await Promise.all([
+      countInRange(db, 'messages', startISO, endISO),
+      countInRange(db, 'messages', prevStartISO, prevEndISO),
+      countInRange(db, 'contacts', startISO, endISO),
+      countInRange(db, 'contacts', prevStartISO, prevEndISO),
+      countInRange(db, 'conversations', startISO, endISO),
+      countInRange(db, 'conversations', prevStartISO, prevEndISO),
+      distinctContactsInRange(db, startISO, endISO),
+      distinctContactsInRange(db, prevStartISO, prevEndISO),
+    ])
+
+  return {
+    totalMessages: { current: totalCur, previous: totalPrev },
+    uniqueContacts: { current: uniqCur, previous: uniqPrev },
+    newContacts: { current: newContactsCur, previous: newContactsPrev },
+    newConversations: { current: newConvsCur, previous: newConvsPrev },
+  }
+}
+
+interface FlowRunLite {
+  flow_id: string
+  contact_id: string | null
+  conversation_id: string | null
+  started_at: string
+  status: string
+  flow: { id: string; name: string } | { id: string; name: string }[] | null
+}
+
+function flowNameOf(run: FlowRunLite): { id: string; name: string } | null {
+  const f = run.flow
+  if (!f) return null
+  if (Array.isArray(f)) {
+    const first = f[0]
+    return first ? { id: first.id, name: first.name } : null
+  }
+  return { id: f.id, name: f.name }
+}
+
+function pickRun(runs: FlowRunLite[]): FlowRunLite | null {
+  const withFlow = runs.filter((r) => flowNameOf(r))
+  if (withFlow.length === 0) return null
+  const newest = (a: FlowRunLite, b: FlowRunLite) => (a.started_at >= b.started_at ? a : b)
+  const active = withFlow.filter((r) => r.status === 'active')
+  return active.length > 0 ? active.reduce(newest) : withFlow.reduce(newest)
+}
+
+async function fetchAllFlowRuns(db: DB): Promise<FlowRunLite[]> {
+  const out: FlowRunLite[] = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await db
+      .from('flow_runs')
+      .select('flow_id, contact_id, conversation_id, started_at, status, flow:flows(id, name)')
+      .order('started_at', { ascending: false })
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as unknown as FlowRunLite[]
+    out.push(...rows)
+    if (rows.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+    if (from >= 20_000) break
+  }
+  return out
+}
+
+export async function loadFlowBreakdown(
+  db: DB,
+  startISO: string,
+  endISO: string,
+): Promise<FlowBreakdown> {
+  const [msgs, runs, flowsRes] = await Promise.all([
+    fetchMessageConvsInRange(db, startISO, endISO),
+    fetchAllFlowRuns(db),
+    db.from('flows').select('id, name'),
+  ])
+  if (msgs.length === 0) return { rows: [], totalMessages: 0 }
+  if (flowsRes.error) throw flowsRes.error
+
+  const flowNames = new Map<string, string>()
+  for (const f of (flowsRes.data ?? []) as { id: string; name: string }[]) {
+    flowNames.set(f.id, f.name)
+  }
+
+  const convIds = [...new Set(msgs.map((m) => m.conversation_id))]
+  const convToContact = await fetchConvContactMap(db, convIds)
+
+  // Index runs by conversation and by contact for O(1) attribution.
+  const runsByConv = new Map<string, FlowRunLite[]>()
+  const runsByContact = new Map<string, FlowRunLite[]>()
+  for (const run of runs) {
+    if (run.conversation_id) {
+      const arr = runsByConv.get(run.conversation_id) ?? []
+      arr.push(run)
+      runsByConv.set(run.conversation_id, arr)
+    }
+    if (run.contact_id) {
+      const arr = runsByContact.get(run.contact_id) ?? []
+      arr.push(run)
+      runsByContact.set(run.contact_id, arr)
+    }
+  }
+
+  // Per-conversation message counts + contact, then attribute each
+  // conversation once (not per message) to its flow.
+  const convMsgCount = new Map<string, number>()
+  for (const m of msgs) convMsgCount.set(m.conversation_id, (convMsgCount.get(m.conversation_id) ?? 0) + 1)
+
+  const agg = new Map<string, { name: string; messages: number; contacts: Set<string> }>()
+  for (const convId of convIds) {
+    const contactId = convToContact.get(convId) ?? null
+    let picked: FlowRunLite | null = null
+    const convRuns = runsByConv.get(convId) ?? []
+    if (convRuns.length > 0) {
+      picked = pickRun(convRuns)
+    } else if (contactId) {
+      picked = pickRun(runsByContact.get(contactId) ?? [])
+    }
+    if (!picked) continue // unattributed — silently hidden per spec
+    const flow = flowNameOf(picked)
+    if (!flow) continue
+    const name = flowNames.get(flow.id) ?? flow.name
+    const entry = agg.get(flow.id) ?? { name, messages: 0, contacts: new Set<string>() }
+    entry.name = name
+    entry.messages += convMsgCount.get(convId) ?? 0
+    if (contactId) entry.contacts.add(contactId)
+    agg.set(flow.id, entry)
+  }
+
+  const totalMessages = msgs.length
+  const rows: FlowBreakdownRow[] = [...agg.entries()]
+    .map(([flowId, v]) => ({
+      flowId,
+      flowName: v.name,
+      messages: v.messages,
+      uniqueContacts: v.contacts.size,
+      pct: totalMessages > 0 ? (v.messages / totalMessages) * 100 : 0,
+    }))
+    .filter((r) => r.messages > 0)
+    .sort((a, b) => b.messages - a.messages)
+
+  return { rows, totalMessages }
+}
+
+/**
+ * Unique contacts messaged per calendar month for `year`.
+ * A contact messaged 20 times in Jan counts once for Jan; messaged
+ * again in Feb counts once for Feb too.
+ */
+export async function loadMonthlyUniques(db: DB, year: number): Promise<number[]> {
+  const startISO = new Date(year, 0, 1, 0, 0, 0, 0).toISOString()
+  const endISO = new Date(year + 1, 0, 1, 0, 0, 0, 0).toISOString()
+  const msgs = await fetchMessageConvsInRange(db, startISO, endISO)
+  const months: Set<string>[] = Array.from({ length: 12 }, () => new Set<string>())
+  if (msgs.length === 0) return Array(12).fill(0)
+
+  const convIds = [...new Set(msgs.map((m) => m.conversation_id))]
+  const convToContact = await fetchConvContactMap(db, convIds)
+
+  for (const m of msgs) {
+    const contactId = convToContact.get(m.conversation_id)
+    if (!contactId) continue
+    const d = new Date(m.created_at)
+    // Guard against TZ edge rows outside the year (DST/UTC skew).
+    if (d.getFullYear() !== year) continue
+    months[d.getMonth()].add(contactId)
+  }
+  return months.map((s) => s.size)
 }

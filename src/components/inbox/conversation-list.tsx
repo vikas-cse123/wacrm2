@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
+  NO_FLOW_FILTER_ID,
   type ConversationDateFilter,
   getConversationDateRange,
   matchesContactFilters,
@@ -19,6 +20,14 @@ import {
   removePin,
 } from "@/lib/inbox/pins";
 import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import {
+  buildSearchKey,
+  mergeSearchPage,
+  normalizeSearchQuery,
+  SEARCH_PAGE_SIZE,
+  SearchRequestGate,
+} from "@/lib/inbox/search";
 import type {
   AccountMember,
   Conversation,
@@ -118,6 +127,28 @@ export function ConversationList({
   const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
   const [members, setMembers] = useState<AccountMember[]>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+
+  // Server-side search state — deliberately separate from the normal
+  // `conversations` list so entering/leaving search, paging, or a
+  // stale response can never corrupt it. Text matching + every
+  // active filter runs in Postgres (GET /api/inbox/search); the
+  // client only renders pages.
+  const [searchResults, setSearchResults] = useState<Conversation[]>([]);
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchRetry, setSearchRetry] = useState(0);
+  // Key of the last successfully loaded page-1. While a newer key is
+  // in flight, results below belong to the previous query — dimmed,
+  // never presented as current.
+  const [loadedSearchKey, setLoadedSearchKey] = useState("");
+  const searchGateRef = useRef<SearchRequestGate | null>(null);
+  const getSearchGate = () => {
+    if (!searchGateRef.current) searchGateRef.current = new SearchRequestGate();
+    return searchGateRef.current;
+  };
 
   // Pinned chats (migration 054). Per-user, held as a
   // conversation_id -> pinned_at map. `pinBusyIds` tracks in-flight
@@ -264,6 +295,103 @@ export function ConversationList({
     };
   }, [resyncToken]);
 
+  // Server-side search: debounced query + every active filter become
+  // ONE request per settled state (Contacts-style sequence guard, so
+  // a slow "abc" response can never overwrite "abcd"). Clearing the
+  // box returns to the untouched normal list.
+  const debouncedSearch = useDebouncedValue(search, 280);
+  const activeQuery = normalizeSearchQuery(debouncedSearch);
+  const searching = activeQuery !== "";
+  const searchDateRange = getConversationDateRange({
+    filter: dateFilter,
+    customFrom,
+    customTo,
+  });
+  const searchKey = searching
+    ? buildSearchKey({
+        q: activeQuery,
+        status: filter,
+        tagIds: selectedTagIds,
+        company: selectedCompany,
+        flowId: selectedFlowId,
+        memberIds: selectedMemberIds,
+        from: searchDateRange?.from.toISOString() ?? null,
+        to: searchDateRange?.to.toISOString() ?? null,
+      })
+    : "";
+
+  useEffect(() => {
+    const gate = getSearchGate();
+    if (!searching) {
+      gate.invalidate();
+      setSearchResults([]);
+      setSearchCursor(null);
+      setSearchHasMore(false);
+      setSearchLoading(false);
+      setSearchLoadingMore(false);
+      setSearchError(null);
+      setLoadedSearchKey("");
+      return;
+    }
+    const token = gate.next();
+    const key = searchKey;
+    setSearchLoading(true);
+    setSearchError(null);    const params = new URLSearchParams({ q: activeQuery, status: filter });
+    if (selectedTagIds.length > 0) params.set("tags", selectedTagIds.join(","));
+    if (selectedCompany) params.set("company", selectedCompany);
+    if (selectedFlowId) params.set("flow", selectedFlowId);
+    if (selectedMemberIds.length > 0)
+      params.set("members", selectedMemberIds.join(","));
+    if (searchDateRange) {
+      params.set("from", searchDateRange.from.toISOString());
+      params.set("to", searchDateRange.to.toISOString());
+    }
+    params.set("limit", String(SEARCH_PAGE_SIZE));
+    (async () => {
+      try {
+        const res = await fetch(`/api/inbox/search?${params.toString()}`);
+        const json = (await res.json().catch(() => null)) as {
+          conversations?: Conversation[];
+          has_more?: boolean;
+          next_cursor?: string | null;
+          error?: string;
+        } | null;
+        if (!gate.isCurrent(token)) return;
+        if (!res.ok || !json || !Array.isArray(json.conversations)) {
+          throw new Error(json?.error || "Search failed. Please try again.");
+        }
+        const merged = mergeSearchPage(
+          [],
+          {
+            key,
+            items: json.conversations,
+            hasMore: !!json.has_more,
+            nextCursor: json.next_cursor ?? null,
+          },
+          key,
+        );
+        setSearchResults(merged ?? []);
+        setSearchCursor(json.next_cursor ?? null);
+        setSearchHasMore(!!json.has_more);
+        setLoadedSearchKey(key);
+      } catch (err) {
+        if (!gate.isCurrent(token)) return;
+        setSearchResults([]);
+        setSearchCursor(null);
+        setSearchHasMore(false);
+        setSearchError(
+          err instanceof Error ? err.message : "Search failed. Please try again.",
+        );
+      } finally {
+        if (gate.isCurrent(token)) setSearchLoading(false);
+      }
+    })();
+    // `searchKey` already captures every input (query + filters +
+    // date range); listing them individually would only risk drift.
+    // `searchRetry` forces a refetch of the identical key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searching, searchKey, resyncToken, searchRetry]);
+
   // Company options are derived from the loaded conversations — there's no
   // separate companies table, and only companies with a live conversation
   // are worth offering as an inbox filter.
@@ -283,6 +411,12 @@ export function ConversationList({
   }, [tags]);
 
   const filtered = useMemo(() => {
+    // Search mode: the server already applied the text match AND every
+    // active filter (status/tags/company/flow/team/date). Applying them
+    // again client-side would double-filter, so search results go
+    // straight to pin partitioning below.
+    if (searching) return searchResults;
+
     let result = conversations;
     const dateRange = getConversationDateRange({
       filter: dateFilter,
@@ -324,24 +458,19 @@ export function ConversationList({
       );
     }
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter((c) => {
-        const name = c.contact?.name?.toLowerCase() ?? "";
-        const phone = c.contact?.phone?.toLowerCase() ?? "";
-        const lastMsg = c.last_message_text?.toLowerCase() ?? "";
-        return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
-      });
-    }
+    // NOTE: no client-side text search here — all text matching runs
+    // server-side (see the search effect above). The old
+    // `conversations.filter(...)` only ever saw the loaded window.
 
     return result;
   }, [
     conversations,
+    searching,
+    searchResults,
     dateFilter,
     customFrom,
     customTo,
     filter,
-    search,
     selectedTagIds,
     selectedCompany,
     selectedFlowId,
@@ -356,6 +485,120 @@ export function ConversationList({
     () => partitionPinnedConversations(filtered, pinnedAt),
     [filtered, pinnedAt]
   );
+
+  // Realtime freshness for search snapshots: merge live scalar fields
+  // (preview text, timestamps, unread, status) into visible search
+  // rows by id. Never inserts, removes, or reorders — the search set
+  // stays exactly what the server returned.
+  useEffect(() => {
+    if (searchResults.length === 0) return;
+    setSearchResults((prev) => {
+      if (prev.length === 0) return prev;
+      const live = new Map(conversations.map((c) => [c.id, c]));
+      let changed = false;
+      const next = prev.map((r) => {
+        const l = live.get(r.id);
+        if (
+          !l ||
+          (l.last_message_text === r.last_message_text &&
+            l.last_message_at === r.last_message_at &&
+            l.unread_count === r.unread_count &&
+            l.status === r.status)
+        ) {
+          return r;
+        }
+        changed = true;
+        return {
+          ...r,
+          last_message_text: l.last_message_text,
+          last_message_at: l.last_message_at,
+          unread_count: l.unread_count,
+          status: l.status,
+          contact: l.contact ?? r.contact,
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [conversations, searchResults.length]);
+
+  // Next search page. Guarded by the same sequence: a newer search (or
+  // refresh) invalidates the token, so a late page for an old query is
+  // discarded instead of appended. Duplicates are skipped by id.
+  const handleLoadMore = useCallback(() => {
+    if (!searching || !searchHasMore || searchLoadingMore || !searchCursor) {
+      return;
+    }
+    const gate = getSearchGate();
+    const token = gate.next();
+    const key = searchKey;
+    const cursor = searchCursor;
+    setSearchLoadingMore(true);
+    const params = new URLSearchParams({ q: activeQuery, status: filter });
+    if (selectedTagIds.length > 0) params.set("tags", selectedTagIds.join(","));
+    if (selectedCompany) params.set("company", selectedCompany);
+    if (selectedFlowId) params.set("flow", selectedFlowId);
+    if (selectedMemberIds.length > 0)
+      params.set("members", selectedMemberIds.join(","));
+    if (searchDateRange) {
+      params.set("from", searchDateRange.from.toISOString());
+      params.set("to", searchDateRange.to.toISOString());
+    }
+    params.set("limit", String(SEARCH_PAGE_SIZE));
+    params.set("cursor", cursor);
+    (async () => {
+      try {
+        const res = await fetch(`/api/inbox/search?${params.toString()}`);
+        const json = (await res.json().catch(() => null)) as {
+          conversations?: Conversation[];
+          has_more?: boolean;
+          next_cursor?: string | null;
+          error?: string;
+        } | null;
+        if (!gate.isCurrent(token)) return;
+        if (!res.ok || !json || !Array.isArray(json.conversations)) {
+          throw new Error(json?.error || "Search failed. Please try again.");
+        }
+        setSearchResults((prev) => {
+          const merged = mergeSearchPage(
+            prev,
+            {
+              key,
+              items: json.conversations ?? [],
+              hasMore: !!json.has_more,
+              nextCursor: json.next_cursor ?? null,
+            },
+            key,
+          );
+          return merged ?? prev;
+        });
+        setSearchCursor(json.next_cursor ?? null);
+        setSearchHasMore(!!json.has_more);
+        setSearchError(null);
+      } catch (err) {
+        if (!gate.isCurrent(token)) return;
+        setSearchError(
+          err instanceof Error ? err.message : "Search failed. Please try again.",
+        );
+      } finally {
+        if (gate.isCurrent(token)) setSearchLoadingMore(false);
+      }
+    })();
+    // `searchKey`/`searchCursor` snapshots are captured above; the
+    // gate token covers staleness. Deps list the live inputs.
+  }, [
+    searching,
+    searchHasMore,
+    searchLoadingMore,
+    searchCursor,
+    searchKey,
+    activeQuery,
+    filter,
+    selectedTagIds,
+    selectedCompany,
+    selectedFlowId,
+    selectedMemberIds,
+    searchDateRange,
+  ]);
 
   const setPinBusy = useCallback((id: string, busy: boolean) => {
     setPinBusyIds((prev) => {
@@ -513,6 +756,15 @@ export function ConversationList({
 
   const handleSelect = useCallback(
     (conv: Conversation) => {
+      // Mirror the parent's optimistic unread reset inside search
+      // snapshots so the opened row clears immediately there too.
+      setSearchResults((prev) =>
+        prev.some((c) => c.id === conv.id && c.unread_count > 0)
+          ? prev.map((c) =>
+              c.id === conv.id ? { ...c, unread_count: 0 } : c,
+            )
+          : prev,
+      );
       onSelect(conv);
     },
     [onSelect]
@@ -520,6 +772,10 @@ export function ConversationList({
 
   const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
   const activeFlow = flows.find((f) => f.id === selectedFlowId);
+  const activeFlowName =
+    selectedFlowId === NO_FLOW_FILTER_ID
+      ? "No flow"
+      : (activeFlow?.name ?? "Flow");
   const activeDateFilter = DATE_FILTER_OPTIONS.find(
     (o) => o.value === dateFilter
   );
@@ -546,6 +802,14 @@ export function ConversationList({
             placeholder="Search conversations..."
             className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 pl-9 text-sm"
           />
+          {searchLoading && (
+            <span
+              aria-label="Searching..."
+              className="absolute top-1/2 right-3 -translate-y-1/2"
+            >
+              <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" />
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-1">
@@ -764,7 +1028,7 @@ export function ConversationList({
               >
                 <Workflow className="h-3 w-3" />
                 <span className="max-w-24 truncate">
-                  {activeFlow?.name ?? "Flow"}
+                  {activeFlowName}
                 </span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
               </DropdownMenuTrigger>
@@ -782,6 +1046,17 @@ export function ConversationList({
                   )}
                 >
                   All flows
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setSelectedFlowId(NO_FLOW_FILTER_ID)}
+                  className={cn(
+                    "text-sm",
+                    selectedFlowId === NO_FLOW_FILTER_ID
+                      ? "text-primary"
+                      : "text-popover-foreground"
+                  )}
+                >
+                  No flow
                 </DropdownMenuItem>
                 {flows.map((flow) => (
                   <DropdownMenuItem
@@ -885,7 +1160,7 @@ export function ConversationList({
               >
                 <Workflow className="h-3 w-3 shrink-0" />
                 <span className="max-w-24 truncate">
-                  {activeFlow?.name ?? "Flow"}
+                  {activeFlowName}
                 </span>
                 <X className="h-3 w-3" />
               </button>
@@ -939,18 +1214,21 @@ export function ConversationList({
           space — the list then overflows and gets clipped by the
           parent's overflow-hidden with no scrollbar (issue #229). */}
       <ScrollArea className="min-h-0 flex-1">
-        {loading ? (
+        {loading || (searching && searchLoading && filtered.length === 0) ? (
           <div className="flex items-center justify-center py-12">
             <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
             <p className="text-muted-foreground text-sm">
-              {hasDateFilter
-                ? "No chats found for this date."
-                : "No conversations found"}
+              {searching
+                ? searchError ??
+                  `No conversations found for "${activeQuery}"`
+                : hasDateFilter
+                  ? "No chats found for this date."
+                  : "No conversations found"}
             </p>
-            {hasDateFilter && (
+            {!searching && hasDateFilter && (
               <button
                 type="button"
                 onClick={clearDateFilter}
@@ -959,9 +1237,24 @@ export function ConversationList({
                 Clear date filter
               </button>
             )}
+            {searching && searchError && (
+              <button
+                type="button"
+                onClick={() => setSearchRetry((n) => n + 1)}
+                className="text-primary mt-2 text-xs hover:underline"
+              >
+                Retry search
+              </button>
+            )}
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div
+            className={
+              searching && searchLoading && loadedSearchKey !== searchKey
+                ? "flex flex-col opacity-50 transition-opacity"
+                : "flex flex-col"
+            }
+          >
             {/* Pinned chats float to the top (only those matching the
                 current search/filters). No section labels — a thin
                 divider separates them from the rest, WhatsApp-style. */}
@@ -995,6 +1288,38 @@ export function ConversationList({
                 onTogglePin={handleTogglePin}
               />
             ))}
+
+            {/* Search pagination — normal list stays unbounded as
+                before; only search pages (25 at a time). */}
+            {searching && searchHasMore && (
+              <div className="flex justify-center px-3 py-3">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={searchLoadingMore}
+                  className="text-primary inline-flex h-8 items-center gap-2 rounded-md px-3 text-xs font-medium transition-colors hover:bg-muted disabled:cursor-wait disabled:opacity-70"
+                >
+                  {searchLoadingMore && (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  )}
+                  {searchLoadingMore
+                    ? "Loading more…"
+                    : `Load more (${filtered.length} shown)`}
+                </button>
+              </div>
+            )}
+            {searching && searchError && filtered.length > 0 && (
+              <div className="px-4 py-3 text-center">
+                <p className="text-muted-foreground text-xs">{searchError}</p>
+                <button
+                  type="button"
+                  onClick={() => setSearchRetry((n) => n + 1)}
+                  className="text-primary mt-1 text-xs hover:underline"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
         )}
       </ScrollArea>

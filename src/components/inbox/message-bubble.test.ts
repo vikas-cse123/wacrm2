@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "@/types";
-import { interactiveRenderKind } from "./message-bubble";
+import { documentDisplayName, interactiveRenderKind } from "./message-bubble";
 
 function msg(overrides: Partial<Message>): Message {
   return {
@@ -82,5 +82,29 @@ describe("interactiveRenderKind", () => {
     expect(
       interactiveRenderKind(msg({ content_type: "text", content_text: "hi" })),
     ).toEqual({ kind: "plain", buttons: [] });
+  });
+});
+
+describe("documentDisplayName", () => {
+  it("prefers the persisted original filename", () => {
+    expect(
+      documentDisplayName({
+        media_file_name: "invoice.pdf",
+        content_text: "Q3 report",
+      }),
+    ).toBe("invoice.pdf");
+  });
+
+  it("falls back to the caption (inbound docs store caption||filename there)", () => {
+    expect(
+      documentDisplayName({ media_file_name: null, content_text: "Q3 report" }),
+    ).toBe("Q3 report");
+  });
+
+  it("falls back to a generic label when nothing is stored", () => {
+    expect(documentDisplayName({})).toBe("Document");
+    expect(
+      documentDisplayName({ media_file_name: "  ", content_text: "  " }),
+    ).toBe("Document");
   });
 });

@@ -423,6 +423,7 @@ export async function sendMessageToConversation(
       content_type: messageType,
       content_text: persistedContentText,
       media_url: mediaUrl || null,
+      media_file_name: filename || null,
       template_name: templateName || null,
       message_id: waMessageId,
       status: 'sent',

@@ -57,6 +57,7 @@ import {
   type NodeType,
 } from './shared';
 import { NodeConfigForm } from './forms/node-config-form';
+import { useAccountTags } from './forms/tag-select';
 import { NodeKeySelect } from './forms/fields';
 import { IssueLine } from './validation-panel';
 import { useFlowEditor, type BuilderState } from './flow-editor-state';
@@ -584,7 +585,15 @@ function NodeCard({
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   const hasError = issues.some((i) => i.severity === 'error');
-  const preview = summarizeNode(node);
+  // Tag names for set_tag / condition previews. Same cached
+  // account-scoped source as the TagSelect dropdown — one fetch per
+  // builder session, shared across all cards via the module cache.
+  const { tags } = useAccountTags();
+  const tagNames = useMemo(
+    () => new Map(tags.map((t) => [t.id, t.name] as const)),
+    [tags],
+  );
+  const preview = summarizeNode(node, { tagNames });
   return (
     <div
       ref={cardRef}

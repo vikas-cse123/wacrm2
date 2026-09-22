@@ -88,6 +88,7 @@ vi.mock("./admin-client", () => {
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
+  engineSendMedia,
 } from "./meta-send";
 
 const state = h.state;
@@ -181,5 +182,59 @@ describe("engineSendInteractiveButtons — interactive_buttons persistence", () 
     expect(row.content_type).toBe("interactive");
     expect(row.sender_type).toBe("bot");
     expect(row).not.toHaveProperty("interactive_buttons");
+  });
+});
+
+describe("engineSendMedia — media reference persistence", () => {
+  beforeEach(() => {
+    state.messageInserts = [];
+  });
+
+  function mediaArgs() {
+    return {
+      accountId: "acc-1",
+      userId: "u1",
+      conversationId: "conv-1",
+      contactId: "c1",
+      link: "https://storage.example/flow-media/invoice.pdf",
+    };
+  }
+
+  it("persists the Storage link + filename so the Inbox can render the file", async () => {
+    await engineSendMedia({
+      ...mediaArgs(),
+      kind: "document",
+      caption: "Your invoice",
+      filename: "invoice.pdf",
+    });
+
+    expect(state.messageInserts).toHaveLength(1);
+    const row = state.messageInserts[0];
+    expect(row.sender_type).toBe("bot");
+    expect(row.content_type).toBe("document");
+    expect(row.content_text).toBe("Your invoice");
+    // The reference, not a copy: same public link Meta fetched.
+    expect(row.media_url).toBe(
+      "https://storage.example/flow-media/invoice.pdf",
+    );
+    expect(row.media_file_name).toBe("invoice.pdf");
+    expect(row.message_id).toBe("wamid.media-1");
+    expect(row.status).toBe("sent");
+  });
+
+  it("stores null filename when the send carries none (image)", async () => {
+    await engineSendMedia({
+      ...mediaArgs(),
+      kind: "image",
+      link: "https://storage.example/flow-media/photo.jpg",
+      caption: "Beach resort",
+    });
+
+    const row = state.messageInserts[0];
+    expect(row.content_type).toBe("image");
+    expect(row.media_url).toBe(
+      "https://storage.example/flow-media/photo.jpg",
+    );
+    expect(row.media_file_name).toBeNull();
   });
 });

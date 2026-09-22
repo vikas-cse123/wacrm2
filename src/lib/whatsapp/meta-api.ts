@@ -1184,7 +1184,8 @@ export interface DownloadMediaArgs {
 
 /**
  * Fetch the binary bytes for a media URL obtained from getMediaUrl.
- * Step two of the media-proxy flow.
+ * Loads the whole file into memory — prefer
+ * {@link downloadMediaStream} when serving browsers.
  */
 export async function downloadMedia(
   args: DownloadMediaArgs
@@ -1200,4 +1201,245 @@ export async function downloadMedia(
     response.headers.get('content-type') || 'application/octet-stream'
   const buffer = Buffer.from(await response.arrayBuffer())
   return { buffer, contentType }
+}
+
+export interface DownloadMediaStreamArgs extends DownloadMediaArgs {
+  /**
+   * Raw `Range` request header to forward to Meta (e.g.
+   * `bytes=0-1048575`). Enables video/audio seeking and progressive
+   * PDF rendering without downloading the whole file.
+   */
+  range?: string | null
+}
+
+/**
+ * Open a streaming fetch to a Meta media URL. Returns the upstream
+ * response untouched so the caller can pipe `body` straight through
+ * to the browser — bytes are never buffered in Node memory.
+ * A forwarded Range yields Meta's 206 + Content-Range, which the
+ * caller must relay for the browser to accept the partial content.
+ */
+export async function downloadMediaStream(
+  args: DownloadMediaStreamArgs
+): Promise<Response> {
+  const { downloadUrl, accessToken, range } = args
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+  }
+  if (range) headers['Range'] = range
+  const response = await fetch(downloadUrl, { headers })
+  if (!response.ok && response.status !== 206) {
+    throw new Error(`Media download failed: ${response.status}`)
+  }
+  return response
+}
+
+// ============================================================
+// WhatsApp Business Profile (Settings → WhatsApp → Business Profile)
+// ============================================================
+//
+// Meta remains the source of truth: reads come from
+// GET /{phone-number-id}/whatsapp_business_profile, writes go to
+// POST on the same edge, and the photo uses the two-step upload
+// (POST /{phone-number-id}/profile/photo → handle → set via the
+// profile edge). Nothing is duplicated into our database.
+//
+// Field support (Graph API v21.0 business-profile edge):
+//   - about, address, description, email, vertical, websites —
+//     readable + writable.
+//   - profile_picture_url — readable only; writes go through
+//     profile_picture_handle (from the photo upload).
+//   - display name — NOT writable on this edge. The verified name
+//     is read from the phone-number object (verified_name); renames
+//     need Meta review in WhatsApp Manager, so the UI shows the
+//     name read-only with a Manager link. No fake approval states.
+
+export interface BusinessProfile {
+  about: string | null
+  address: string | null
+  description: string | null
+  email: string | null
+  /** Read-only render URL for the current photo (may be null). */
+  profile_picture_url: string | null
+  /** Industry vertical code, e.g. "PROF_SERVICES". May be null. */
+  vertical: string | null
+  /** Up to 2 website URLs. */
+  websites: string[]
+}
+
+/**
+ * Industry vertical codes accepted by the `vertical` field, per the
+ * Meta business-profile reference. The API is the final validator —
+ * an unknown CURRENT value from Meta is preserved and shown as-is
+ * rather than forced into this list.
+ */
+export const BUSINESS_VERTICALS: { code: string; label: string }[] = [
+  { code: 'AUTO', label: 'Automotive' },
+  { code: 'APPAREL', label: 'Apparel & Clothing' },
+  { code: 'BEAUTY', label: 'Beauty & Personal Care' },
+  { code: 'EDU', label: 'Education' },
+  { code: 'ENTERTAIN', label: 'Entertainment' },
+  { code: 'EVENT_PLAN', label: 'Event Planning' },
+  { code: 'FINANCE', label: 'Finance' },
+  { code: 'GROCERY', label: 'Grocery & Convenience' },
+  { code: 'GOVT', label: 'Government' },
+  { code: 'HOTEL', label: 'Hotel & Lodging' },
+  { code: 'HEALTH', label: 'Health & Medical' },
+  { code: 'NONPROFIT', label: 'Nonprofit' },
+  { code: 'PROF_SERVICES', label: 'Professional Services' },
+  { code: 'RETAIL', label: 'Retail & Shopping' },
+  { code: 'TRAVEL', label: 'Travel & Transportation' },
+  { code: 'RESTAURANT', label: 'Restaurant & Food' },
+  { code: 'NOT_A_BIZ', label: 'Not a business' },
+  { code: 'OTHER', label: 'Other' },
+  { code: 'UNDEFINED', label: 'Unspecified' },
+]
+
+export const BUSINESS_PROFILE_LIMITS = {
+  about: 512,
+  description: 512,
+  address: 256,
+  email: 255,
+  websitesMax: 2,
+  photoMaxBytes: 5 * 1024 * 1024,
+} as const
+
+export const BUSINESS_PROFILE_PHOTO_MIMES = ['image/jpeg', 'image/png'] as const
+
+const BUSINESS_PROFILE_FIELDS =
+  'about,address,description,email,profile_picture_url,vertical,websites'
+
+interface RawBusinessProfile {
+  about?: string | null
+  address?: string | null
+  description?: string | null
+  email?: string | null
+  profile_picture_url?: string | null
+  vertical?: string | null
+  websites?: string[] | null
+}
+
+function normalizeBusinessProfile(raw: RawBusinessProfile): BusinessProfile {
+  return {
+    about: raw.about ?? null,
+    address: raw.address ?? null,
+    description: raw.description ?? null,
+    email: raw.email ?? null,
+    profile_picture_url: raw.profile_picture_url ?? null,
+    vertical: raw.vertical ?? null,
+    websites: Array.isArray(raw.websites)
+      ? raw.websites.filter((w): w is string => typeof w === 'string')
+      : [],
+  }
+}
+
+export interface GetBusinessProfileArgs {
+  phoneNumberId: string
+  accessToken: string
+}
+
+/** Read the current business profile from Meta. */
+export async function getBusinessProfile(
+  args: GetBusinessProfileArgs
+): Promise<BusinessProfile> {
+  const { phoneNumberId, accessToken } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/whatsapp_business_profile?fields=${BUSINESS_PROFILE_FIELDS}`
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  // Meta wraps the profile as { data: [profile] }; unwrap
+  // defensively so a bare profile object keeps working too.
+  const json = (await response.json()) as RawBusinessProfile & {
+    data?: unknown;
+  };
+  const listed = Array.isArray(json.data) ? json.data[0] : undefined;
+  const root: RawBusinessProfile =
+    listed && typeof listed === "object"
+      ? (listed as RawBusinessProfile)
+      : json;
+  return normalizeBusinessProfile(root)
+}
+
+export interface BusinessProfileUpdate {
+  about?: string | null
+  address?: string | null
+  description?: string | null
+  email?: string | null
+  /** Handle from uploadProfilePhoto (NOT a URL). */
+  profile_picture_handle?: string
+  vertical?: string | null
+  websites?: string[]
+}
+
+export interface UpdateBusinessProfileArgs {
+  phoneNumberId: string
+  accessToken: string
+  fields: BusinessProfileUpdate
+}
+
+/**
+ * Write business-profile fields to Meta. Only the keys present in
+ * `fields` are sent — callers diff first (see
+ * buildBusinessProfileUpdate) so unchanged fields are never rewritten.
+ */
+export async function updateBusinessProfile(
+  args: UpdateBusinessProfileArgs
+): Promise<void> {
+  const { phoneNumberId, accessToken, fields } = args
+  const response = await fetch(
+    `${META_API_BASE}/${phoneNumberId}/whatsapp_business_profile`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ messaging_product: 'whatsapp', ...fields }),
+    },
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+}
+
+export interface UploadProfilePhotoArgs {
+  phoneNumberId: string
+  accessToken: string
+  fileName: string
+  mimeType: string
+  bytes: Uint8Array
+}
+
+/**
+ * Upload a profile photo to Meta. Returns the handle to pass as
+ * `profile_picture_handle` in updateBusinessProfile — the bytes are
+ * never stored locally.
+ */
+export async function uploadProfilePhoto(
+  args: UploadProfilePhotoArgs
+): Promise<{ handle: string }> {
+  const { phoneNumberId, accessToken, fileName, mimeType, bytes } = args
+  const form = new FormData()
+  form.append(
+    'file',
+    new Blob([bytes as unknown as BlobPart], { type: mimeType }),
+    fileName,
+  )
+  const response = await fetch(
+    `${META_API_BASE}/${phoneNumberId}/profile/photo`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    },
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = (await response.json()) as { handle?: string }
+  if (!data.handle) throw new Error('Meta did not return a photo handle')
+  return { handle: data.handle }
 }

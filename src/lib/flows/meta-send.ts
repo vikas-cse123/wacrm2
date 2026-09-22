@@ -156,6 +156,12 @@ interface SendMediaEngineArgs {
   caption?: string
   /** Document-only; ignored by Meta for image/video. */
   filename?: string
+  /**
+   * MIME type when the caller knows it (node configs currently don't
+   * carry one — persisted as NULL). Optional so existing callers
+   * (flows, automations) don't change.
+   */
+  mimeType?: string
 }
 
 /**
@@ -237,12 +243,18 @@ export async function engineSendMedia(
   // messages_content_type_check constraint (migration 001 + 010).
   // content_text carries the caption (or empty) so the conversation
   // list preview shows something meaningful when the user glances at it.
+  // media_url persists the SAME public Storage link Meta fetched —
+  // a reference, not a copy — so the Inbox can render the media
+  // without re-downloading anything at send time.
   const preview = args.caption?.trim() || `[${args.kind}]`
   const { error: msgErr } = await db.from('messages').insert({
     conversation_id: args.conversationId,
     sender_type: 'bot',
     content_type: args.kind,
     content_text: args.caption ?? null,
+    media_url: args.link,
+    media_file_name: args.filename ?? null,
+    media_mime_type: args.mimeType ?? null,
     message_id: waMessageId,
     status: 'sent',
   })

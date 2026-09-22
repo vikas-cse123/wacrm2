@@ -77,7 +77,7 @@ export default function BroadcastsPage() {
       if (fetchError) throw fetchError;
       setBroadcasts(data ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load broadcasts');
+      setError(err instanceof Error ? err.message : 'Failed to load bulk messages');
     } finally {
       setLoading(false);
     }
@@ -154,7 +154,7 @@ export default function BroadcastsPage() {
       {anySending && (
         <div
           role="progressbar"
-          aria-label="Broadcast in progress"
+          aria-label="Bulk message in progress"
           className="broadcast-indeterminate fixed inset-x-0 top-0 z-40 h-0.5 overflow-hidden bg-muted"
         >
           <div className="broadcast-indeterminate-bar h-0.5 bg-primary" />
@@ -179,37 +179,37 @@ export default function BroadcastsPage() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Broadcasts</h1>
+          <h1 className="text-2xl font-bold text-foreground">Bulk Messages</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Send bulk messages to your contacts using approved templates.
           </p>
         </div>
         <GatedButton
           canAct={canCreate}
-          gateReason="create broadcasts"
+          gateReason="create bulk messages"
           onClick={() => router.push('/broadcasts/new')}
           className="bg-primary text-primary-foreground hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" />
-          New Broadcast
+          New Bulk Message
         </GatedButton>
       </div>
 
       {broadcasts.length === 0 ? (
         <div className="flex h-64 flex-col items-center justify-center rounded-xl border border-border bg-card">
           <Radio className="mb-3 h-10 w-10 text-muted-foreground" />
-          <p className="text-sm font-medium text-foreground">No broadcasts yet</p>
+          <p className="text-sm font-medium text-foreground">No bulk messages yet</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Create your first broadcast to reach your contacts at scale.
+            Create your first bulk message to reach your contacts at scale.
           </p>
           <GatedButton
             canAct={canCreate}
-            gateReason="create broadcasts"
+            gateReason="create bulk messages"
             onClick={() => router.push('/broadcasts/new')}
             className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <Plus className="h-4 w-4" />
-            New Broadcast
+            New Bulk Message
           </GatedButton>
         </div>
       ) : (

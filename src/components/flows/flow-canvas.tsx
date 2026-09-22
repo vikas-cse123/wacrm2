@@ -96,6 +96,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useFlowEditor } from './flow-editor-state';
 import { NodeConfigForm } from './forms/node-config-form';
+import { useAccountTags } from './forms/tag-select';
 import { WebhookRow } from './forms/fields';
 
 // React-Flow node `data` payload — the bits our custom renderer needs.
@@ -138,8 +139,14 @@ function FlowNodeCard({ data, selected }: NodeProps) {
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   // Full-text canvas preview: no "…" cap, newlines preserved. The
-  // list view (flow-builder.tsx) keeps the short flavor.
-  const summary = summarizeNode(node, { full: true });
+  // list view (flow-builder.tsx) keeps the short flavor. Tag names
+  // resolve from the same cached account source as the dropdown.
+  const { tags } = useAccountTags();
+  const tagNames = useMemo(
+    () => new Map(tags.map((t) => [t.id, t.name] as const)),
+    [tags],
+  );
+  const summary = summarizeNode(node, { full: true, tagNames });
   const slots = outgoingSlots(node);
   // Start nodes are entry-only; nothing ever targets them, so they
   // don't need an incoming Handle. Every other node type accepts

@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { getOrCreateConversation } from '@/lib/conversations/get-or-create'
@@ -882,7 +882,7 @@ async function processMessage(
   }
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
+  const { contentText, mediaUrl, mediaType, mediaFileName, interactiveReplyId } =
     await parseMessageContent(message, accessToken)
 
   // Resolve swipe-reply context if present. A missing parent is fine —
@@ -904,19 +904,19 @@ async function processMessage(
   // Insert message — field names MUST match the messages table schema
   // (see supabase/migrations/001_initial_schema.sql):
   //   conversation_id, sender_type, content_type, content_text,
-  //   media_url, template_name, message_id, status, created_at
-  // `mediaType` is intentionally unused — the schema has no media_type
-  // column; the MIME type is only used to construct the proxy URL during
-  // parseMessageContent. Silence the unused-var warning:
-  void mediaType
+  //   media_url, media_file_name, media_mime_type, template_name,
+  //   message_id, status, created_at
+  // mediaType/mediaFileName are lightweight references (MIME +
+  // original filename) — no bytes ever touch the DB.
 
-  // The messages.content_type CHECK constraint (widened in migration 010
-  // to add 'interactive' for button/list taps) allows:
-  //   text, image, document, audio, video, location, template, interactive
+  // The messages.content_type CHECK constraint (widened in migrations
+  // 010 + 077) allows:
+  //   text, image, document, audio, video, sticker, location,
+  //   template, interactive
   // Map incoming WhatsApp types that aren't in that list to the closest
   // allowed value so the INSERT doesn't fail with a constraint error.
   const ALLOWED_CONTENT_TYPES = new Set([
-    'text', 'image', 'document', 'audio', 'video',
+    'text', 'image', 'document', 'audio', 'video', 'sticker',
     'location', 'template', 'interactive',
   ])
   const contentType = ALLOWED_CONTENT_TYPES.has(message.type)
@@ -992,6 +992,8 @@ async function processMessage(
     content_type: contentType,
     content_text: contentText,
     media_url: mediaUrl,
+    media_file_name: mediaFileName,
+    media_mime_type: mediaType,
     message_id: message.id,
     status: 'delivered',
     created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
@@ -1179,6 +1181,9 @@ async function parseMessageContent(
   contentText: string | null
   mediaUrl: string | null
   mediaType: string | null
+  /** Original filename for inbound documents (Meta provides it
+   *  transiently); null for everything else. */
+  mediaFileName: string | null
   /**
    * For interactive button / list replies: the stable id of the tapped
    * option (whatever we put on the button when sending). Used by the
@@ -1213,6 +1218,7 @@ async function parseMessageContent(
     contentText: null,
     mediaUrl: null,
     mediaType: null,
+    mediaFileName: null,
     interactiveReplyId: null,
   }
 
@@ -1250,6 +1256,7 @@ async function parseMessageContent(
             message.document.caption || message.document.filename || null,
           mediaUrl: await verifyAndBuildUrl(message.document.id),
           mediaType: message.document.mime_type,
+          mediaFileName: message.document.filename || null,
         }
       }
       return empty

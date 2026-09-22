@@ -129,6 +129,10 @@ export const RATE_LIMITS = {
    *  click a few times in a burst while curating their pinned list —
    *  60/min is well above any human pace while bounding a stuck loop. */
   pin: { limit: 60, windowMs: 60_000 },
+  /** Inbox search, per user. Debounced typing peaks at a few req/s;
+   *  120/min matches the public API budget and bounds a stuck
+   *  type-ahead loop without ever biting a human. */
+  search: { limit: 120, windowMs: 60_000 },
   /** Invitation peek (public, per-IP). 30/min lets a forwarded link
    *  retry a handful of times under flaky connectivity without
    *  enabling brute-force token enumeration. With 256-bit tokens the

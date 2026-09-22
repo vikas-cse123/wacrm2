@@ -347,9 +347,33 @@ function fullText(s: string): string {
   return s.replace(/[^\S\n]+/g, ' ').trim();
 }
 
+/**
+ * Tag UUID → display text. Prefers the resolved name; falls back to
+ * the (truncated) UUID so unresolvable IDs stay visible without
+ * touching stored config.
+ */
+function tagDisplay(
+  tagId: string,
+  names: Map<string, string> | undefined,
+  max: number,
+): string {
+  const name = names?.get(tagId);
+  return truncate(name ?? tagId, max);
+}
+
 export function summarizeNode(
   node: BuilderNode,
-  opts?: { full?: boolean },
+  opts?: {
+    full?: boolean;
+    /**
+     * Tag UUID → display name. When provided, set_tag / condition
+     * previews render the human-readable name ("Add tag testing1").
+     * Resolution is presentation-only: configs keep the UUID, and an
+     * unresolvable UUID falls back to the truncated-ID display so
+     * deleted tags never rewrite stored data.
+     */
+    tagNames?: Map<string, string>;
+  },
 ): string | null {
   const cfg = node.config;
   // Shared text-picker so both flavors stay in sync: `full` swaps the
@@ -453,7 +477,7 @@ export function summarizeNode(
             : 'var';
       const subjectStr =
         subject === 'tag'
-          ? `has tag ${t(subjectKey, 24)}`
+          ? `has tag ${tagDisplay(subjectKey, opts?.tagNames, 24)}`
           : `${subject}.${subjectKey}`;
       const op =
         cfg.operator === 'equals'
@@ -475,12 +499,12 @@ export function summarizeNode(
     case 'set_tag': {
       const mode = cfg.mode === 'remove' ? 'Remove' : 'Add';
       const tagId = typeof cfg.tag_id === 'string' ? cfg.tag_id : '';
-      // No tag name available without an async lookup here; show a
-      // short prefix of the UUID so users can disambiguate between
-      // multiple set_tag nodes at a glance.
-      return tagId
-        ? `${mode} tag ${tagId.slice(0, 8)}…`
-        : `${mode} tag (none picked)`;
+      if (!tagId) return `${mode} tag (none picked)`;
+      const name = opts?.tagNames?.get(tagId);
+      if (name) return `${mode} tag ${t(name, 40)}`;
+      // Name unresolvable (tags still loading, or the tag was deleted
+      // on another device): show a short ID prefix, never rewrite cfg.
+      return `${mode} tag ${tagId.slice(0, 8)}…`;
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';

@@ -56,6 +56,7 @@ import { ImportDateRangePopover } from "../import-date-range-popover";
 import { slugify, type BuilderNode } from "../shared";
 import { useFlowEditor } from "../flow-editor-state";
 import { NextNodeRow, NodeKeySelect, TextRow } from "./fields";
+import { TagSelect, useAccountTags } from "./tag-select";
 
 interface NodeConfigFormProps {
   node: BuilderNode;
@@ -931,12 +932,6 @@ interface ConditionCfg {
   false_next?: string;
 }
 
-interface UserTag {
-  id: string;
-  name: string;
-  color?: string;
-}
-
 function ConditionForm({
   cfg,
   allNodes,
@@ -948,7 +943,7 @@ function ConditionForm({
   currentKey: string;
   onUpdateConfig: (patch: Record<string, unknown>) => void;
 }) {
-  const tags = useUserTags();
+  const { tags, loading: tagsLoading } = useAccountTags();
 
   const subject = cfg.subject ?? "var";
   const operator = cfg.operator ?? "equals";
@@ -983,22 +978,13 @@ function ConditionForm({
                 ? "Tag"
                 : "Field"}
           </label>
-          {subject === "tag" && tags.length > 0 ? (
-            <Select
+          {subject === "tag" ? (
+            <TagSelect
               value={cfg.subject_key ?? ""}
-              onValueChange={(v) => onUpdateConfig({ subject_key: v })}
-            >
-              <SelectTrigger className="bg-muted">
-                <SelectValue placeholder="Pick a tag…" />
-              </SelectTrigger>
-              <SelectContent>
-                {tags.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onChange={(subject_key) => onUpdateConfig({ subject_key })}
+              tags={tags}
+              loading={tagsLoading}
+            />
           ) : subject === "contact_field" ? (
             <Select
               value={cfg.subject_key ?? ""}
@@ -1105,7 +1091,7 @@ function SetTagForm({
   currentKey: string;
   onUpdateConfig: (patch: Record<string, unknown>) => void;
 }) {
-  const tags = useUserTags();
+  const { tags, loading: tagsLoading } = useAccountTags();
 
   return (
     <>
@@ -1129,30 +1115,12 @@ function SetTagForm({
         </div>
         <div>
           <label className="mb-1 block text-xs text-muted-foreground">Tag</label>
-          {tags.length > 0 ? (
-            <Select
-              value={cfg.tag_id ?? ""}
-              onValueChange={(v) => onUpdateConfig({ tag_id: v })}
-            >
-              <SelectTrigger className="bg-muted">
-                <SelectValue placeholder="Pick a tag…" />
-              </SelectTrigger>
-              <SelectContent>
-                {tags.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Input
-              value={cfg.tag_id ?? ""}
-              onChange={(e) => onUpdateConfig({ tag_id: e.target.value })}
-              placeholder="Tag UUID"
-              className="bg-muted font-mono text-xs"
-            />
-          )}
+          <TagSelect
+            value={cfg.tag_id ?? ""}
+            onChange={(tag_id) => onUpdateConfig({ tag_id })}
+            tags={tags}
+            loading={tagsLoading}
+          />
         </div>
       </div>
       <NextNodeRow
@@ -1164,32 +1132,6 @@ function SetTagForm({
       />
     </>
   );
-}
-
-/**
- * Shared loader for both `condition` (subject=tag) and `set_tag`.
- * Falls back to raw UUID input if the endpoint is absent on older
- * deployments — the form remains authorable in that case.
- */
-function useUserTags(): UserTag[] {
-  const [tags, setTags] = useState<UserTag[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/tags").catch(() => null);
-        if (!res || !res.ok) return;
-        const json = (await res.json()) as { tags?: UserTag[] };
-        if (!cancelled) setTags(json.tags ?? []);
-      } catch {
-        // Tags endpoint absent — caller falls back to raw input.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return tags;
 }
 
 // ============================================================
@@ -1794,12 +1736,6 @@ function EmailNotificationForm({
         <code className="rounded bg-muted px-1">{"{{flow.name}}"}</code> for
         contact / flow values.
       </p>
-
-      <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-        <p className="text-[11px] text-amber-400/90">
-          Sent in the background — email failures won&apos;t stop the flow.
-        </p>
-      </div>
 
       <NextNodeRow
         value={cfg.next_node_key ?? ""}

@@ -1,225 +1,172 @@
 "use client"
 
-import { useCallback, useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { useAuth } from '@/hooks/use-auth'
-import { formatCurrency } from '@/lib/currency'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { MessageCircle, MessagesSquare, UserPlus, Users } from 'lucide-react'
 import {
-  MessageSquare,
-  UserPlus,
-  DollarSign,
-  Send,
-} from 'lucide-react'
-
-import {
-  loadActivity,
-  loadConversationsSeries,
-  loadMetrics,
-  loadPipelineDonut,
-  loadResponseTime,
-} from '@/lib/dashboard/queries'
-import type {
-  ActivityItem,
-  ConversationsSeriesPoint,
-  MetricsBundle,
-  PipelineDonutData,
-  ResponseTimeSummary,
-} from '@/lib/dashboard/types'
-
-import { MetricCard } from '@/components/dashboard/metric-card'
+  getDashboardRange,
+  getYearRange,
+  toDateInputValue,
+  type DashboardDateFilter,
+} from '@/lib/dashboard/date-utils'
+import { loadDashboardAnalytics } from '@/lib/dashboard/analytics-client'
+import type { DashboardKpis, FlowBreakdownRow, MonthlyFlowMonth } from '@/lib/dashboard/types'
+import { DateFilter } from '@/components/dashboard/date-filter'
+import { KpiCard } from '@/components/dashboard/kpi-card'
+import { FlowBreakdown } from '@/components/dashboard/flow-breakdown'
+import { MonthlyChart } from '@/components/dashboard/monthly-chart'
 import { SkeletonCard } from '@/components/dashboard/skeleton'
-import { QuickActions } from '@/components/dashboard/quick-actions'
-import { ConversationsChart } from '@/components/dashboard/conversations-chart'
-import { PipelineDonut } from '@/components/dashboard/pipeline-donut'
-import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
-import { ActivityFeed } from '@/components/dashboard/activity-feed'
-
-type RangeDays = 7 | 30 | 90
 
 export default function DashboardPage() {
-  const { defaultCurrency } = useAuth()
-  const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
-  const [metricsLoading, setMetricsLoading] = useState(true)
+  const [filter, setFilter] = useState<DashboardDateFilter>('today')
+  const [customFrom, setCustomFrom] = useState(() => toDateInputValue(new Date()))
+  const [customTo, setCustomTo] = useState(() => toDateInputValue(new Date()))
 
-  const [range, setRange] = useState<RangeDays>(30)
-  // Keep a cache per range so switching tabs doesn't re-fetch what we
-  // already have. Ranges the user hasn't opened yet stay null and
-  // trigger a fetch on first view.
-  const [series, setSeries] = useState<Record<RangeDays, ConversationsSeriesPoint[] | null>>({
-    7: null,
-    30: null,
-    90: null,
-  })
-  const [seriesLoading, setSeriesLoading] = useState(true)
+  const currentYear = new Date().getFullYear()
+  const [year, setYear] = useState(currentYear)
+  const years = useMemo(() => {
+    const out: number[] = []
+    for (let y = currentYear - 3; y <= currentYear; y++) out.push(y)
+    return out
+  }, [currentYear])
 
-  const [pipeline, setPipeline] = useState<PipelineDonutData | null>(null)
-  const [pipelineLoading, setPipelineLoading] = useState(true)
+  const range = useMemo(
+    () => getDashboardRange(filter, new Date(), customFrom, customTo),
+    [filter, customFrom, customTo],
+  )
+  // One analytics request per (range, year): KPIs + flow breakdown +
+  // monthly uniques are aggregated server-side in a single RPC.
+  const requestKey = useMemo(
+    () =>
+      `${range.start.toISOString()}|${range.end.toISOString()}|${range.prevStart.toISOString()}|${range.prevEnd.toISOString()}|${year}`,
+    [range, year],
+  )
 
-  const [responseTime, setResponseTime] = useState<ResponseTimeSummary | null>(null)
-  const [responseTimeLoading, setResponseTimeLoading] = useState(true)
-
-  const [activity, setActivity] = useState<ActivityItem[] | null>(null)
-  const [activityLoading, setActivityLoading] = useState(true)
-
-  const loadAll = useCallback(() => {
-    const db = createClient()
-
-    // Kick everything off in parallel. Each block has its own
-    // setState + finally so a slow query doesn't hold up faster
-    // sections — each widget shows its own skeleton independently.
-    void loadMetrics(db)
-      .then((m) => setMetrics(m))
-      .catch((err) => console.error('[dashboard] metrics failed:', err))
-      .finally(() => setMetricsLoading(false))
-
-    void loadConversationsSeries(db, 30)
-      .then((s) => setSeries((prev) => ({ ...prev, 30: s })))
-      .catch((err) => console.error('[dashboard] series failed:', err))
-      .finally(() => setSeriesLoading(false))
-
-    void loadPipelineDonut(db)
-      .then((p) => setPipeline(p))
-      .catch((err) => console.error('[dashboard] pipeline failed:', err))
-      .finally(() => setPipelineLoading(false))
-
-    void loadResponseTime(db)
-      .then((r) => setResponseTime(r))
-      .catch((err) => console.error('[dashboard] response time failed:', err))
-      .finally(() => setResponseTimeLoading(false))
-
-    // Fetch up to 50 so the biggest page-size option in the feed
-    // (50 rows) is already in memory — switching sizes then becomes
-    // a pure client-side slice with no extra round trip.
-    void loadActivity(db, 50)
-      .then((a) => setActivity(a))
-      .catch((err) => console.error('[dashboard] activity failed:', err))
-      .finally(() => setActivityLoading(false))
-  }, [])
+  const [kpis, setKpis] = useState<DashboardKpis | null>(null)
+  const [flowRows, setFlowRows] = useState<FlowBreakdownRow[] | null>(null)
+  const [monthly, setMonthly] = useState<number[] | null>(null)
+  const [monthlyFlows, setMonthlyFlows] = useState<MonthlyFlowMonth[] | null>(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    loadAll()
-  }, [loadAll])
+    const ctrl = new AbortController()
+    setLoading(true)
+    const yearRange = getYearRange(year)
+    const tz =
+      typeof Intl !== 'undefined'
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        : 'UTC'
+    loadDashboardAnalytics(
+      {
+        startISO: range.start.toISOString(),
+        endISO: range.end.toISOString(),
+        prevStartISO: range.prevStart.toISOString(),
+        prevEndISO: range.prevEnd.toISOString(),
+        yearStartISO: yearRange.start.toISOString(),
+        yearEndISO: yearRange.end.toISOString(),
+        year,
+        tz,
+      },
+      ctrl.signal,
+    )
+      .then((d) => {
+        setKpis(d.kpis)
+        setFlowRows(d.flowRows)
+        setMonthly(d.monthly)
+        setMonthlyFlows(d.monthlyFlows)
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        console.error('[dashboard] analytics failed:', err)
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLoading(false)
+      })
+    return () => {
+      ctrl.abort()
+    }
+    // Re-run when the computed range or year changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestKey])
 
-  // Range switch handler — kept in an event callback (not an effect)
-  // so the setState calls stay out of the react-hooks/set-state-in-effect
-  // rule's way. The cached bucket check means switching back to a
-  // previously-viewed range is instant and doesn't re-fetch.
-  const handleRangeChange = useCallback(
-    (r: RangeDays) => {
-      setRange(r)
-      if (series[r] !== null) return
-      setSeriesLoading(true)
-      const db = createClient()
-      loadConversationsSeries(db, r)
-        .then((s) => setSeries((prev) => ({ ...prev, [r]: s })))
-        .catch((err) => console.error('[dashboard] series failed:', err))
-        .finally(() => setSeriesLoading(false))
-    },
-    [series],
-  )
+  const handleCustomApply = useCallback((from: string, to: string) => {
+    setCustomFrom(from)
+    setCustomTo(to)
+    setFilter('custom')
+  }, [])
+
+  const kpiLoading = loading || !kpis
+  const flowLoading = loading || flowRows == null
+  const monthlyLoading = loading || monthly == null
 
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Live analytics across conversations, contacts, deals, broadcasts, and automations.
-        </p>
+      {/* Header + date filter */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            WhatsApp performance for your travel agency — messages, contacts and flows.
+          </p>
+        </div>
+        <DateFilter
+          value={filter}
+          onChange={setFilter}
+          customFrom={customFrom}
+          customTo={customTo}
+          onCustomApply={handleCustomApply}
+        />
       </div>
 
-      {/* Metric cards */}
+      {/* KPI cards — only the four specified metrics */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {metricsLoading || !metrics ? (
+        {kpiLoading || !kpis ? (
           Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
         ) : (
           <>
-            <MetricCard
-              title="Active Conversations"
-              value={metrics.activeConversations.current.toLocaleString()}
-              icon={MessageSquare}
-              delta={{
-                sign: metrics.activeConversations.previous,
-                label: deltaLabel(metrics.activeConversations.previous, 'new today vs yesterday'),
-              }}
+            <KpiCard
+              title="Total Messages"
+              value={kpis.totalMessages.current}
+              icon={MessagesSquare}
+              previous={kpis.totalMessages.previous}
+              prevLabel={range.prevLabel}
             />
-            <MetricCard
-              title="New Contacts Today"
-              value={metrics.newContactsToday.current.toLocaleString()}
+            <KpiCard
+              title="Unique Contacts Messaged"
+              value={kpis.uniqueContacts.current}
+              icon={Users}
+              previous={kpis.uniqueContacts.previous}
+              prevLabel={range.prevLabel}
+            />
+            <KpiCard
+              title="New Contacts"
+              value={kpis.newContacts.current}
               icon={UserPlus}
-              delta={{
-                sign:
-                  metrics.newContactsToday.current - metrics.newContactsToday.previous,
-                label: deltaLabel(
-                  metrics.newContactsToday.current - metrics.newContactsToday.previous,
-                  'vs yesterday',
-                ),
-              }}
+              previous={kpis.newContacts.previous}
+              prevLabel={range.prevLabel}
             />
-            <MetricCard
-              title="Open Deals Value"
-              value={formatCurrency(metrics.openDealsValue, defaultCurrency)}
-              icon={DollarSign}
-              subtitle={`${metrics.openDealsCount} open deal${metrics.openDealsCount === 1 ? '' : 's'}`}
-            />
-            <MetricCard
-              title="Messages Sent Today"
-              value={metrics.messagesSentToday.current.toLocaleString()}
-              icon={Send}
-              delta={{
-                sign:
-                  metrics.messagesSentToday.current - metrics.messagesSentToday.previous,
-                label: deltaLabel(
-                  metrics.messagesSentToday.current - metrics.messagesSentToday.previous,
-                  'vs yesterday',
-                ),
-              }}
+            <KpiCard
+              title="New Conversations"
+              value={kpis.newConversations.current}
+              icon={MessageCircle}
+              previous={kpis.newConversations.previous}
+              prevLabel={range.prevLabel}
             />
           </>
         )}
       </div>
 
-      {/* Quick actions */}
-      <QuickActions />
+      {/* Primary: message breakdown by flow */}
+      <FlowBreakdown rows={flowRows} loading={flowLoading} rangeLabel={range.label} />
 
-      {/* Charts row */}
-      {/* items-stretch (the grid default) stretches the two columns to
-          match the tallest sibling; adding h-full on each wrapper and
-          on the inner panels makes both cards actually fill that
-          stretched height so their rounded borders line up. Without
-          this, the pipeline card rendered at its natural (shorter)
-          height while the line chart drove the row height. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        <div className="h-full lg:col-span-3">
-          <ConversationsChart
-            series={series}
-            loading={seriesLoading}
-            range={range}
-            onRangeChange={handleRangeChange}
-          />
-        </div>
-        <div className="h-full lg:col-span-2">
-          <PipelineDonut
-            data={pipeline}
-            loading={pipelineLoading}
-            currency={defaultCurrency}
-          />
-        </div>
-      </div>
-
-      {/* Response time */}
-      <ResponseTimeChart data={responseTime} loading={responseTimeLoading} />
-
-      {/* Activity feed */}
-      <ActivityFeed items={activity} loading={activityLoading} />
+      {/* Bottom: monthly uniques — final major section */}
+      <MonthlyChart
+        data={monthly}
+        flows={monthlyFlows}
+        year={year}
+        years={years}
+        onYearChange={setYear}
+        loading={monthlyLoading}
+      />
     </div>
   )
-}
-
-// ------------------------------------------------------------
-
-function deltaLabel(delta: number, suffix: string): string {
-  if (delta === 0) return `No change ${suffix}`
-  const sign = delta > 0 ? '+' : ''
-  return `${sign}${delta.toLocaleString()} ${suffix}`
 }

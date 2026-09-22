@@ -15,6 +15,8 @@ import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { NotificationsPanel } from '@/components/settings/notifications-panel';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
+import { BusinessProfileSettings } from '@/components/settings/business-profile';
+import { TravelCrmSettings } from '@/components/settings/travel-crm-settings';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
@@ -78,7 +80,13 @@ export default function SettingsPage() {
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     notifications: <NotificationsPanel />,
-    whatsapp: <WhatsAppConfig />,
+    whatsapp: (
+      <div className="space-y-6">
+        <WhatsAppConfig />
+        <BusinessProfileSettings />
+      </div>
+    ),
+    'travel-crm': <TravelCrmSettings />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
     members: <MembersTab />,

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { useCan } from "@/hooks/use-can";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
 import {
@@ -32,6 +33,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { CopyFlowDialog } from "@/components/flows/copy-flow-dialog";
+import { parseNewFlowInput } from "@/lib/flows/new-flow-input";
 import { cn } from "@/lib/utils";
 
 /**
@@ -85,12 +88,13 @@ const TEMPLATE_ICONS = {
 export default function FlowsPage() {
   const router = useRouter();
   const canCreate = useCan("send-messages");
+  const { account } = useAuth();
   const [flows, setFlows] = useState<FlowRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [copyingId, setCopyingId] = useState<string | null>(null);
+  const [copyFlow, setCopyFlow] = useState<FlowRow | null>(null);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
 
   useEffect(() => {
@@ -128,24 +132,64 @@ export default function FlowsPage() {
     };
   }, []);
 
+  async function createBlankFlow(name: string) {
+    const res = await fetch("/api/flows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        trigger_type: "keyword",
+        trigger_config: { keywords: [] },
+      }),
+    });
+    if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+    const json = (await res.json()) as { flow: FlowRow };
+    setCreateOpen(false);
+    setNewName("");
+    router.push(`/flows/${json.flow.id}`);
+  }
+
+  /**
+   * Copy an existing flow (by exact ID) into this account. Returns
+   * the new flow id, or "not-found" when the value isn't a known
+   * flow — the caller then falls back to a blank flow, so an
+   * unknown UUID is never an error. Anything else throws a generic
+   * error that reveals nothing about the probed ID.
+   */
+  async function tryCopyById(sourceFlowId: string): Promise<string | "not-found"> {
+    const res = await fetch("/api/internal/flows/copy-to-current-account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceFlowId }),
+    });
+    if (res.status === 404) return "not-found";
+    if (!res.ok) throw new Error(`Copy failed: ${res.status}`);
+    const json = (await res.json()) as { targetFlowId?: unknown };
+    if (typeof json.targetFlowId !== "string" || !json.targetFlowId) {
+      throw new Error("Copy failed.");
+    }
+    return json.targetFlowId;
+  }
+
   async function handleCreate() {
-    if (!newName.trim()) return;
+    const trimmed = newName.trim();
+    if (!trimmed) return;
     setCreating(true);
     try {
-      const res = await fetch("/api/flows", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newName.trim(),
-          trigger_type: "keyword",
-          trigger_config: { keywords: [] },
-        }),
-      });
-      if (!res.ok) throw new Error(`Create failed: ${res.status}`);
-      const json = (await res.json()) as { flow: FlowRow };
-      setCreateOpen(false);
-      setNewName("");
-      router.push(`/flows/${json.flow.id}`);
+      const input = parseNewFlowInput(newName);
+      if (input.kind === "copy") {
+        const copied = await tryCopyById(input.sourceFlowId);
+        if (copied === "not-found") {
+          await createBlankFlow(trimmed);
+        } else {
+          toast.success("Flow created successfully");
+          setCreateOpen(false);
+          setNewName("");
+          router.push(`/flows/${copied}`);
+        }
+      } else {
+        await createBlankFlow(trimmed);
+      }
     } catch (err) {
       console.error(err);
       toast.error("Couldn't create flow.");
@@ -193,31 +237,13 @@ export default function FlowsPage() {
     }
   }
 
-  async function handleCopy(flow: FlowRow) {
-    // Guard against double-clicks queuing multiple copies.
-    if (copyingId) return;
-    setCopyingId(flow.id);
-    try {
-      const res = await fetch(`/api/flows/${flow.id}/duplicate`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error ?? `Copy failed: ${res.status}`);
-      }
-      toast.success("Flow copied successfully.");
-      // Refresh the list in place (no full page reload).
-      const flowsRes = await fetch("/api/flows");
-      if (flowsRes.ok) {
-        const flowsJson = (await flowsRes.json()) as { flows: FlowRow[] };
-        setFlows(flowsJson.flows ?? []);
-      }
-    } catch (err) {
-      console.error(err);
-      const msg = err instanceof Error ? err.message : "Couldn't copy flow.";
-      toast.error(msg);
-    } finally {
-      setCopyingId(null);
+  // Refresh the list in place (no full page reload) after a
+  // same-account copy lands here.
+  async function refreshFlows() {
+    const flowsRes = await fetch("/api/flows");
+    if (flowsRes.ok) {
+      const flowsJson = (await flowsRes.json()) as { flows: FlowRow[] };
+      setFlows(flowsJson.flows ?? []);
     }
   }
 
@@ -266,8 +292,7 @@ export default function FlowsPage() {
               key={flow.id}
               flow={flow}
               onEdit={() => router.push(`/flows/${flow.id}`)}
-              onCopy={() => handleCopy(flow)}
-              copying={copyingId === flow.id}
+              onCopy={() => setCopyFlow(flow)}
               onDelete={() => handleDelete(flow)}
             />
           ))}
@@ -350,6 +375,19 @@ export default function FlowsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CopyFlowDialog
+        open={copyFlow !== null}
+        onOpenChange={(open) => {
+          if (!open) setCopyFlow(null);
+        }}
+        flow={copyFlow}
+        accounts={
+          account ? [{ id: account.id, name: account.name }] : []
+        }
+        currentAccountId={account?.id ?? null}
+        onCopiedInCurrentAccount={() => void refreshFlows()}
+      />
     </div>
   );
 }
@@ -391,13 +429,11 @@ function FlowCard({
   flow,
   onEdit,
   onCopy,
-  copying,
   onDelete,
 }: {
   flow: FlowRow;
   onEdit: () => void;
   onCopy: () => void;
-  copying: boolean;
   onDelete: () => void;
 }) {
   const triggerSummary = describeTrigger(flow);
@@ -448,13 +484,8 @@ function FlowCard({
           variant="ghost"
           size="sm"
           onClick={onCopy}
-          disabled={copying}
         >
-          {copying ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Copy className="h-3.5 w-3.5" />
-          )}
+          <Copy className="h-3.5 w-3.5" />
           Copy
         </Button>
         <Button
