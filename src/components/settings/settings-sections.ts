@@ -72,7 +72,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
   notifications: { id: 'notifications', label: 'Notifications', icon: Bell, group: 'account' },
-  'travel-crm': { id: 'travel-crm', label: 'Travel CRM', icon: ArrowLeftRight, group: 'integrations' },
+  'travel-crm': { id: 'travel-crm', label: 'Travel Agency CRM', icon: ArrowLeftRight, group: 'integrations' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   'business-profile': { id: 'business-profile', label: 'Business Profile', icon: Store, group: 'account' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },

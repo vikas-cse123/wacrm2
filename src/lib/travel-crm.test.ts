@@ -43,7 +43,7 @@ describe('getTravelCrmUrl', () => {
     );
   });
 
-  it('pins the default to the Travel CRM app URL', () => {
+  it('pins the default to the Travel Agency CRM app URL', () => {
     expect(DEFAULT_TRAVEL_CRM_URL).toBe('https://app.travelagencycrm.in');
   });
 });

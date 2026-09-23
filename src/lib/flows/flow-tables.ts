@@ -15,6 +15,10 @@ import {
   orderNodesForSheets,
   type FlowNodeLite,
 } from "./sheet-columns";
+import type {
+  WorkspaceField,
+  WorkspaceValuesByRun,
+} from "./workspace-fields";
 
 export type FlowTableView = "all" | "completed" | "incomplete";
 
@@ -52,14 +56,28 @@ export interface FlowTableRow {
   status: FlowTableStatus;
   /** Raw runtime status, preserved for future expansion. */
   runStatus: string;
-  /** vars projected onto the flow's answer columns (missing → null). */
+  /** Vars projected onto the flow's answer columns (missing → null). */
   answers: Record<string, string | null>;
+  /**
+   * First-touch CTWA ad URL for the Ad Source column. NOT part of
+   * the RPC projection — attached per page by the table route from
+   * contacts.source_url (batched, never N+1).
+   */
+  sourceUrl?: string | null;
 }
 
 export interface FlowTablePayload {
   meta: FlowTableMeta;
   columns: FlowTableColumn[];
   rows: FlowTableRow[];
+  /**
+   * Workspace custom columns for this flow (phase 2). Absent on
+   * older responses — always treated as []. Rendered AFTER all
+   * flow columns; never sent to Google Sheets.
+   */
+  customFields?: WorkspaceField[];
+  /** Custom cell values by run id, then field id. */
+  customValues?: WorkspaceValuesByRun;
 }
 
 export const FLOW_TABLE_PAGE_SIZE = 25;
@@ -126,6 +144,10 @@ function answerText(value: unknown): string | null {
  * node_key), in flow order. Mirrors the Sheets column derivation
  * so the table and the sheets agree on what "the flow's fields"
  * are — but stored nowhere: pure view, recomputed per request.
+ *
+ * Column order invariant (Workspace requirement): Submission Time
+ * is ALWAYS index 0, followed by Name, Phone Number, the dynamic
+ * flow columns, and Status last — for every flow, both views.
  */
 export function buildFlowTableColumns(
   nodes: FlowNodeLite[],
@@ -135,9 +157,9 @@ export function buildFlowTableColumns(
   const derived = deriveFlowColumns(ordered, true);
   const answerKeys: string[] = [];
   const columns: FlowTableColumn[] = [
+    { key: "submission_time", label: "Submission Time", system: true },
     { key: "name", label: "Name", system: true },
     { key: "phone", label: "Phone Number", system: true },
-    { key: "submission_time", label: "Submission Time", system: true },
   ];
   if (derived.name) {
     answerKeys.push(derived.name.key);
@@ -149,6 +171,13 @@ export function buildFlowTableColumns(
   }
   columns.push({ key: "status", label: "Status", system: true });
   return { columns, nameKey: derived.name?.key ?? null, answerKeys };
+}
+
+/** Display label for the Workspace flow selector. The UUID stays
+ *  the internal value; a missing name must never surface as one. */
+export function flowDisplayName(name: string | null | undefined): string {
+  const trimmed = name?.trim() ?? "";
+  return trimmed ? trimmed : "Untitled Flow";
 }
 
 /** Shape one RPC row into a table row (identity = flow_run_id). */
