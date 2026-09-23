@@ -12,7 +12,7 @@ import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
 // client components can't export Next's metadata object.
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionStatus } = useAuth();
   const router = useRouter();
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
@@ -20,11 +20,15 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
+  // Redirect ONLY on a confirmed dead session. A null user with an
+  // unconfirmed ("unknown") status — torn read mid-rotation, blip
+  // under verification — renders blank and waits instead of
+  // bouncing to /login.
   useEffect(() => {
-    if (!loading && !user) {
+    if (!loading && !user && sessionStatus === "signed-out") {
       router.push("/login");
     }
-  }, [user, loading, router]);
+  }, [user, loading, sessionStatus, router]);
 
   if (loading) {
     return (
