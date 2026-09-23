@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useEffect, useState, Fragment } from "react";
 import { cn } from "@/lib/utils";
 import { getTravelCrmUrl } from "@/lib/travel-crm";
 import { useAuth } from "@/hooks/use-auth";
@@ -13,9 +13,12 @@ import {
   Bell,
   Bot,
   FileText,
+  Layers,
   LayoutDashboard,
   MessageSquare,
   MessageSquareText,
+  ChevronDown,
+  ChevronRight,
   Plane,
   ExternalLink,
   Radio,
@@ -23,6 +26,7 @@ import {
   Settings,
   Sheet,
   Users,
+  UsersRound,
   Workflow,
   X,
   Zap,
@@ -42,6 +46,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/features", label: "Features", icon: Layers },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/contacts", label: "Contacts", icon: Users },
@@ -51,7 +56,7 @@ const navItems: NavItem[] = [
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/agents", label: "AI Agents", icon: Bot },
-  { href: "/data-export", label: "Google Sheets", icon: Sheet },
+  { href: "/data-export", label: "Flow Sheets", icon: Sheet },
   { href: "/all-sheets", label: "All Sheets", icon: Sheet },
   { href: "/chat-assignment", label: "Chat Assignment", icon: Route },
 ];
@@ -68,7 +73,19 @@ interface SidebarProps {
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { profileLoading, account, accountRole } = useAuth();
+  const searchParams = useSearchParams();
+  const { profileLoading, account, accountRole, canEditSettings } = useAuth();
+  // Team Members lives at /settings?tab=members — same page as
+  // Settings, distinguished by the tab param for highlighting.
+  const isTeamMembersActive =
+    pathname.startsWith("/settings") && searchParams.get("tab") === "members";
+  // Collapsible GOOGLE SHEETS group (Flow Sheets + All Sheets).
+  // Default expanded; forced open while a sheets page is active so
+  // the highlighted row is never hidden inside a closed group.
+  const [sheetsCollapsed, setSheetsCollapsed] = useState(false);
+  const isSheetsActive =
+    pathname.startsWith("/data-export") || pathname.startsWith("/all-sheets");
+  const sheetsOpen = !sheetsCollapsed || isSheetsActive;
   // UI-only gating: Flows, AI Agents, and Settings are shown to the owner
   // only. Non-owners simply don't see these nav entries. This is purely a
   // visibility change — the backend/routes are untouched, so it can be
@@ -188,7 +205,30 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 item.href === "/notifications" && unreadNotifications > 0;
 
               return (
-                <li key={item.href}>
+                <Fragment key={item.href}>
+                  {/* Collapsible group header for the two sheets
+                      entries — a button, never a navigation link.
+                      Rendered inline at the first sheets item so
+                      owner-gating and ordering stay untouched. */}
+                  {item.href === "/data-export" && (
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => setSheetsCollapsed((v) => !v)}
+                        aria-expanded={sheetsOpen}
+                        className="flex w-full items-center justify-between px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        Google Sheets
+                        {sheetsOpen ? (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </li>
+                  )}
+                  {((item.href === "/data-export" || item.href === "/all-sheets") && !sheetsOpen) ? null : (
+                  <li>
                   <Link
                     href={item.href}
                     className={cn(
@@ -228,16 +268,38 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     )}
                   </Link>
                 </li>
+                  )}
+                </Fragment>
               );
             })}
           </ul>
 
+          {/* Bottom section: Team Members (admin+, same page as
+              Settings distinguished by ?tab=members) above Settings.
+              Identical row markup to the entries below. */}
           {/* Settings — visible to all roles. */}
           <div className="my-4 border-t border-border" />
 
               <ul className="flex flex-col gap-1">
+                {canEditSettings && (
+                  <li key="/settings?tab=members">
+                    <Link
+                      href="/settings?tab=members"
+                      className={cn(
+                        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
+                        isTeamMembersActive
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      <UsersRound className="h-4 w-4" />
+                      Team Members
+                    </Link>
+                  </li>
+                )}
                 {bottomNavItems.map((item) => {
-                  const isActive = pathname.startsWith(item.href);
+                  const isActive =
+                    pathname.startsWith(item.href) && !isTeamMembersActive;
                   return (
                     <li key={item.href}>
                       <Link

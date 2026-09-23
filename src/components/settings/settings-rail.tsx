@@ -57,7 +57,7 @@ export function SettingsRail({
     >
       {RAIL_GROUPS.map(({ label, group }) => {
         const items = SETTINGS_SECTIONS.filter(
-          (s) => SECTION_META[s].group === group && (!visibleSections || visibleSections.has(s)),
+          (s) => SECTION_META[s].group === group && !SECTION_META[s].hideFromRail && (!visibleSections || visibleSections.has(s)),
         );
         if (items.length === 0) return null;
         return (

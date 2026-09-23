@@ -242,3 +242,36 @@ export function parseSearchRequestParams(
     limit,
   };
 }
+
+export interface LoadMoreReadiness {
+  searching: boolean;
+  /** Page-1 request for the CURRENT key still in flight. */
+  searchLoading: boolean;
+  /** Key of the last fully loaded page-1 ("" = none yet). */
+  loadedSearchKey: string;
+  /** Key of the currently requested search. */
+  searchKey: string;
+  searchHasMore: boolean;
+  searchLoadingMore: boolean;
+  searchCursor: string | null;
+}
+
+/**
+ * Single rule for "may Load More fire with this cursor": only when a
+ * page-1 for the CURRENT search key has fully loaded. A cursor from a
+ * previous search must never be reused — while a new page-1 is in
+ * flight (or before any has loaded) Load More stays disabled, so a
+ * stale cursor can neither kill the new page-1 nor append rows from
+ * the wrong query. Used by both the click guard and the button.
+ */
+export function canLoadMoreSearch(state: LoadMoreReadiness): boolean {
+  return (
+    state.searching &&
+    !state.searchLoading &&
+    state.loadedSearchKey !== "" &&
+    state.loadedSearchKey === state.searchKey &&
+    state.searchHasMore &&
+    !state.searchLoadingMore &&
+    state.searchCursor !== null
+  );
+}

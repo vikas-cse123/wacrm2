@@ -18,8 +18,6 @@ import { SettingsChip, StatusDot } from './settings-chip';
 import { ROLE_META } from './role-meta';
 
 interface OverviewCounts {
-  members: number | null;
-  pendingInvites: number | null;
   templates: number | null;
   templatesPending: number | null;
   tags: number | null;
@@ -38,7 +36,7 @@ export function SettingsOverview({
   onSelect: (section: SettingsSection) => void;
   visibleSections?: ReadonlySet<SettingsSection>;
 }) {
-  const { user, profile, account, accountId, accountRole, defaultCurrency, canManageMembers } =
+  const { user, profile, account, accountId, accountRole, defaultCurrency } =
     useAuth();
   const { mode, theme, font } = useTheme();
 
@@ -59,16 +57,13 @@ export function SettingsOverview({
     const acctId = accountId;
 
     // Cheap counts — resolve fast, render immediately.
+    // (Team-member counts used to feed the members tile; that tile
+    // moved to the main sidebar, so members/invites are no longer
+    // fetched here.)
     (async () => {
       setCountsLoading(true);
-      const [membersRes, invitesRes, templatesTotal, templatesPending, tagsRes, fieldsRes] =
+      const [templatesTotal, templatesPending, tagsRes, fieldsRes] =
         await Promise.allSettled([
-          fetch('/api/account/members', { cache: 'no-store' }).then((r) => r.json()),
-          canManageMembers
-            ? fetch('/api/account/invitations', { cache: 'no-store' }).then((r) =>
-                r.json(),
-              )
-            : Promise.resolve(null),
           supabase
             .from('message_templates')
             .select('id', { count: 'exact', head: true })
@@ -87,20 +82,7 @@ export function SettingsOverview({
 
       if (cancelled) return;
 
-      const members =
-        membersRes.status === 'fulfilled' && Array.isArray(membersRes.value?.members)
-          ? membersRes.value.members.length
-          : null;
-      const pendingInvites =
-        invitesRes.status === 'fulfilled' &&
-        invitesRes.value &&
-        Array.isArray(invitesRes.value.invitations)
-          ? invitesRes.value.invitations.length
-          : null;
-
       setCounts({
-        members,
-        pendingInvites,
         templates:
           templatesTotal.status === 'fulfilled'
             ? templatesTotal.value.count ?? null
@@ -138,7 +120,7 @@ export function SettingsOverview({
     return () => {
       cancelled = true;
     };
-  }, [user?.id, accountId, canManageMembers]);
+  }, [user?.id, accountId]);
 
   const displayName = profile?.full_name || profile?.email || 'Your account';
   const initial = (profile?.full_name || profile?.email || 'U').charAt(0).toUpperCase();
@@ -172,20 +154,6 @@ export function SettingsOverview({
           <StatusDot tone="muted" /> Needs reconnecting
         </>
       ),
-    },
-    {
-      section: 'members',
-      loading: countsLoading,
-      subtitle:
-        counts?.members == null
-          ? 'View team members'
-          : `${counts.members} member${counts.members === 1 ? '' : 's'}${
-              counts.pendingInvites
-                ? ` · ${counts.pendingInvites} pending invite${
-                    counts.pendingInvites === 1 ? '' : 's'
-                  }`
-                : ''
-            }`,
     },
     {
       section: 'deals',

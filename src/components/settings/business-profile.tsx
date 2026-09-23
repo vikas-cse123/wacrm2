@@ -44,7 +44,7 @@ interface LoadedState {
 const MANAGER_URL = "https://business.facebook.com/settings/whatsapp-business-accounts";
 
 /**
- * WhatsApp Business Profile editor (Settings → WhatsApp).
+ * WhatsApp Business Profile editor (Settings → Workspace → Business Profile).
  *
  * Meta is the source of truth: values load from Meta, saves PATCH
  * only changed fields, and the photo goes through Meta's two-step

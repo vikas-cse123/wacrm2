@@ -419,10 +419,11 @@ export async function loadActivity(db: DB, limit = 20): Promise<ActivityItem[]> 
 //   range (via messages -> conversations -> contact_id).
 // - NEW CONTACTS: `contacts.created_at` in range.
 // - NEW CONVERSATIONS: `conversations.created_at` in range.
-// - FLOW BREAKDOWN: messages attributed to flows via `flow_runs`
-//   (conversation_id exact match first, else contact's newest active
-//   run else newest run — same rule as the Inbox `pickContactFlowRun`).
-//   Messages rows only; never flow_runs/events counts.
+// - FLOW BREAKDOWN: distinct contacts messaged in range, each
+//   attributed once via `flow_runs` (conversation-exact run first,
+//   else contact's newest active run else newest run — same rule as
+//   the Inbox `pickContactFlowRun`). Unattributed contacts form a
+//   "No flow" row; pct denominator is distinct contacts in range.
 // - MONTHLY UNIQUES: per month, DISTINCT contacts messaged.
 // ------------------------------------------------------------
 
@@ -433,20 +434,6 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
-}
-
-async function countInRange(
-  db: DB,
-  table: 'messages' | 'contacts' | 'conversations',
-  startISO: string,
-  endISO: string,
-): Promise<number> {
-  const { count } = await db
-    .from(table)
-    .select('id', { count: 'exact', head: true })
-    .gte('created_at', startISO)
-    .lt('created_at', endISO)
-  return count ?? 0
 }
 
 interface MessageConvRow {
@@ -521,23 +508,13 @@ export async function loadDashboardKpis(
   prevStartISO: string,
   prevEndISO: string,
 ): Promise<DashboardKpis> {
-  const [totalCur, totalPrev, newContactsCur, newContactsPrev, newConvsCur, newConvsPrev, uniqCur, uniqPrev] =
-    await Promise.all([
-      countInRange(db, 'messages', startISO, endISO),
-      countInRange(db, 'messages', prevStartISO, prevEndISO),
-      countInRange(db, 'contacts', startISO, endISO),
-      countInRange(db, 'contacts', prevStartISO, prevEndISO),
-      countInRange(db, 'conversations', startISO, endISO),
-      countInRange(db, 'conversations', prevStartISO, prevEndISO),
-      distinctContactsInRange(db, startISO, endISO),
-      distinctContactsInRange(db, prevStartISO, prevEndISO),
-    ])
+  const [uniqCur, uniqPrev] = await Promise.all([
+    distinctContactsInRange(db, startISO, endISO),
+    distinctContactsInRange(db, prevStartISO, prevEndISO),
+  ])
 
   return {
-    totalMessages: { current: totalCur, previous: totalPrev },
     uniqueContacts: { current: uniqCur, previous: uniqPrev },
-    newContacts: { current: newContactsCur, previous: newContactsPrev },
-    newConversations: { current: newConvsCur, previous: newConvsPrev },
   }
 }
 
@@ -597,7 +574,7 @@ export async function loadFlowBreakdown(
     fetchAllFlowRuns(db),
     db.from('flows').select('id, name'),
   ])
-  if (msgs.length === 0) return { rows: [], totalMessages: 0 }
+  if (msgs.length === 0) return { rows: [], totalContacts: 0 }
   if (flowsRes.error) throw flowsRes.error
 
   const flowNames = new Map<string, string>()
@@ -624,45 +601,49 @@ export async function loadFlowBreakdown(
     }
   }
 
-  // Per-conversation message counts + contact, then attribute each
-  // conversation once (not per message) to its flow.
-  const convMsgCount = new Map<string, number>()
-  for (const m of msgs) convMsgCount.set(m.conversation_id, (convMsgCount.get(m.conversation_id) ?? 0) + 1)
-
-  const agg = new Map<string, { name: string; messages: number; contacts: Set<string> }>()
+  // Conversations per contact, then attribute each distinct contact
+  // once (not per message): conv-exact run first, else the contact's
+  // pick — the same rule the get_dashboard_analytics RPC uses.
+  const convsByContact = new Map<string, string[]>()
   for (const convId of convIds) {
     const contactId = convToContact.get(convId) ?? null
-    let picked: FlowRunLite | null = null
-    const convRuns = runsByConv.get(convId) ?? []
-    if (convRuns.length > 0) {
-      picked = pickRun(convRuns)
-    } else if (contactId) {
-      picked = pickRun(runsByContact.get(contactId) ?? [])
-    }
-    if (!picked) continue // unattributed — silently hidden per spec
-    const flow = flowNameOf(picked)
-    if (!flow) continue
-    const name = flowNames.get(flow.id) ?? flow.name
-    const entry = agg.get(flow.id) ?? { name, messages: 0, contacts: new Set<string>() }
-    entry.name = name
-    entry.messages += convMsgCount.get(convId) ?? 0
-    if (contactId) entry.contacts.add(contactId)
-    agg.set(flow.id, entry)
+    if (!contactId) continue
+    const arr = convsByContact.get(contactId) ?? []
+    arr.push(convId)
+    convsByContact.set(contactId, arr)
   }
 
-  const totalMessages = msgs.length
+  const agg = new Map<string | null, { name: string; contacts: number }>()
+  for (const [contactId, convs] of convsByContact) {
+    let picked: FlowRunLite | null = null
+    for (const convId of convs) {
+      const convRuns = runsByConv.get(convId) ?? []
+      if (convRuns.length === 0) continue
+      const run = pickRun(convRuns)
+      picked = pickRun([picked, run].filter((r): r is FlowRunLite => r !== null)) ?? picked
+    }
+    picked ??= pickRun(runsByContact.get(contactId) ?? [])
+    const flow = picked ? flowNameOf(picked) : null
+    const key = flow?.id ?? null
+    const name = flow ? (flowNames.get(flow.id) ?? flow.name) : 'No flow'
+    const entry = agg.get(key) ?? { name, contacts: 0 }
+    entry.name = name
+    entry.contacts += 1
+    agg.set(key, entry)
+  }
+
+  const totalContacts = convsByContact.size
   const rows: FlowBreakdownRow[] = [...agg.entries()]
     .map(([flowId, v]) => ({
       flowId,
       flowName: v.name,
-      messages: v.messages,
-      uniqueContacts: v.contacts.size,
-      pct: totalMessages > 0 ? (v.messages / totalMessages) * 100 : 0,
+      contacts: v.contacts,
+      pct: totalContacts > 0 ? (v.contacts / totalContacts) * 100 : 0,
     }))
-    .filter((r) => r.messages > 0)
-    .sort((a, b) => b.messages - a.messages)
+    .filter((r) => r.contacts > 0)
+    .sort((a, b) => b.contacts - a.contacts)
 
-  return { rows, totalMessages }
+  return { rows, totalContacts }
 }
 
 /**

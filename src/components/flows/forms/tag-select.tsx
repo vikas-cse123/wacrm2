@@ -5,6 +5,7 @@ import { Check, ChevronDown, Search, X } from "lucide-react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
@@ -82,60 +83,104 @@ export async function fetchAccountTags(
   }
 }
 
-// Module-level cache: the builder mounts one editor per selected node,
-// so without this every node click refires the tags query. Entries live
-// 60s — short enough that a tag created in Settings shows up promptly.
-let cachedTags: TagOption[] | null = null;
-let cachedAt = 0;
-let inflight: Promise<TagOption[]> | null = null;
+// Module-level cache, strictly keyed by account_id: entries (and
+// in-flight fetches) for one account are never served to another.
+// Without the key, an account switch or logout→login without a full
+// page reload could surface Account A's tag UUIDs inside Account B's
+// editor — and those UUIDs could then be saved into B's flows.
+// Entries live 60s — short enough that a tag created in Settings
+// shows up promptly.
+interface TagCacheEntry {
+  tags: TagOption[];
+  at: number;
+}
+const tagCache = new Map<string, TagCacheEntry>();
+const tagInflight = new Map<string, Promise<TagOption[]>>();
 const CACHE_TTL_MS = 60_000;
+
+/** Read a fresh cache entry for this account, or null. Testable. */
+export function readTagCache(accountId: string, now: number = Date.now()): TagOption[] | null {
+  const entry = tagCache.get(accountId);
+  if (!entry) return null;
+  if (now - entry.at >= CACHE_TTL_MS) {
+    tagCache.delete(accountId);
+    return null;
+  }
+  return entry.tags;
+}
+
+/** Store this account's tags. Testable. */
+export function writeTagCache(
+  accountId: string,
+  tags: TagOption[],
+  now: number = Date.now(),
+): void {
+  tagCache.set(accountId, { tags, at: now });
+}
+
+/** Drop one account's entry, or everything when omitted (logout). */
+export function clearTagCache(accountId?: string): void {
+  if (accountId === undefined) {
+    tagCache.clear();
+    tagInflight.clear();
+    return;
+  }
+  tagCache.delete(accountId);
+  tagInflight.delete(accountId);
+}
 
 /** Test hook — resets the module cache between unit tests. */
 export function __resetTagCacheForTests() {
-  cachedTags = null;
-  cachedAt = 0;
-  inflight = null;
+  clearTagCache();
 }
 
 export function useAccountTags(): { tags: TagOption[]; loading: boolean } {
-  // Snapshot the module cache once on mount (lazy initializer — the
-  // sanctioned place for a one-time impure read). The effect below
-  // only fetches when the snapshot is stale; all state updates land
-  // in async callbacks, never synchronously in the effect.
-  const [snapshot] = useState(() => ({
-    tags: cachedTags ?? [],
-    fresh: cachedTags != null && Date.now() - cachedAt < CACHE_TTL_MS,
-  }));
-  const [tags, setTags] = useState<TagOption[]>(snapshot.tags);
-  const [loading, setLoading] = useState<boolean>(!snapshot.fresh);
+  // The account comes from auth context (same RLS identity as the
+  // query itself). It doubles as the cache key: switching accounts
+  // (or logging out) can never serve another account's tags.
+  const { account } = useAuth();
+  const accountId = account?.id ?? null;
+
+  const [state, setState] = useState<{ tags: TagOption[]; loading: boolean }>({
+    tags: [],
+    loading: true,
+  });
 
   useEffect(() => {
-    if (snapshot.fresh) return;
     let cancelled = false;
-    if (!inflight) {
-      inflight = fetchAccountTags(createClient()).finally(() => {
-        inflight = null;
-      });
-    }
-    inflight
-      .then((fresh) => {
-        if (cancelled) return;
-        cachedTags = fresh;
-        cachedAt = Date.now();
-        setTags(fresh);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    (async () => {
+      if (!accountId) {
+        // Logged out / still resolving: show nothing, never another
+        // account's leftovers.
+        if (!cancelled) setState({ tags: [], loading: false });
+        return;
+      }
+      const cached = readTagCache(accountId);
+      if (cached) {
+        if (!cancelled) setState({ tags: cached, loading: false });
+        return;
+      }
+      if (!cancelled) setState({ tags: [], loading: true });
+      let inflight = tagInflight.get(accountId);
+      if (!inflight) {
+        inflight = fetchAccountTags(createClient()).finally(() => {
+          if (tagInflight.get(accountId) === inflight) {
+            tagInflight.delete(accountId);
+          }
+        });
+        tagInflight.set(accountId, inflight);
+      }
+      const fresh = await inflight;
+      if (cancelled) return;
+      writeTagCache(accountId, fresh);
+      setState({ tags: fresh, loading: false });
+    })();
     return () => {
       cancelled = true;
     };
-    // `snapshot` is mount-only by construction; re-running on it
-    // would refetch identically.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [accountId]);
 
-  return { tags, loading };
+  return state;
 }
 
 // ------------------------------------------------------------

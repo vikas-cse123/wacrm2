@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import {
   buildSearchKey,
+  canLoadMoreSearch,
   mergeSearchPage,
   normalizeSearchQuery,
   SEARCH_PAGE_SIZE,
@@ -521,17 +522,32 @@ export function ConversationList({
     });
   }, [conversations, searchResults.length]);
 
-  // Next search page. Guarded by the same sequence: a newer search (or
-  // refresh) invalidates the token, so a late page for an old query is
-  // discarded instead of appended. Duplicates are skipped by id.
+  // Next search page. The readiness gate below is load-bearing:
+  // Load More may only fire with the cursor of the CURRENTLY LOADED
+  // search — never while a new page-1 is in flight and never with a
+  // previous search's cursor (which would both kill page-1 via the
+  // sequence bump and append wrong-query rows). Guarded responses
+  // are still discarded by token + key as a second layer.
+  const loadMoreReady = canLoadMoreSearch({
+    searching,
+    searchLoading,
+    loadedSearchKey,
+    searchKey,
+    searchHasMore,
+    searchLoadingMore,
+    searchCursor,
+  });
   const handleLoadMore = useCallback(() => {
-    if (!searching || !searchHasMore || searchLoadingMore || !searchCursor) {
+    if (!loadMoreReady) {
       return;
     }
     const gate = getSearchGate();
     const token = gate.next();
     const key = searchKey;
+    // loadMoreReady guarantees a cursor, but TS can't see through the
+    // helper — narrow explicitly.
     const cursor = searchCursor;
+    if (!cursor) return;
     setSearchLoadingMore(true);
     const params = new URLSearchParams({ q: activeQuery, status: filter });
     if (selectedTagIds.length > 0) params.set("tags", selectedTagIds.join(","));
@@ -584,13 +600,12 @@ export function ConversationList({
       }
     })();
     // `searchKey`/`searchCursor` snapshots are captured above; the
-    // gate token covers staleness. Deps list the live inputs.
+    // gate token covers staleness. `loadMoreReady` carries the
+    // freshness rule; remaining deps are the live request inputs.
   }, [
-    searching,
-    searchHasMore,
-    searchLoadingMore,
-    searchCursor,
+    loadMoreReady,
     searchKey,
+    searchCursor,
     activeQuery,
     filter,
     selectedTagIds,
@@ -1290,13 +1305,16 @@ export function ConversationList({
             ))}
 
             {/* Search pagination — normal list stays unbounded as
-                before; only search pages (25 at a time). */}
+                before; only search pages (25 at a time). The button
+                stays disabled until the current search's page-1 has
+                fully loaded, so a previous search's cursor can never
+                be reused. */}
             {searching && searchHasMore && (
               <div className="flex justify-center px-3 py-3">
                 <button
                   type="button"
                   onClick={handleLoadMore}
-                  disabled={searchLoadingMore}
+                  disabled={!loadMoreReady}
                   className="text-primary inline-flex h-8 items-center gap-2 rounded-md px-3 text-xs font-medium transition-colors hover:bg-muted disabled:cursor-wait disabled:opacity-70"
                 >
                   {searchLoadingMore && (

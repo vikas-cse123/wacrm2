@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DOW_SHORT_MON_FIRST,
   daysAgoStart,
+  getDashboardRange,
   lastNDayKeys,
   localDayKey,
   mondayIndex,
@@ -119,5 +120,52 @@ describe("mondayIndex", () => {
     expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date("2026-05-24"))]).toBe(
       "Sun",
     );
+  });
+});
+
+describe("getDashboardRange", () => {
+  const NOW = new Date("2026-09-22T10:00:00");
+
+  it("covers today with yesterday as previous", () => {
+    const r = getDashboardRange("today", NOW);
+    expect(localDayKey(r.start)).toBe("2026-09-22");
+    expect(localDayKey(r.end)).toBe("2026-09-23");
+    expect(r.label).toBe("Today");
+  });
+
+  it("covers yesterday", () => {
+    const r = getDashboardRange("yesterday", NOW);
+    expect(localDayKey(r.start)).toBe("2026-09-21");
+    expect(localDayKey(r.end)).toBe("2026-09-22");
+    expect(r.label).toBe("Yesterday");
+  });
+
+  it("covers the Monday-start week", () => {
+    const r = getDashboardRange("week", NOW);
+    expect(localDayKey(r.start)).toBe("2026-09-21");
+    expect(r.label).toBe("This week");
+  });
+
+  it("covers the calendar month", () => {
+    const r = getDashboardRange("month", NOW);
+    expect(localDayKey(r.start)).toBe("2026-09-01");
+    expect(r.label).toBe("This month");
+  });
+
+  it("covers the trailing 30 days including today", () => {
+    const r = getDashboardRange("last30days", NOW);
+    expect(localDayKey(r.start)).toBe("2026-08-24");
+    expect(localDayKey(r.end)).toBe("2026-09-23");
+    expect(r.label).toBe("Last 30 days");
+    const spanDays = Math.round(
+      (r.end.getTime() - r.start.getTime()) / 86_400_000,
+    );
+    expect(spanDays).toBe(30);
+  });
+
+  it("honors an explicit custom range", () => {
+    const r = getDashboardRange("custom", NOW, "2026-09-01", "2026-09-10");
+    expect(localDayKey(r.start)).toBe("2026-09-01");
+    expect(localDayKey(r.end)).toBe("2026-09-11");
   });
 });

@@ -15,6 +15,11 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import { findExistingContact } from '@/lib/contacts/dedupe'
+import {
+  persistBroadcastOutboundMessage,
+  renderTemplateMessageText,
+} from '@/lib/whatsapp/send-message'
 
 interface BroadcastResult {
   phone: string
@@ -232,6 +237,38 @@ export async function POST(request: Request) {
           whatsapp_message_id: sentMessageId,
         })
         sentCount++
+
+        // Mirror into the Inbox as a normal outbound template message
+        // (best-effort — the Meta send above already succeeded).
+        // Lookup-only contact resolution: never create contacts here
+        // (the dashboard wizard owns contact creation); skip the mirror
+        // when the phone matches no contact.
+        try {
+          const existing = await findExistingContact(
+            supabase,
+            accountId,
+            sanitized
+          );
+          if (existing) {
+            await persistBroadcastOutboundMessage(supabase, {
+              accountId,
+              contactId: existing.id,
+              auditUserId: user.id,
+              templateName: template_name,
+              renderedText: renderTemplateMessageText(
+                templateRow?.body_text ?? `[${template_name}]`,
+                recipient.messageParams,
+                recipient.params ?? []
+              ),
+              whatsappMessageId: sentMessageId,
+            });
+          }
+        } catch (err) {
+          console.error(
+            '[broadcast] inbox mirror failed (delivery unaffected):',
+            err instanceof Error ? err.message : err
+          );
+        }
       } else {
         console.error(
           `Failed to send broadcast to ${recipient.phone}:`,

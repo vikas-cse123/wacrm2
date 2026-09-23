@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSearchKey,
+  canLoadMoreSearch,
   decodeSearchCursor,
   encodeSearchCursor,
   mergeSearchPage,
@@ -8,6 +9,7 @@ import {
   parseSearchRequestParams,
   SearchParamsError,
   SearchRequestGate,
+  type LoadMoreReadiness,
 } from "./search";
 
 const conv = (id: string) => ({ id });
@@ -215,5 +217,58 @@ describe("parseSearchRequestParams", () => {
     expect(
       parseSearchRequestParams(params("x", { cursor: "bogus" })).cursor,
     ).toBeNull();
+  });
+});
+
+describe("canLoadMoreSearch", () => {
+  const ready: LoadMoreReadiness = {
+    searching: true,
+    searchLoading: false,
+    loadedSearchKey: "B",
+    searchKey: "B",
+    searchHasMore: true,
+    searchLoadingMore: false,
+    searchCursor: "cursor-B",
+  };
+
+  it("allows Load More once the current search page-1 is loaded", () => {
+    expect(canLoadMoreSearch(ready)).toBe(true);
+  });
+
+  it("blocks while a new page-1 is in flight (old cursor must not fire)", () => {
+    // Search A loaded, user typed B: cursor-A is stale until B loads.
+    expect(
+      canLoadMoreSearch({ ...ready, searchLoading: true, searchKey: "B", loadedSearchKey: "A" }),
+    ).toBe(false);
+  });
+
+  it("blocks before any page-1 has loaded", () => {
+    expect(
+      canLoadMoreSearch({ ...ready, searchLoading: true, loadedSearchKey: "" }),
+    ).toBe(false);
+  });
+
+  it("blocks when the loaded key differs, even with a cursor present", () => {
+    expect(
+      canLoadMoreSearch({ ...ready, loadedSearchKey: "A", searchKey: "B" }),
+    ).toBe(false);
+  });
+
+  it("blocks when not searching, exhausted, paging, or cursorless", () => {
+    expect(canLoadMoreSearch({ ...ready, searching: false })).toBe(false);
+    expect(canLoadMoreSearch({ ...ready, searchHasMore: false })).toBe(false);
+    expect(canLoadMoreSearch({ ...ready, searchLoadingMore: true })).toBe(false);
+    expect(canLoadMoreSearch({ ...ready, searchCursor: null })).toBe(false);
+  });
+
+  it("re-allows paging after the new search settles (normal flow resumes)", () => {
+    expect(
+      canLoadMoreSearch({
+        ...ready,
+        loadedSearchKey: "B",
+        searchKey: "B",
+        searchCursor: "cursor-B2",
+      }),
+    ).toBe(true);
   });
 });

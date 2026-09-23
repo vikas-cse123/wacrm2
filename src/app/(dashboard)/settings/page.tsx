@@ -80,12 +80,8 @@ export default function SettingsPage() {
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     notifications: <NotificationsPanel />,
-    whatsapp: (
-      <div className="space-y-6">
-        <WhatsAppConfig />
-        <BusinessProfileSettings />
-      </div>
-    ),
+    whatsapp: <WhatsAppConfig />,
+    'business-profile': <BusinessProfileSettings />,
     'travel-crm': <TravelCrmSettings />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,

@@ -9,7 +9,16 @@
 // AFTER: one GET /api/dashboard/analytics per (range, year),
 // aggregated inside Postgres. No Supabase calls from the browser.
 
-import type { DashboardKpis, FlowBreakdownRow, MonthlyFlowMonth } from './types'
+import type {
+  DailyContactsDay,
+  DailyFlowDay,
+  DashboardKpis,
+  FlowBreakdownRow,
+  MonthlyFlowMonth,
+  MonthlyFlowSegment,
+} from './types'
+import { normalizeContactsByAd } from './contacts-by-ad'
+import type { ContactsByAd } from './types'
 
 export interface DashboardAnalyticsParams {
   startISO: string
@@ -25,7 +34,10 @@ export interface DashboardAnalyticsParams {
 export interface DashboardAnalyticsResult {
   kpis: DashboardKpis
   flowRows: FlowBreakdownRow[]
-  flowTotalMessages: number
+  flowTotalContacts: number
+  contactsByAd: ContactsByAd
+  daily: DailyContactsDay[]
+  dailyFlows: DailyFlowDay[]
   monthly: number[]
   /**
    * Per-flow monthly split for the stacked chart. Empty when the
@@ -64,25 +76,22 @@ export async function loadDashboardAnalytics(
   }
   const json = (await res.json()) as {
     kpis?: Record<string, unknown>
-    flowBreakdown?: { rows?: unknown; totalMessages?: unknown }
+    flowBreakdown?: { rows?: unknown; totalContacts?: unknown }
+    contactsByAd?: unknown
+    dailyContacts?: unknown
+    dailyFlows?: unknown
     monthlyUniqueContacts?: unknown
     monthlyFlows?: unknown
   }
 
   const kpisRaw = json.kpis ?? {}
-  if (
-    !isDelta(kpisRaw.totalMessages) ||
-    !isDelta(kpisRaw.uniqueContacts) ||
-    !isDelta(kpisRaw.newContacts) ||
-    !isDelta(kpisRaw.newConversations)
-  ) {
+  if (!isDelta(kpisRaw.uniqueContacts)) {
     throw new Error('Dashboard analytics returned an unexpected shape')
   }
+  // Legacy message/new-contact/new-conversation deltas are ignored
+  // when present — the dashboard renders the unique-contacts KPI only.
   const kpis: DashboardKpis = {
-    totalMessages: kpisRaw.totalMessages,
     uniqueContacts: kpisRaw.uniqueContacts,
-    newContacts: kpisRaw.newContacts,
-    newConversations: kpisRaw.newConversations,
   }
 
   const rowsRaw = json.flowBreakdown?.rows
@@ -92,23 +101,21 @@ export async function loadDashboardAnalytics(
           (r): r is Record<string, unknown> =>
             !!r &&
             typeof r === 'object' &&
-            typeof (r as Record<string, unknown>).flowId === 'string' &&
+            (r.flowId === null || typeof r.flowId === 'string') &&
             typeof r.flowName === 'string' &&
-            typeof r.messages === 'number' &&
-            typeof r.uniqueContacts === 'number' &&
+            typeof r.contacts === 'number' &&
             typeof r.pct === 'number',
         )
         .map((r) => ({
-          flowId: r.flowId as string,
+          flowId: r.flowId as string | null,
           flowName: r.flowName as string,
-          messages: r.messages as number,
-          uniqueContacts: r.uniqueContacts as number,
+          contacts: r.contacts as number,
           pct: r.pct as number,
         }))
     : []
-  const flowTotalMessages =
-    typeof json.flowBreakdown?.totalMessages === 'number'
-      ? json.flowBreakdown.totalMessages
+  const flowTotalContacts =
+    typeof json.flowBreakdown?.totalContacts === 'number'
+      ? json.flowBreakdown.totalContacts
       : 0
 
   const monthly: number[] = Array.isArray(json.monthlyUniqueContacts)
@@ -117,6 +124,12 @@ export async function loadDashboardAnalytics(
       )
     : []
   while (monthly.length < 12) monthly.push(0)
+
+  const daily = normalizeDailyContacts(json.dailyContacts)
+
+  const dailyFlows = normalizeDailyFlows(json.dailyFlows)
+
+  const contactsByAd = normalizeContactsByAd(json.contactsByAd)
 
   // monthlyFlows is additive: totals keep coming from
   // monthlyUniqueContacts above. Malformed entries are dropped;
@@ -155,8 +168,98 @@ export async function loadDashboardAnalytics(
   return {
     kpis,
     flowRows,
-    flowTotalMessages,
+    flowTotalContacts,
+    contactsByAd,
+    daily,
+    dailyFlows,
     monthly: monthly.slice(0, 12),
     monthlyFlows,
   }
+}
+
+/**
+ * Validate one flow segment shared by the monthly and daily splits.
+ */
+function isFlowSegment(f: unknown): f is MonthlyFlowSegment {
+  if (!f || typeof f !== 'object') return false
+  const r = f as Record<string, unknown>
+  return (
+    (r.flowId === null || typeof r.flowId === 'string') &&
+    typeof r.flowName === 'string' &&
+    typeof r.uniqueContacts === 'number'
+  )
+}
+
+/**
+ * Normalize the RPC `dailyFlows` payload into exactly 30 days.
+ * Malformed days are dropped (never fabricated); short payloads are
+ * front-padded with empty days so the trailing-30 window stays
+ * aligned; long payloads keep the most recent 30.
+ */
+export function normalizeDailyFlows(input: unknown): DailyFlowDay[] {
+  const days: DailyFlowDay[] = Array.isArray(input)
+    ? (input as unknown[]).flatMap((d) => {
+        if (!d || typeof d !== 'object') return []
+        const r = d as Record<string, unknown>
+        if (
+          typeof r.date !== 'string' ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(r.date) ||
+          typeof r.total !== 'number' ||
+          !Number.isFinite(r.total) ||
+          r.total < 0 ||
+          !Array.isArray(r.flows)
+        ) {
+          return []
+        }
+        // Malformed segments are dropped individually (same rule as
+        // the monthly split); the day itself survives.
+        const flows = (r.flows as unknown[]).filter(isFlowSegment)
+        return [
+          {
+            date: r.date,
+            total: Math.floor(r.total),
+            flows: flows.map((f) => ({
+              flowId: f.flowId,
+              flowName: f.flowName,
+              uniqueContacts: Math.floor(f.uniqueContacts),
+            })),
+          },
+        ]
+      })
+    : []
+  const trimmed = days.slice(-30)
+  while (trimmed.length < 30) {
+    trimmed.unshift({ date: '', total: 0, flows: [] })
+  }
+  return trimmed
+}
+
+/**
+ * Normalize the RPC `dailyContacts` payload into exactly 30 days.
+ * Malformed entries are dropped (never fabricated); short payloads
+ * are front-padded with zero days so the chart window stays aligned
+ * to the trailing edge; long payloads keep the most recent 30.
+ */
+export function normalizeDailyContacts(input: unknown): DailyContactsDay[] {
+  const days: DailyContactsDay[] = Array.isArray(input)
+    ? (input as unknown[]).flatMap((d) => {
+        if (!d || typeof d !== 'object') return []
+        const r = d as Record<string, unknown>
+        if (
+          typeof r.date !== 'string' ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(r.date) ||
+          typeof r.contacts !== 'number' ||
+          !Number.isFinite(r.contacts) ||
+          r.contacts < 0
+        ) {
+          return []
+        }
+        return [{ date: r.date, contacts: Math.floor(r.contacts) }]
+      })
+    : []
+  const trimmed = days.slice(-30)
+  while (trimmed.length < 30) {
+    trimmed.unshift({ date: '', contacts: 0 })
+  }
+  return trimmed
 }

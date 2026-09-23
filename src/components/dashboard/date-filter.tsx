@@ -22,6 +22,7 @@ const OPTIONS: { value: DashboardDateFilter; label: string }[] = [
   { value: 'yesterday', label: 'Yesterday' },
   { value: 'week', label: 'This Week' },
   { value: 'month', label: 'This Month' },
+  { value: 'last30days', label: 'Last 30 Days' },
   { value: 'custom', label: 'Custom' },
 ]
 

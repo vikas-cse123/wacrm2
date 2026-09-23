@@ -1,11 +1,12 @@
 "use client"
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Users } from 'lucide-react'
 import { MONTH_SHORT } from '@/lib/dashboard/date-utils'
-import { buildMonthlyStacks, type StackMonth } from '@/lib/dashboard/monthly-stacks'
-import { OTHERS_KEY, SOLID_BAR_COLOR } from '@/lib/dashboard/flow-colors'
+import { buildMonthlyStacks, buildMonthTooltip, type StackMonth } from '@/lib/dashboard/monthly-stacks'
+import { anchorCategory, categoryCenterX, formatCountTick, placeTooltipBesideBar, placeTooltipVertically, resolveActiveMonth, toMonthIndex } from '@/lib/dashboard/chart-helpers'
+import { OTHERS_KEY } from '@/lib/dashboard/flow-colors'
 import type { MonthlyFlowMonth } from '@/lib/dashboard/types'
 import { EmptyState } from './empty-state'
 import { Skeleton } from './skeleton'
@@ -51,10 +52,55 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
     stacks !== null &&
     stacks.keys.some((k) => k.flowId !== null || k.key === OTHERS_KEY)
 
-  // Hovered month index (0 = Jan). Only the hovered bar shows flow
-  // colors; every other bar renders solid blue. Pure client state —
-  // hovering never triggers a network request.
-  const [hovered, setHovered] = useState<number | null>(null)
+  // Hover state: the month index plus which flow segment the cursor
+  // is over (segment key, when the library reports a per-Bar hover).
+  // Every bar always renders its real flow segments; the hovered
+  // month stays full-strength while other months dim. Pure client
+  // state — hovering never triggers a network request.
+  const [hover, setHover] = useState<{ key: string; month: number } | null>(null)
+  const hoveredMonth = hover?.month ?? null
+
+  // Measured geometry for edge-aware tooltip placement. Callback
+  // refs (not a mount effect) attach the observers whenever the
+  // elements exist — a mount-only effect misses them because the
+  // chart branch renders after loading, which previously left the
+  // measured width at 0 and parked every tooltip at the left edge.
+  // wrapRef: the 280px chart box (tooltip coordinate system).
+  // bodyRef: the padded content box incl. legend (clip boundary).
+  const wrapRoRef = useRef<ResizeObserver | null>(null)
+  const [chartWidth, setChartWidth] = useState(0)
+  const setWrapRef = useCallback((el: HTMLDivElement | null) => {
+    wrapRoRef.current?.disconnect()
+    wrapRoRef.current = null
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width
+      if (typeof w === 'number') setChartWidth((prev) => (prev === w ? prev : w))
+    })
+    wrapRoRef.current = ro
+    ro.observe(el)
+  }, [])
+  const bodyRoRef = useRef<ResizeObserver | null>(null)
+  const [bodyHeight, setBodyHeight] = useState(0)
+  const setBodyRef = useCallback((el: HTMLDivElement | null) => {
+    bodyRoRef.current?.disconnect()
+    bodyRoRef.current = null
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height
+      if (typeof h === 'number') setBodyHeight((prev) => (prev === h ? prev : h))
+    })
+    bodyRoRef.current = ro
+    ro.observe(el)
+  }, [])
+  useEffect(() => {
+    const wrapRo = wrapRoRef.current
+    const bodyRo = bodyRoRef.current
+    return () => {
+      wrapRo?.disconnect()
+      bodyRo?.disconnect()
+    }
+  }, [])
 
   const chartData = useMemo(() => {
     if (!stacked || !stacks) {
@@ -73,16 +119,69 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
   const lastKey = stacked && stacks ? stacks.keys[stacks.keys.length - 1]?.key : null
 
   // Topmost non-zero segment of the hovered month gets the rounded
-  // top; otherwise the last key does (solid-blue look everywhere).
+  // top; otherwise the last key does (solid look for the fallback).
   const roundedKey = useMemo(() => {
-    if (hovered == null || !stacked || !stacks) return lastKey
-    const sm = stacks.months[hovered]
+    if (hoveredMonth == null || !stacked || !stacks) return lastKey
+    const sm = stacks.months[hoveredMonth]
     if (!sm) return lastKey
     for (let i = sm.segments.length - 1; i >= 0; i--) {
       if ((sm.segments[i]?.value ?? 0) > 0) return sm.segments[i]!.key
     }
     return lastKey
-  }, [hovered, stacked, stacks, lastKey])
+  }, [hoveredMonth, stacked, stacks, lastKey])
+
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
+  // Degenerate origins are never a real hover (a visible tooltip at
+  // (0,0) means the library's coordinate lookup missed).
+  const validCursor =
+    cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y) && (cursor.x > 0 || cursor.y > 0)
+      ? cursor
+      : null
+
+  // Tooltip anchor: two categories back from the hovered month,
+  // so the card sits in that area instead of covering the hovered
+  // bar's segments (hover July → May area; January → February area).
+  // Content (title/total/rows) still comes from the hovered month.
+  // Plot insets mirror the BarChart margin + YAxis width below.
+  const PLOT_LEFT = 44
+  const PLOT_RIGHT = 8
+  const CATEGORY_COUNT = 12
+  const anchorMonth = anchorCategory(hoveredMonth, CATEGORY_COUNT)
+  const tooltipX = useMemo(() => {
+    if (hoveredMonth == null || anchorMonth == null) return 4
+    const hoveredCenter = categoryCenterX(
+      hoveredMonth,
+      chartWidth,
+      CATEGORY_COUNT,
+      PLOT_LEFT,
+      PLOT_RIGHT,
+    )
+    const anchorCenter = categoryCenterX(
+      anchorMonth,
+      chartWidth,
+      CATEGORY_COUNT,
+      PLOT_LEFT,
+      PLOT_RIGHT,
+    )
+    return placeTooltipBesideBar({
+      hoveredCenter,
+      anchorCenter,
+      chartWidth,
+      align: 'start',
+    })
+  }, [hoveredMonth, anchorMonth, chartWidth])
+  // Measured tooltip height so vertical placement can pin above the
+  // cursor and flip below only when there is no room. Measured via
+  // callback ref (no render-phase reads); updates only on change.
+  const [tipH, setTipH] = useState(220)
+  const setTipRef = useCallback((el: HTMLDivElement | null) => {
+    const h = el?.offsetHeight ?? 0
+    if (h > 0) setTipH((prev) => (prev === h ? prev : h))
+  }, [])
+  const tooltipY =
+    validCursor && Number.isFinite(validCursor.y)
+      ? placeTooltipVertically(validCursor.y, tipH, bodyHeight - 24)
+      : 8
 
   const hasData = totals.some((v) => v > 0)
   const yearTotal = totals.reduce((s, v) => s + v, 0)
@@ -131,7 +230,7 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
         </Select>
       </header>
 
-      <div className="p-5">
+      <div ref={setBodyRef} className="p-5">
         {loading || data == null ? (
           <Skeleton className="h-[280px] w-full" />
         ) : !hasData ? (
@@ -142,17 +241,38 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
           />
         ) : (
           <>
-            <div className="h-[280px] w-full">
+            <div ref={setWrapRef} className="h-[280px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={chartData}
                   margin={{ top: 18, right: 8, bottom: 0, left: -12 }}
                   barCategoryGap="28%"
-                  onMouseMove={(s: { activeTooltipIndex?: unknown } | undefined) => {
-                    const idx = s?.activeTooltipIndex
-                    setHovered(typeof idx === 'number' ? idx : null)
+                  onMouseMove={(s: { activeTooltipIndex?: unknown; activeCoordinate?: unknown } | undefined) => {
+                    // Recharts v3 reports categorical indices as
+                    // strings and exposes the true tooltip anchor as
+                    // `activeCoordinate` (wrapper pixels). Both are
+                    // read defensively — never viewport clientX.
+                    const idx = toMonthIndex(s?.activeTooltipIndex)
+                    if (idx === null) {
+                      setHover(null)
+                      setCursor(null)
+                      return
+                    }
+                    const coord = s?.activeCoordinate as
+                      | { x?: unknown; y?: unknown }
+                      | undefined
+                    const cx = coord && typeof coord.x === 'number' ? coord.x : null
+                    const cy = coord && typeof coord.y === 'number' ? coord.y : null
+                    setCursor(cx !== null && cy !== null ? { x: cx, y: cy } : null)
+                    // Segment handlers below refine `key` when the
+                    // library reports a per-Bar hover; the month index
+                    // always updates so the tooltip never goes stale.
+                    setHover((prev) => (prev?.month === idx ? prev : { key: '', month: idx }))
                   }}
-                  onMouseLeave={() => setHovered(null)}
+                  onMouseLeave={() => {
+                    setHover(null)
+                    setCursor(null)
+                  }}
                 >
                   <CartesianGrid vertical={false} stroke="#eef2f7" />
                   <XAxis
@@ -167,64 +287,83 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
                     tickLine={false}
                     axisLine={false}
                     tick={{ fontSize: 12, fill: '#64748b' }}
-                    width={44}
+                    tickFormatter={formatCountTick}
+                    width={56}
                   />
                   <Tooltip
                     cursor={{ fill: '#f1f5f9', opacity: 0.6 }}
-                    content={({ active, payload, label }) => {
+                    allowEscapeViewBox={{ x: false, y: false }}
+                    wrapperStyle={{ pointerEvents: 'none', zIndex: 10 }}
+                    position={{
+                      x: tooltipX,
+                      y: tooltipY,
+                    }}
+                    content={({ active, payload, label, activeIndex }) => {
                       if (!active || !payload?.length) return null
+                      // Single source of truth for the hovered month:
+                      // the categorical index (drives dimming + anchor),
+                      // with the axis label as fallback. Never mix the
+                      // index with an individual series payload or the
+                      // label alone — that disagreement rendered
+                      // February content on the August bar.
+                      const monthIdx = resolveActiveMonth(activeIndex, label, MONTH_SHORT)
+                      if (monthIdx === null) return null
                       if (!stacked || !stacks) {
-                        const v = Number(payload[0]?.value ?? 0)
+                        const v = totals[monthIdx] ?? 0
                         return (
-                          <div className="rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
-                            <p className="font-medium text-foreground">{label}</p>
+                          <div ref={setTipRef} className="rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
+                            <p className="font-medium text-foreground">{MONTH_SHORT[monthIdx]}</p>
                             <p className="text-muted-foreground tabular-nums">
                               {v.toLocaleString()} contact{v === 1 ? '' : 's'}
                             </p>
                           </div>
                         )
                       }
-                      const datum = payload[0]?.payload as Record<string, unknown> | undefined
-                      const total = Number(datum?.total ?? 0)
-                      const monthIdx = (MONTH_SHORT as readonly string[]).indexOf(String(label))
+                      const total = totals[monthIdx] ?? 0
                       const title = `${MONTH_LONG[monthIdx] ?? label} ${year}`
                       if (total <= 0) {
                         return (
-                          <div className="rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
+                          <div ref={setTipRef} className="rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
                             <p className="font-medium text-foreground">{title}</p>
                             <p className="text-muted-foreground tabular-nums">No contacts this month</p>
                           </div>
                         )
                       }
-                      const rows = stacks.keys
-                        .map((k) => ({
-                          ...k,
-                          value: Number(datum?.[k.key] ?? 0),
-                        }))
-                        .filter((r) => r.value > 0)
-                        .sort((a, b) => b.value - a.value)
+                      // Rows derive from the same stack model as the
+                      // bars, so tooltip colors always match segments.
+                      const { rows } = stacks ? buildMonthTooltip(stacks, monthIdx) : { rows: [] as never[] }
                       return (
-                        <div className="min-w-[220px] rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
+                        <div ref={setTipRef} className="min-w-[220px] rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
                           <p className="font-medium text-foreground">{title}</p>
                           <p className="mb-1 text-muted-foreground tabular-nums">
                             {total.toLocaleString()} unique contact{total === 1 ? '' : 's'}
                           </p>
                           <div className="space-y-1 border-t border-border pt-1.5">
-                            {rows.map((r) => (
-                              <div key={r.key} className="flex items-center gap-2 tabular-nums">
-                                <span
-                                  className="size-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: r.color }}
-                                />
-                                <span className="min-w-0 flex-1 truncate text-foreground">{r.name}</span>
-                                <span className="font-medium text-foreground">
-                                  {r.value.toLocaleString()}
-                                </span>
-                                <span className="w-11 text-right text-muted-foreground">
-                                  {total > 0 ? ((r.value / total) * 100).toFixed(1) : '0.0'}%
-                                </span>
-                              </div>
-                            ))}
+                            {rows.map((r) => {
+                              const emphasized = hover?.key === r.key
+                              return (
+                                <div
+                                  key={r.key}
+                                  className={
+                                    emphasized
+                                      ? 'flex items-center gap-2 rounded bg-muted/70 font-semibold tabular-nums'
+                                      : 'flex items-center gap-2 tabular-nums'
+                                  }
+                                >
+                                  <span
+                                    className="size-2.5 shrink-0 rounded-full"
+                                    style={{ backgroundColor: r.color }}
+                                  />
+                                  <span className="min-w-0 flex-1 truncate text-foreground">{r.name}</span>
+                                  <span className="font-medium text-foreground">
+                                    {r.value.toLocaleString()}
+                                  </span>
+                                  <span className="w-11 text-right text-muted-foreground">
+                                    {total > 0 ? ((r.value / total) * 100).toFixed(1) : '0.0'}%
+                                  </span>
+                                </div>
+                              )
+                            })}
                           </div>
                           <div className="mt-1.5 flex items-center gap-2 border-t border-border pt-1.5 font-medium tabular-nums">
                             <span className="flex-1 text-foreground">Total</span>
@@ -244,13 +383,26 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
                         stackId="contacts"
                         radius={k.key === roundedKey ? [6, 6, 0, 0] : [0, 0, 0, 0]}
                         maxBarSize={38}
+                        onMouseEnter={(_, i) => {
+                          const m = toMonthIndex(i)
+                          if (m !== null) setHover({ key: k.key, month: m })
+                        }}
                       >
-                        {stacks.months.map((sm, i) => (
-                          <Cell
-                            key={i}
-                            fill={hovered === i ? k.color : SOLID_BAR_COLOR}
-                          />
-                        ))}
+                        {stacks.months.map((sm, i) => {
+                          const dimmed = hoveredMonth !== null && i !== hoveredMonth
+                          const sameMonthMuted =
+                            hoveredMonth === i &&
+                            hover !== null &&
+                            hover.key !== '' &&
+                            hover.key !== k.key
+                          return (
+                            <Cell
+                              key={i}
+                              fill={k.color}
+                              opacity={dimmed ? 0.35 : sameMonthMuted ? 0.55 : 1}
+                            />
+                          )
+                        })}
                         {k.key === lastKey && lastKey ? (
                           <LabelList dataKey={lastKey} position="top" content={renderTotalLabel} />
                         ) : null}

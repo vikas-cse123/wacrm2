@@ -23,6 +23,17 @@ export const OTHERS_COLOR = '#64748b'
 export const NO_FLOW_LABEL = 'No flow'
 export const OTHERS_LABEL = 'Others'
 
+/**
+ * Contacts-by-Ad buckets reuse this same color system (no second
+ * palette): ad URLs are hashed ids via assignFlowColors, the grouped
+ * remainder reuses the Others slot, and unattributed contacts reuse
+ * the neutral gray slot under ad-specific aliases.
+ */
+export const NO_AD_KEY = '__no_ad__'
+export const NO_AD_LABEL = 'No Ad'
+export const NO_AD_COLOR = NO_FLOW_COLOR
+export const AD_OTHERS_COLOR = OTHERS_COLOR
+
 /** The default non-hovered bar color (matches the classic chart). */
 export const SOLID_BAR_COLOR = '#2563eb'
 
