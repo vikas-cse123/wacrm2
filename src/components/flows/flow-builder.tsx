@@ -184,6 +184,7 @@ export function FlowBuilder() {
               allNodes={state.nodes}
               expanded={expandedWithFlash.has(node.node_key)}
               isEntry={state.entry_node_id === node.node_key}
+              isCompletion={state.completion_node_id === node.node_key}
               isFlashed={flashKey === node.node_key}
               cardRef={setNodeRef(node.node_key)}
               issues={issues.filter(
@@ -560,6 +561,7 @@ function NodeCard({
   allNodes,
   expanded,
   isEntry,
+  isCompletion,
   isFlashed,
   cardRef,
   issues,
@@ -573,6 +575,7 @@ function NodeCard({
   allNodes: BuilderNode[];
   expanded: boolean;
   isEntry: boolean;
+  isCompletion: boolean;
   isFlashed: boolean;
   cardRef: (el: HTMLDivElement | null) => void;
   issues: ValidationIssue[];
@@ -635,6 +638,14 @@ function NodeCard({
                 className="border-primary/40 bg-primary/10 text-primary text-[10px]"
               >
                 Entry
+              </Badge>
+            )}
+            {isCompletion && (
+              <Badge
+                variant="outline"
+                className="border-emerald-500/40 bg-emerald-500/10 text-emerald-500 text-[10px]"
+              >
+                Completion
               </Badge>
             )}
           </div>

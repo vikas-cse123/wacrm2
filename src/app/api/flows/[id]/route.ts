@@ -76,6 +76,8 @@ interface PutBody {
   trigger_type?: 'keyword' | 'first_inbound_message' | 'manual'
   trigger_config?: Record<string, unknown>
   entry_node_id?: string | null
+  /** Workspace completion point: node_key, or null to use END. */
+  completion_node_id?: string | null
   fallback_policy?: Record<string, unknown>
   nodes?: Array<{
     node_key: string
@@ -121,6 +123,35 @@ export async function PUT(
     flowPatch.trigger_config = body.trigger_config
   if (body.entry_node_id !== undefined)
     flowPatch.entry_node_id = body.entry_node_id
+  if (body.completion_node_id !== undefined) {
+    const key = body.completion_node_id
+    if (key !== null && (typeof key !== 'string' || !key.trim())) {
+      return NextResponse.json(
+        { error: 'completion_node_id must be a node key or null' },
+        { status: 400 },
+      )
+    }
+    // Validate against the incoming graph when nodes are part of
+    // this save, else against the stored nodes. No DB FK by design
+    // (node delete+insert ordering) — the API is the guard.
+    const knownKeys = new Set(
+      (body.nodes !== undefined
+        ? body.nodes.map((n) => n.node_key)
+        : (
+            await admin
+              .from('flow_nodes')
+              .select('node_key')
+              .eq('flow_id', id)
+          ).data?.map((n) => (n as { node_key: string }).node_key) ?? []),
+    )
+    if (key !== null && !knownKeys.has(key)) {
+      return NextResponse.json(
+        { error: 'completion_node_id must match a node in this flow' },
+        { status: 400 },
+      )
+    }
+    flowPatch.completion_node_id = key
+  }
   if (body.fallback_policy !== undefined)
     flowPatch.fallback_policy = body.fallback_policy
 

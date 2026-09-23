@@ -14,21 +14,47 @@ import { validateProfilePhoto } from '@/lib/whatsapp/business-profile';
  * Business profile photo. Admin-only; multipart form with a `file`
  * field (JPEG/PNG, ≤5MB).
  *
+ * Meta flow (Cloud API, resumable upload — there is NO
+ * /{phone-number-id}/profile/photo edge):
+ *   1. resumable session → upload bytes → image handle,
+ *   2. set it via profile_picture_handle on whatsapp_business_profile,
+ *   3. re-read the profile and return Meta's profile_picture_url.
+ *
  * Both Meta steps happen here so the browser never sees the upload
- * handle: upload → handle → set as profile picture → re-read the
- * profile and return it. Bytes stay in memory only for the request.
+ * handle or the access token. Bytes stay in memory only for the
+ * request; nothing is stored in WACRM — Meta is the source of truth.
+ * Upload and profile-update failures are reported separately
+ * (`stage: 'upload' | 'update'`) so the UI never shows a success
+ * when Meta rejected the photo.
  */
 export async function POST(request: Request) {
   try {
     const { supabase, accountId } = await requireRole('admin');
     const { data: config, error } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token')
+      .select('phone_number_id, access_token, meta_app_id')
       .eq('account_id', accountId)
       .maybeSingle();
     if (error || !config) {
       return NextResponse.json(
         { connected: false, message: 'No WhatsApp number is connected.' },
+        { status: 400 },
+      );
+    }
+
+    // Resumable upload is app-scoped: prefer the account's own Meta
+    // App ID (Settings → WhatsApp), fall back to the global env var
+    // for single-tenant / local setups.
+    const appId =
+      (config.meta_app_id as string | null)?.trim() ||
+      process.env.META_APP_ID?.trim();
+    if (!appId) {
+      return NextResponse.json(
+        {
+          error:
+            'Photo upload needs a Meta App ID. Add it in Settings → WhatsApp (Meta App ID field).',
+          stage: 'upload',
+        },
         { status: 400 },
       );
     }
@@ -57,15 +83,26 @@ export async function POST(request: Request) {
     }
 
     const accessToken = decrypt(config.access_token);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let handle: string;
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const { handle } = await uploadProfilePhoto({
-        phoneNumberId: config.phone_number_id,
+      ({ handle } = await uploadProfilePhoto({
+        appId,
         accessToken,
         fileName: file.name || 'profile-photo',
         mimeType: file.type,
         bytes,
-      });
+      }));
+    } catch (metaError) {
+      const message =
+        metaError instanceof Error ? metaError.message : 'Meta API request failed.';
+      console.error('[business-profile/photo] upload failed:', message);
+      return NextResponse.json(
+        { error: `Photo upload failed: ${message}`, stage: 'upload' },
+        { status: 502 },
+      );
+    }
+    try {
       await updateBusinessProfile({
         phoneNumberId: config.phone_number_id,
         accessToken,
@@ -79,8 +116,13 @@ export async function POST(request: Request) {
     } catch (metaError) {
       const message =
         metaError instanceof Error ? metaError.message : 'Meta API request failed.';
-      console.error('[business-profile/photo] Meta error:', message);
-      return NextResponse.json({ error: message }, { status: 502 });
+      console.error('[business-profile/photo] profile update failed:', message);
+      // The bytes reached Meta but the picture was not applied — say
+      // so explicitly instead of reporting a success.
+      return NextResponse.json(
+        { error: `Profile update failed: ${message}`, stage: 'update' },
+        { status: 502 },
+      );
     }
   } catch (error) {
     return toErrorResponse(error);

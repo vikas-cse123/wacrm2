@@ -299,6 +299,13 @@ export interface FlowRow {
   trigger_type: "keyword" | "first_inbound_message" | "manual";
   trigger_config: KeywordTriggerConfig | FirstInboundTriggerConfig | Record<string, unknown>;
   entry_node_id: string | null;
+  /**
+   * Workspace table classification point: flow_nodes.node_key that
+   * marks a run COMPLETED when reached. NULL = END node decides
+   * (every existing flow). Classification only — never terminates
+   * the run.
+   */
+  completion_node_id: string | null;
   fallback_policy: FlowFallbackPolicy;
   execution_count: number;
   last_executed_at: string | null;

@@ -44,6 +44,10 @@ export default function SettingsPage() {
       const group = SECTION_META[s].group;
       if (s === 'connected-number' && !isOwner) continue;
       if (s === 'security' && !isAdmin) continue;
+      // Business Profile lives under the Account rail group for placement
+      // (directly below Your profile) but stays admin-only as before —
+      // the `account` group below is otherwise visible to every role.
+      if (s === 'business-profile' && !isAdmin) continue;
       if (group === 'top' || group === 'account' || isAdmin) set.add(s);
     }
     return set;

@@ -7,7 +7,10 @@ import { MONTH_SHORT } from '@/lib/dashboard/date-utils'
 import { buildDailyStacks, buildDailyTooltip } from '@/lib/dashboard/daily-stacks'
 import { MONTH_TOOLTIP_WIDTH, anchorCategory, categoryCenterX, formatCountTick, placeTooltipBesideBar, placeTooltipVertically, toDayIndex } from '@/lib/dashboard/chart-helpers'
 import { OTHERS_KEY } from '@/lib/dashboard/flow-colors'
+import { formatDayRangeLabel } from '@/lib/dashboard/daily-range'
+import { loadDailyRange, type DailyRangeData } from '@/lib/dashboard/analytics-client'
 import type { DailyContactsDay, DailyFlowDay } from '@/lib/dashboard/types'
+import { DailyRangeControl, type DailyChartRange } from './daily-range-control'
 import { EmptyState } from './empty-state'
 import { Skeleton } from './skeleton'
 
@@ -41,12 +44,66 @@ function longLabel(date: string): string {
 }
 
 export function DailyChart({ data, flows, loading }: DailyChartProps) {
-  const days = useMemo(() => data ?? [], [data])
+  // This chart's OWN range: trailing-30 by default (existing
+  // behavior), or a custom calendar window. Scoped to this card —
+  // KPI, monthly, and analytics params are never touched.
+  const [range, setRange] = useState<DailyChartRange>({ kind: 'last30' })
+  const [custom, setCustom] = useState<DailyRangeData | null>(null)
+  const [customLoading, setCustomLoading] = useState(false)
+  const [customError, setCustomError] = useState<string | null>(null)
+  const customCache = useRef(new Map<string, DailyRangeData>())
+
+  useEffect(() => {
+    if (range.kind !== 'custom') return
+    const key = `${range.from}|${range.to}`
+    const cached = customCache.current.get(key)
+    if (cached) {
+      setCustom(cached)
+      setCustomLoading(false)
+      setCustomError(null)
+      return
+    }
+    const ctrl = new AbortController()
+    setCustom(null)
+    setCustomLoading(true)
+    setCustomError(null)
+    const tz =
+      typeof Intl !== 'undefined'
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        : 'UTC'
+    loadDailyRange(range.from, range.to, tz, ctrl.signal)
+      .then((d) => {
+        if (ctrl.signal.aborted) return
+        customCache.current.set(key, d)
+        setCustom(d)
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        console.error('[daily-chart] custom range failed:', err)
+        if (!ctrl.signal.aborted) setCustomError('Could not load this date range.')
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setCustomLoading(false)
+      })
+    return () => {
+      ctrl.abort()
+    }
+  }, [range])
+
+  const isCustom = range.kind === 'custom'
+  // Custom failures fall back to the default data (with an inline
+  // note) instead of blanking the chart.
+  const effData = isCustom ? (custom?.contacts ?? data) : data
+  const effFlows = isCustom ? (custom?.flows ?? flows) : flows
+  const effLoading = loading || (isCustom && customLoading && !custom)
+
+  const days = useMemo(() => effData ?? [], [effData])
   const hasData = days.some((d) => d.contacts > 0)
 
+  const windowDays = Math.max(days.length, effFlows?.length ?? 0, 1)
   const stacks = useMemo(
-    () => (flows && flows.length > 0 ? buildDailyStacks(flows) : null),
-    [flows],
+    () => (effFlows && effFlows.length > 0 ? buildDailyStacks(effFlows, windowDays) : null),
+    [effFlows, windowDays],
   )
   // Stack structure exists when at least one real flow is present.
   const stacked =
@@ -137,6 +194,13 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
     cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y) && (cursor.x > 0 || cursor.y > 0)
       ? cursor
       : null
+
+  const handleRangeChange = useCallback((v: DailyChartRange) => {
+    // Day indices shift with the window — drop stale hover/cursor.
+    setHover(null)
+    setCursor(null)
+    setRange(v)
+  }, [])
   // Tooltip anchor: FIVE days back from the hovered day, with the
   // card shifted one extra category left so its left edge starts a
   // full five days back (hover 30 Aug → card starts at 25 Aug;
@@ -188,24 +252,36 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
       ? placeTooltipVertically(validCursor.y, tipH, bodyHeight - 24)
       : 8
 
+  const subtitle = isCustom
+    ? `Unique contacts per day · ${formatDayRangeLabel(range.from, range.to)}`
+    : 'Unique contacts per day · trailing 30 days'
+
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_2px_rgba(15,23,42,0.04)]" aria-label="Contacts Messaged Last 30 Days">
-      <header className="border-b border-border px-5 py-4">
-        <h2 className="text-[15px] font-semibold tracking-tight text-foreground">
-          Contacts Messaged — Last 30 Days
-        </h2>
-        <p className="mt-0.5 text-[13px] text-muted-foreground">
-          Unique contacts per day · trailing 30 days
-        </p>
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-foreground">
+            Contacts Messaged — Last 30 Days
+          </h2>
+          <p className="mt-0.5 text-[13px] text-muted-foreground">
+            {subtitle}
+          </p>
+        </div>
+        <DailyRangeControl value={range} onChange={handleRangeChange} />
       </header>
 
       <div ref={setBodyRef} className="p-5">
-        {loading || data == null ? (
+        {isCustom && customError && !customLoading ? (
+          <p className="mb-2 text-[13px] text-destructive" role="alert">
+            {customError} Showing the default range instead.
+          </p>
+        ) : null}
+        {effLoading || effData == null ? (
           <Skeleton className="h-[240px] w-full" />
         ) : !hasData ? (
           <EmptyState
             icon={Users}
-            title="No contacts messaged in the last 30 days"
+            title={isCustom ? 'No contacts messaged in this period' : 'No contacts messaged in the last 30 days'}
             hint="Each bar counts distinct contacts messaged that day."
           />
         ) : (
@@ -241,7 +317,7 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
                   tickLine={false}
                   axisLine={{ stroke: '#e2e8f0' }}
                   tick={{ fontSize: 11, fill: '#64748b' }}
-                  interval={4}
+                  interval={chartData.length <= 31 ? 4 : Math.max(1, Math.ceil(chartData.length / 8))}
                 />
                 <YAxis
                   allowDecimals={false}

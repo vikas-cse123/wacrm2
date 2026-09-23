@@ -55,6 +55,7 @@ import { uploadAccountMedia, MEDIA_MAX_BYTES } from "@/lib/storage/upload-media"
 import { ImportDateRangePopover } from "../import-date-range-popover";
 import { slugify, type BuilderNode } from "../shared";
 import { useFlowEditor } from "../flow-editor-state";
+import { CompletionPointRow } from "./completion-point-row";
 import { NextNodeRow, NodeKeySelect, TextRow } from "./fields";
 import { TagSelect, useAccountTags } from "./tag-select";
 
@@ -65,7 +66,16 @@ interface NodeConfigFormProps {
   onUpdateConfig: (patch: Record<string, unknown>) => void;
 }
 
-export function NodeConfigForm({
+export function NodeConfigForm(props: NodeConfigFormProps) {
+  return (
+    <>
+      <NodeTypeForm {...props} />
+      <CompletionPointRow nodeKey={props.node.node_key} />
+    </>
+  );
+}
+
+function NodeTypeForm({
   node,
   allNodes,
   showAdvanced,

@@ -27,6 +27,7 @@ const pageTitles: Record<string, string> = {
   "/broadcasts": "Broadcasts",
   "/automations": "Automations",
   "/settings": "Settings",
+  "/workspace": "Workspace",
 };
 
 function getPageTitle(pathname: string): string {
@@ -49,6 +50,12 @@ export function Header({ onOpenSidebar }: HeaderProps) {
   // UI-only: Settings link is owner-only, matching the sidebar gating.
   const isOwner = accountRole === "owner";
   const title = getPageTitle(pathname);
+  // The dashboard page renders its own main "Dashboard" heading above
+  // the content, so the header title is hidden there to avoid a
+  // duplicate. Same for /broadcasts: the page renders its own
+  // "Bulk Messages" heading, so the stale "Broadcasts" header title
+  // is hidden there too. Every other page keeps its header title.
+  const showTitle = pathname !== "/dashboard" && pathname !== "/broadcasts";
   const initial =
     profile?.full_name?.charAt(0)?.toUpperCase() ??
     profile?.email?.charAt(0)?.toUpperCase() ??
@@ -66,9 +73,11 @@ export function Header({ onOpenSidebar }: HeaderProps) {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
-          {title}
-        </h1>
+        {showTitle ? (
+          <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
+            {title}
+          </h1>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2">

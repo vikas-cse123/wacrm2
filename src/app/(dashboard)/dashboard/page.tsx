@@ -10,7 +10,6 @@ import {
 } from '@/lib/dashboard/date-utils'
 import { loadDashboardAnalytics } from '@/lib/dashboard/analytics-client'
 import type { DailyContactsDay, DailyFlowDay, DashboardKpis, MonthlyFlowMonth } from '@/lib/dashboard/types'
-import { DateFilter } from '@/components/dashboard/date-filter'
 import { KpiCard } from '@/components/dashboard/kpi-card'
 import { DailyChart } from '@/components/dashboard/daily-chart'
 import { MonthlyChart } from '@/components/dashboard/monthly-chart'
@@ -106,17 +105,10 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          {/* <p className="mt-1 text-sm text-muted-foreground">
             WhatsApp performance for your travel agency — messages, contacts and flows.
-          </p>
+          </p> */}
         </div>
-        <DateFilter
-          value={filter}
-          onChange={setFilter}
-          customFrom={customFrom}
-          customTo={customTo}
-          onCustomApply={handleCustomApply}
-        />
       </div>
 
       {/* KPI — unique contacts messaged in range */}
