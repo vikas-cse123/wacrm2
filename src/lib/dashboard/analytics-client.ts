@@ -18,6 +18,7 @@ import type {
   MonthlyFlowSegment,
 } from './types'
 import { normalizeContactsByAd } from './contacts-by-ad'
+import { dayKeysBetween, fillDailyContacts, fillDailyFlows } from './daily-range'
 import type { ContactsByAd } from './types'
 
 export interface DashboardAnalyticsParams {
@@ -29,6 +30,12 @@ export interface DashboardAnalyticsParams {
   yearEndISO: string
   year: number
   tz: string
+  /**
+   * Optional custom window for the daily chart only (YYYY-MM-DD).
+   * Both or neither; when absent the RPC serves trailing-30.
+   */
+  dailyStart?: string
+  dailyEnd?: string
 }
 
 export interface DashboardAnalyticsResult {
@@ -66,6 +73,9 @@ export async function loadDashboardAnalytics(
     yearEnd: params.yearEndISO,
     year: String(params.year),
     tz: params.tz,
+    ...(params.dailyStart && params.dailyEnd
+      ? { dailyStart: params.dailyStart, dailyEnd: params.dailyEnd }
+      : {}),
   })
   const res = await fetch(`/api/dashboard/analytics?${qs.toString()}`, {
     signal,
@@ -191,12 +201,13 @@ function isFlowSegment(f: unknown): f is MonthlyFlowSegment {
 }
 
 /**
- * Normalize the RPC `dailyFlows` payload into exactly 30 days.
- * Malformed days are dropped (never fabricated); short payloads are
- * front-padded with empty days so the trailing-30 window stays
- * aligned; long payloads keep the most recent 30.
+ * Normalize the RPC `dailyFlows` payload to exactly `dayCount` days
+ * (default 30, preserving the trailing-30 behavior). Malformed days
+ * are dropped (never fabricated); short payloads are front-padded
+ * with empty days so the trailing edge stays aligned; long payloads
+ * keep the most recent `dayCount`.
  */
-export function normalizeDailyFlows(input: unknown): DailyFlowDay[] {
+export function normalizeDailyFlows(input: unknown, dayCount: number = 30): DailyFlowDay[] {
   const days: DailyFlowDay[] = Array.isArray(input)
     ? (input as unknown[]).flatMap((d) => {
         if (!d || typeof d !== 'object') return []
@@ -227,20 +238,22 @@ export function normalizeDailyFlows(input: unknown): DailyFlowDay[] {
         ]
       })
     : []
-  const trimmed = days.slice(-30)
-  while (trimmed.length < 30) {
+  const trimmed = days.slice(-dayCount)
+  while (trimmed.length < dayCount) {
     trimmed.unshift({ date: '', total: 0, flows: [] })
   }
   return trimmed
 }
 
 /**
- * Normalize the RPC `dailyContacts` payload into exactly 30 days.
- * Malformed entries are dropped (never fabricated); short payloads
- * are front-padded with zero days so the chart window stays aligned
- * to the trailing edge; long payloads keep the most recent 30.
+ * Normalize the RPC `dailyContacts` payload to exactly `dayCount`
+ * days (default 30, preserving the trailing-30 behavior). Malformed
+ * entries are dropped (never fabricated); short payloads are
+ * front-padded with zero days so the chart window stays aligned
+ * to the trailing edge; long payloads keep the most recent
+ * `dayCount`.
  */
-export function normalizeDailyContacts(input: unknown): DailyContactsDay[] {
+export function normalizeDailyContacts(input: unknown, dayCount: number = 30): DailyContactsDay[] {
   const days: DailyContactsDay[] = Array.isArray(input)
     ? (input as unknown[]).flatMap((d) => {
         if (!d || typeof d !== 'object') return []
@@ -257,9 +270,72 @@ export function normalizeDailyContacts(input: unknown): DailyContactsDay[] {
         return [{ date: r.date, contacts: Math.floor(r.contacts) }]
       })
     : []
-  const trimmed = days.slice(-30)
-  while (trimmed.length < 30) {
+  const trimmed = days.slice(-dayCount)
+  while (trimmed.length < dayCount) {
     trimmed.unshift({ date: '', contacts: 0 })
   }
   return trimmed
+}
+
+export interface DailyRangeData {
+  /** One entry per calendar day in the range, zeros included. */
+  contacts: DailyContactsDay[]
+  /** Same days with their per-flow unique-contact split. */
+  flows: DailyFlowDay[]
+}
+
+/**
+ * Fetch one arbitrary daily window for the daily chart's custom
+ * range. Same endpoint, same RPC, same unique-contact semantics —
+ * only the daily window differs (via dailyStart/dailyEnd). The
+ * required KPI/year params do not affect the daily output; the
+ * caller's current day/year are sent so the request stays valid.
+ * Returns ONLY daily data — KPI/monthly payload keys are ignored,
+ * so other dashboard sections can never be affected.
+ */
+export async function loadDailyRange(
+  fromKey: string,
+  toKey: string,
+  tz: string,
+  signal?: AbortSignal,
+): Promise<DailyRangeData> {
+  const keys = dayKeysBetween(fromKey, toKey)
+  if (!keys) {
+    throw new Error('loadDailyRange requires a valid from/to day range')
+  }
+  const now = new Date()
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+  const nextStart = new Date(dayStart)
+  nextStart.setDate(nextStart.getDate() + 1)
+  const prevStart = new Date(dayStart)
+  prevStart.setDate(prevStart.getDate() - 1)
+  const year = now.getFullYear()
+  const qs = new URLSearchParams({
+    start: dayStart.toISOString(),
+    end: nextStart.toISOString(),
+    prevStart: prevStart.toISOString(),
+    prevEnd: dayStart.toISOString(),
+    yearStart: new Date(year, 0, 1).toISOString(),
+    yearEnd: new Date(year + 1, 0, 1).toISOString(),
+    year: String(year),
+    tz,
+    dailyStart: fromKey,
+    dailyEnd: toKey,
+  })
+  const res = await fetch(`/api/dashboard/analytics?${qs.toString()}`, {
+    signal,
+    cache: 'no-store',
+  })
+  if (!res.ok) {
+    throw new Error(`Daily range request failed: ${res.status}`)
+  }
+  const json = (await res.json()) as {
+    dailyContacts?: unknown
+    dailyFlows?: unknown
+  }
+  // Normalize to the window length, then pin to the exact keys so
+  // every calendar day renders one bar (missing days → zeros).
+  const contacts = fillDailyContacts(normalizeDailyContacts(json.dailyContacts, keys.length), keys)
+  const flows = fillDailyFlows(normalizeDailyFlows(json.dailyFlows, keys.length), keys)
+  return { contacts, flows }
 }

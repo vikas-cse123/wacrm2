@@ -1240,9 +1240,11 @@ export async function downloadMediaStream(
 //
 // Meta remains the source of truth: reads come from
 // GET /{phone-number-id}/whatsapp_business_profile, writes go to
-// POST on the same edge, and the photo uses the two-step upload
-// (POST /{phone-number-id}/profile/photo → handle → set via the
-// profile edge). Nothing is duplicated into our database.
+// POST on the same edge, and the photo uses the Resumable Upload
+// API (app-scoped session → bytes → handle → set via
+// profile_picture_handle on the profile edge). There is NO
+// /{phone-number-id}/profile/photo edge (it returns OAuthException
+// code 2500). Nothing is duplicated into our database.
 //
 // Field support (Graph API v21.0 business-profile edge):
 //   - about, address, description, email, vertical, websites —
@@ -1406,7 +1408,8 @@ export async function updateBusinessProfile(
 }
 
 export interface UploadProfilePhotoArgs {
-  phoneNumberId: string
+  /** Meta App id (per-account meta_app_id, else env META_APP_ID) — resumable upload is app-scoped. */
+  appId: string
   accessToken: string
   fileName: string
   mimeType: string
@@ -1414,34 +1417,21 @@ export interface UploadProfilePhotoArgs {
 }
 
 /**
- * Upload a profile photo to Meta. Returns the handle to pass as
- * `profile_picture_handle` in updateBusinessProfile — the bytes are
- * never stored locally.
+ * Upload a profile photo to Meta via the Resumable Upload API and
+ * return the image handle to pass as `profile_picture_handle` in
+ * updateBusinessProfile. The bytes are never stored locally.
+ *
+ * Flow (WhatsApp Cloud API business-profile photo):
+ *   1. POST /{app-id}/uploads → upload session id
+ *   2. POST /{session-id} with `Authorization: OAuth` + `file_offset`
+ *      → image handle `h`
+ *   3. Caller sets it via profile_picture_handle (see route).
  */
 export async function uploadProfilePhoto(
   args: UploadProfilePhotoArgs
 ): Promise<{ handle: string }> {
-  const { phoneNumberId, accessToken, fileName, mimeType, bytes } = args
-  const form = new FormData()
-  form.append(
-    'file',
-    new Blob([bytes as unknown as BlobPart], { type: mimeType }),
-    fileName,
-  )
-  const response = await fetch(
-    `${META_API_BASE}/${phoneNumberId}/profile/photo`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
-      body: form,
-    },
-  )
-  if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
-  }
-  const data = (await response.json()) as { handle?: string }
-  if (!data.handle) throw new Error('Meta did not return a photo handle')
-  return { handle: data.handle }
+  const { appId, accessToken, fileName, mimeType, bytes } = args
+  return uploadResumableMedia({ appId, accessToken, fileName, mimeType, bytes })
 }
 
 // ============================================================

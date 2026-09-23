@@ -14,6 +14,8 @@
 //   "Others" — it stays its own gray segment.
 // - Key/stack order is stable (window-rank desc, then Others,
 //   then No flow) so colors and legend don't jump between days.
+// - `maxDays` caps the rendered window (default 30, preserving the
+//   trailing-30 chart); custom ranges pass their own day count.
 // - Colors come from the same assignFlowColors pool as the monthly
 //   chart: identical id sets hash to identical colors, so a flow
 //   never wears two colors across the two charts.
@@ -45,8 +47,8 @@ export interface DailyStacks {
   days: DailyStackDay[]
 }
 
-export function buildDailyStacks(input: DailyFlowDay[]): DailyStacks {
-  const days = (input ?? []).slice(-30)
+export function buildDailyStacks(input: DailyFlowDay[], maxDays: number = 30): DailyStacks {
+  const days = (input ?? []).slice(-maxDays)
 
   // Window-wide contacts per named flow (for stable ranking).
   const windowTotals = new Map<string, number>()

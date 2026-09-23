@@ -103,6 +103,7 @@ import { WebhookRow } from './forms/fields';
 interface NodeData extends Record<string, unknown> {
   node: BuilderNode;
   isEntry: boolean;
+  isCompletion: boolean;
   /** Validator's "look here" pulse — flashes the card border for
    *  ~1.6s. Drives a CSS animation, doesn't change layout. */
   isFlashed: boolean;
@@ -135,7 +136,7 @@ function slotColor(nodeType: NodeType, slotId: string, fallback: string) {
 }
 
 function FlowNodeCard({ data, selected }: NodeProps) {
-  const { node, isEntry, isFlashed } = data as NodeData;
+  const { node, isEntry, isCompletion, isFlashed } = data as NodeData;
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   // Full-text canvas preview: no "…" cap, newlines preserved. The
@@ -207,6 +208,11 @@ function FlowNodeCard({ data, selected }: NodeProps) {
         {isEntry && (
           <span className="border-border text-muted-foreground ml-auto rounded border px-1.5 py-0.5 text-[8.5px] font-bold tracking-[0.1em] uppercase">
             Entry
+          </span>
+        )}
+        {isCompletion && (
+          <span className="ml-auto rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[8.5px] font-bold tracking-[0.1em] text-emerald-500 uppercase">
+            Completion
           </span>
         )}
       </div>
@@ -293,6 +299,7 @@ function FlowCanvasInner() {
   const reactFlow = useReactFlow();
   const builderNodes = state.nodes;
   const entryNodeId = state.entry_node_id;
+  const completionNodeId = state.completion_node_id;
 
   // Side-panel state — which node's form is open. Canvas-only UI; the
   // list view's analogue is the per-card expanded set in
@@ -350,13 +357,14 @@ function FlowCanvasInner() {
         data: {
           node: n,
           isEntry: n.node_key === entryNodeId,
+          isCompletion: n.node_key === completionNodeId,
           isFlashed: n.node_key === flashKey,
         },
       };
     });
 
     return nodes;
-  }, [builderNodes, entryNodeId, flashKey, autoLayoutPositions]);
+  }, [builderNodes, entryNodeId, completionNodeId, flashKey, autoLayoutPositions]);
 
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
 
@@ -583,6 +591,7 @@ function FlowCanvasInner() {
       <NodeEditSheet
         node={selectedNode}
         isEntry={selectedNode?.node_key === entryNodeId}
+        isCompletion={selectedNode?.node_key === completionNodeId}
         allNodes={builderNodes}
         onClose={() => setSelectedNodeKey(null)}
         onUpdateConfig={onSelectedUpdateConfig}
@@ -602,6 +611,7 @@ function FlowCanvasInner() {
 function NodeEditSheet({
   node,
   isEntry,
+  isCompletion,
   allNodes,
   onClose,
   onUpdateConfig,
@@ -610,6 +620,7 @@ function NodeEditSheet({
 }: {
   node: BuilderNode | null;
   isEntry: boolean;
+  isCompletion: boolean;
   allNodes: BuilderNode[];
   onClose: () => void;
   onUpdateConfig: (patch: Record<string, unknown>) => void;
@@ -642,6 +653,11 @@ function NodeEditSheet({
               {isEntry && (
                 <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-300 uppercase">
                   Entry
+                </span>
+              )}
+              {isCompletion && (
+                <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-300 uppercase">
+                  Completion
                 </span>
               )}
             </SheetTitle>

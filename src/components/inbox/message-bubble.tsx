@@ -179,7 +179,12 @@ function MediaImage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, loadImage]);
 
-  const frameClass = compact ? "h-32 w-32" : "h-40 w-60";
+  // Loading / error placeholder frames are fixed-but-bounded so a pending
+  // image reserves a sensible area without stretching the bubble across
+  // the thread. `max-w-full` keeps it inside narrow viewports.
+  const frameClass = compact
+    ? "h-32 w-32 max-w-full"
+    : "h-40 w-[240px] max-w-full";
 
   if (error) {
     return (
@@ -198,15 +203,19 @@ function MediaImage({
   }
 
   return (
-    <div ref={hostRef}>
+    <div ref={hostRef} className="min-w-0 max-w-full">
       <img
         src={src ?? ""}
         alt={alt}
         loading="lazy"
         className={
           compact
-            ? "h-32 w-32 cursor-pointer rounded-lg object-contain transition-opacity hover:opacity-90"
-            : "max-h-64 max-w-60 cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
+            ? "h-32 w-32 max-w-full cursor-pointer rounded-lg object-contain transition-opacity hover:opacity-90"
+            : // Media determines its own size: natural dimensions up to a
+              // bounded box, aspect preserved, never stretched. `w-auto`
+              // (not `w-full`) is load-bearing — a small image must stay
+              // small instead of inflating the bubble to full width.
+              "block h-auto w-auto max-w-full cursor-pointer rounded-xl object-cover transition-opacity hover:opacity-90 sm:max-w-[320px] max-h-[320px]"
         }
         onClick={() => setIsExpanded(true)}
         onError={() => setError(true)}
@@ -269,7 +278,13 @@ function MessageContent({
 
     case "image":
       return (
-        <div>
+        // Attachment layout: image defines the width, caption sits below
+        // in normal text typography. Single caption render — never
+        // duplicated as separate message text. The `sm:max-w-[320px]` cap
+        // mirrors the image's own max width so a LONG caption wraps
+        // vertically instead of stretching the bubble to the full
+        // conversation width (w-fit sizes to max-content otherwise).
+        <div className="min-w-0 max-w-full sm:max-w-[320px]">
           {message.media_url ? (
             <MediaImage url={message.media_url} alt="Shared image" />
           ) : (
@@ -279,37 +294,52 @@ function MessageContent({
             <LinkifiedText
               text={message.content_text}
               onPrimary={onPrimary}
-              className="mt-1"
+              className="mt-1.5 px-1 break-words"
             />
           )}
         </div>
       );
 
     case "sticker":
-      // Stickers are small square webp images. Same lazy MediaImage,
-      // compact frame, no caption (Meta stickers carry none).
+      // Stickers are small square webp images rendered WITHOUT a colored
+      // bubble (see MessageBubble shell). Same lazy MediaImage, compact
+      // frame, transparency preserved via object-contain. Caption is
+      // unexpected from Meta but rendered if ever present, wrapped in a
+      // narrow column so it can't stretch the row.
       return (
-        <div>
+        <div className="min-w-0 max-w-[200px]">
           {message.media_url ? (
             <MediaImage url={message.media_url} alt="Sticker" compact />
           ) : (
             <MediaUnavailable label="Sticker" />
+          )}
+          {message.content_text && (
+            <LinkifiedText
+              text={message.content_text}
+              onPrimary={false}
+              className="mt-1.5 break-words text-sm"
+            />
           )}
         </div>
       );
 
     case "video":
       return (
-        <div>
+        // Caption capped at the player's max width (mirrors the video
+        // element below) so long captions wrap instead of widening the
+        // bubble — same mechanism as the image case.
+        <div className="min-w-0 max-w-full sm:max-w-[320px]">
           {message.media_url ? (
             // preload="metadata" — the browser fetches only headers +
             // first frames until the user hits play; with the proxy's
             // Range support, playback then streams in chunks.
+            // Sizing mirrors images: natural aspect, bounded box, the
+            // player — not the bubble — sets the width.
             <video
               src={message.media_url}
               controls
               preload="metadata"
-              className="max-h-64 max-w-60 rounded-lg"
+              className="block h-auto w-auto max-w-full rounded-xl sm:max-w-[320px] max-h-[320px] bg-black/60"
             />
           ) : (
             <MediaUnavailable label="Video" />
@@ -318,7 +348,7 @@ function MessageContent({
             <LinkifiedText
               text={message.content_text}
               onPrimary={onPrimary}
-              className="mt-1"
+              className="mt-1.5 px-1 break-words"
             />
           )}
         </div>
@@ -326,13 +356,27 @@ function MessageContent({
 
     case "audio":
       return (
-        <div>
+        // Compact attachment: fixed comfortable width, never a giant
+        // bubble. Caption (rare for audio) renders below when present.
+        <div className="min-w-0 w-[240px] max-w-full">
           {message.media_url ? (
             // preload="none" — no bytes fetched until play. Seeking
             // streams via Range through the proxy.
-            <audio src={message.media_url} controls preload="none" className="max-w-60" />
+            <audio
+              src={message.media_url}
+              controls
+              preload="none"
+              className="block w-full max-w-full"
+            />
           ) : (
             <MediaUnavailable label="Audio" />
+          )}
+          {message.content_text && (
+            <LinkifiedText
+              text={message.content_text}
+              onPrimary={onPrimary}
+              className="mt-1.5 px-1 break-words"
+            />
           )}
         </div>
       );
@@ -342,6 +386,14 @@ function MessageContent({
         return <MediaUnavailable label={documentDisplayName(message)} />;
       }
       const fileName = documentDisplayName(message);
+      // Caption vs filename: outbound docs store `caption || filename` in
+      // content_text while the real filename lives in media_file_name.
+      // When both exist and differ, content_text is a genuine caption and
+      // renders below the card; otherwise it IS the filename (no caption).
+      const rawFileName = message.media_file_name?.trim() || "";
+      const rawText = message.content_text?.trim() || "";
+      const caption =
+        rawFileName && rawText && rawText !== rawFileName ? rawText : null;
       // The file itself is fetched only on user action: Open streams
       // it in a new tab (Range-capable via the proxy), Download saves
       // it. Merely opening the conversation downloads nothing.
@@ -349,26 +401,37 @@ function MessageContent({
         ? `${message.media_url}?download=1`
         : message.media_url;
       return (
-        <div className="flex items-center gap-1 rounded-lg bg-muted/50 px-2 py-1.5">
-          <a
-            href={message.media_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={`Open ${fileName}`}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-muted"
-          >
-            <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{fileName}</span>
-          </a>
-          <a
-            href={downloadHref}
-            download={fileName}
-            title={`Download ${fileName}`}
-            aria-label={`Download ${fileName}`}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Download className="h-4 w-4" />
-          </a>
+        // Compact attachment card: bounded width, truncation for long
+        // names, never a tall empty bubble.
+        <div className="min-w-0 w-[260px] max-w-full">
+          <div className="flex items-center gap-1 rounded-xl bg-muted/50 px-2 py-1.5">
+            <a
+              href={message.media_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Open ${fileName}`}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-muted"
+            >
+              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{fileName}</span>
+            </a>
+            <a
+              href={downloadHref}
+              download={fileName}
+              title={`Download ${fileName}`}
+              aria-label={`Download ${fileName}`}
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Download className="h-4 w-4" />
+            </a>
+          </div>
+          {caption && (
+            <LinkifiedText
+              text={caption}
+              onPrimary={onPrimary}
+              className="mt-1.5 px-1 break-words"
+            />
+          )}
         </div>
       );
     }
@@ -466,6 +529,17 @@ export function MessageBubble({
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const time = format(new Date(message.created_at), "h:mm a");
 
+  // Presentation-only branching: the bubble shell stays shared (alignment,
+  // reply, metadata, reactions) while the CONTENT area gets type-specific
+  // sizing. `isMediaAttachment` covers bubble-backed media (image/video/
+  // audio/document); stickers render chromeless like WhatsApp.
+  const isSticker = message.content_type === "sticker";
+  const isMediaAttachment =
+    message.content_type === "image" ||
+    message.content_type === "video" ||
+    message.content_type === "audio" ||
+    message.content_type === "document";
+
   // Row alignment + width cap are owned by <MessageActions> so its hover
   // group matches the bubble's content area, not the full row.
   return (
@@ -477,42 +551,78 @@ export function MessageBubble({
     >
       <div
         className={cn(
-          "relative rounded-2xl px-3 py-2",
-          isAgent
-            ? "rounded-br-md bg-primary text-primary-foreground"
-            : "rounded-bl-md bg-muted text-foreground",
+          "relative min-w-0 max-w-full rounded-2xl",
+          // Sticker: no colored bubble at all — transparent chromeless
+          // container preserves positioning context for hover actions
+          // without painting a giant rectangle around the art.
+          isSticker
+            ? "bg-transparent p-0"
+            : isMediaAttachment
+              ? // Media attachment: tight padding + shrink-to-fit so the
+                // MEDIA defines the width, not a text-sized bubble.
+                // `w-fit` + `overflow-hidden` + `max-w-full` keep large
+                // media bounded and small media small. Colors/rounding
+                // stay identical to text bubbles.
+                "w-fit overflow-hidden p-1.5"
+              : "px-3 py-2",
+          !isSticker &&
+            (isAgent
+              ? "rounded-br-md bg-primary text-primary-foreground"
+              : "rounded-bl-md bg-muted text-foreground"),
         )}
       >
         {reply && (
           <ReplyQuote
             authorLabel={reply.authorLabel}
             preview={reply.preview}
-            onPrimary={isAgent}
+            onPrimary={isAgent && !isSticker}
           />
         )}
-        <MessageContent message={message} onPrimary={isAgent} />
+        <MessageContent message={message} onPrimary={isAgent && !isSticker} />
         <div
           className={cn(
             "mt-1 flex items-center gap-1",
+            isMediaAttachment || isSticker ? "px-1" : undefined,
             isAgent ? "justify-end" : "justify-start",
           )}
         >
           <span
             className={cn(
               "text-[10px]",
-              // Outbound bubbles sit on the primary fill, so the
-              // timestamp must read against that (not the neutral
-              // foreground) — otherwise it goes low-contrast in light
-              // mode. Inbound bubbles use the muted surface.
-              isAgent ? "text-primary-foreground/70" : "text-muted-foreground",
+              isSticker
+                ? // No bubble behind stickers — always muted, either side.
+                  "text-muted-foreground"
+                : // Outbound bubbles sit on the primary fill, so the
+                  // timestamp must read against that (not the neutral
+                  // foreground) — otherwise it goes low-contrast in light
+                  // mode. Inbound bubbles use the muted surface.
+                  isAgent
+                  ? "text-primary-foreground/70"
+                  : "text-muted-foreground",
             )}
           >
             {time}
           </span>
           {isAgent && (
             <>
-              <span className="text-primary-foreground/50 text-[10px]">·</span>
-              <span className="text-primary-foreground/70 text-[10px]">
+              <span
+                className={cn(
+                  "text-[10px]",
+                  isSticker
+                    ? "text-muted-foreground/60"
+                    : "text-primary-foreground/50",
+                )}
+              >
+                ·
+              </span>
+              <span
+                className={cn(
+                  "text-[10px]",
+                  isSticker
+                    ? "text-muted-foreground"
+                    : "text-primary-foreground/70",
+                )}
+              >
                 {displayMessageStatus(message.status)}
               </span>
             </>

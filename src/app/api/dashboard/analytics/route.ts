@@ -32,6 +32,23 @@ function parseISO(value: string | null): string | null {
   return new Date(t).toISOString();
 }
 
+/**
+ * Optional YYYY-MM-DD calendar-day bound for the daily chart's
+ * custom window (migration 083). Null when absent; validated
+ * strictly (real calendar date) so malformed input is rejected
+ * rather than silently shifting the window.
+ */
+function parseDayKey(value: string | null): string | null {
+  if (!value) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [y, m, d] = value.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) {
+    return null;
+  }
+  return value;
+}
+
 export async function GET(request: Request) {
   try {
     const ctx = await getCurrentAccount();
@@ -46,6 +63,31 @@ export async function GET(request: Request) {
     const yearRaw = url.searchParams.get("year");
     const year = yearRaw ? Number(yearRaw) : NaN;
     const tz = (url.searchParams.get("tz") || "UTC").slice(0, 64);
+    // Optional custom window for the daily chart only (migration
+    // 083). Absent (or both absent) → trailing-30 behavior, exactly
+    // as before. Any other dashboard output is unaffected.
+    const dailyStartRaw = url.searchParams.get("dailyStart");
+    const dailyEndRaw = url.searchParams.get("dailyEnd");
+    let dailyStart: string | null = null;
+    let dailyEnd: string | null = null;
+    if (dailyStartRaw !== null || dailyEndRaw !== null) {
+      dailyStart = parseDayKey(dailyStartRaw);
+      dailyEnd = parseDayKey(dailyEndRaw);
+      if (!dailyStart || !dailyEnd) {
+        return NextResponse.json(
+          { error: "dailyStart and dailyEnd must both be valid YYYY-MM-DD dates" },
+          { status: 400 },
+        );
+      }
+      const spanDays =
+        (Date.parse(dailyEnd) - Date.parse(dailyStart)) / 86_400_000;
+      if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > 366) {
+        return NextResponse.json(
+          { error: "dailyEnd must be on/after dailyStart and within 366 days" },
+          { status: 400 },
+        );
+      }
+    }
 
     if (!start || !end || !prevStart || !prevEnd || !yearStart || !yearEnd) {
       return NextResponse.json(
@@ -66,6 +108,9 @@ export async function GET(request: Request) {
       );
     }
 
+    // The daily-window params are only sent when a custom window
+    // was requested, so pre-083 backends keep serving the default
+    // call shape untouched.
     const { data, error } = await ctx.supabase.rpc("get_dashboard_analytics", {
       p_start: start,
       p_end: end,
@@ -75,6 +120,9 @@ export async function GET(request: Request) {
       p_year_end: yearEnd,
       p_year: year,
       p_tz: tz,
+      ...(dailyStart && dailyEnd
+        ? { p_daily_from: dailyStart, p_daily_to: dailyEnd }
+        : {}),
     });
 
     if (error) {

@@ -68,6 +68,8 @@ export interface BuilderState {
   trigger_type: "keyword" | "first_inbound_message" | "manual";
   trigger_config: Record<string, unknown>;
   entry_node_id: string | null;
+  /** Workspace completion point (node_key) or null = END decides. */
+  completion_node_id: string | null;
   fallback_policy: FlowFallbackPolicy;
   status: FlowRow["status"];
   nodes: BuilderNode[];
@@ -267,6 +269,7 @@ export function FlowEditorProvider({
     trigger_type: initialFlow.trigger_type,
     trigger_config: initialFlow.trigger_config as Record<string, unknown>,
     entry_node_id: initialFlow.entry_node_id,
+    completion_node_id: initialFlow.completion_node_id ?? null,
     fallback_policy: {
       ...DEFAULT_FALLBACK_POLICY,
       ...(initialFlow.fallback_policy ?? {}),
@@ -366,6 +369,7 @@ export function FlowEditorProvider({
           trigger_type: state.trigger_type,
           trigger_config: state.trigger_config,
           entry_node_id: state.entry_node_id,
+          completion_node_id: state.completion_node_id,
           fallback_policy: state.fallback_policy,
           nodes: state.nodes,
         }),
@@ -539,6 +543,9 @@ export function FlowEditorProvider({
           key,
         ),
         entry_node_id: s.entry_node_id === key ? null : s.entry_node_id,
+        // A deleted node cannot stay the completion point.
+        completion_node_id:
+          s.completion_node_id === key ? null : s.completion_node_id,
       }));
     },
     [setState],
