@@ -87,6 +87,37 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: async () => ({ data: { user: h.user } }) },
     from: (table: string) => {
       if (table === "flows") return tableBuilder(h.flow);
+      if (table === "workspace_fields") {
+        return {
+          select: () => ({
+            eq: () => ({
+              order: () => ({
+                order: async () => ({ data: [], error: null }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "workspace_values") {
+        return {
+          select: () => ({
+            in: async () => ({ data: [], error: null }),
+          }),
+        };
+      }
+      if (table === "contacts") {
+        return {
+          select: () => ({
+            in: async () => ({
+              data: [
+                { id: "c-1", source_url: "https://fb.me/9NXAdJ5P2" },
+                { id: "c-2", source_url: null },
+              ],
+              error: null,
+            }),
+          }),
+        };
+      }
       return {
         select: () => ({
           eq: () => ({
@@ -148,6 +179,35 @@ describe("GET /api/flows/[id]/table", () => {
     );
     expect(res.status).toBe(200);
     expect(h.rpcArgs).toMatchObject({ p_view: "completed" });
+  });
+
+  it("exposes custom Workspace fields/values additively", async () => {
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.customFields).toEqual([]);
+    expect(json.customValues).toEqual({});
+    // Existing shape preserved.
+    expect(Array.isArray(json.columns)).toBe(true);
+    expect(Array.isArray(json.rows)).toBe(true);
+  });
+
+  it("attaches each row's own contact source URL (batched, per contact)", async () => {
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      rows: Array<{ runId: string; sourceUrl?: string | null }>;
+    };
+    const byRun = new Map(json.rows.map((r) => [r.runId, r.sourceUrl]));
+    // run-1's contact c-1 carries the ad URL; run-2's has none.
+    expect(byRun.get("run-1")).toBe("https://fb.me/9NXAdJ5P2");
+    expect(byRun.get("run-2") ?? null).toBeNull();
   });
 
   it("rejects unknown views and unauthorized callers", async () => {

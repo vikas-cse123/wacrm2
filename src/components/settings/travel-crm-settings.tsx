@@ -78,7 +78,7 @@ export function TravelCrmSettings() {
       .update({ travel_crm_url: trimmed || null })
       .eq("id", accountId);
     if (error) {
-      toast.error("Failed to save Travel CRM URL");
+      toast.error("Failed to save Travel Agency CRM URL");
       setSaving(false);
       return;
     }
@@ -86,7 +86,7 @@ export function TravelCrmSettings() {
     // card picks it up without a full reload.
     await refreshProfile();
     setSaving(false);
-    toast.success("Travel CRM URL updated");
+    toast.success("Travel Agency CRM URL updated");
   }
 
   const isDefault = effective === DEFAULT_TRAVEL_CRM_URL;
@@ -94,17 +94,17 @@ export function TravelCrmSettings() {
   return (
     <section className="max-w-2xl animate-in fade-in-50 duration-200">
       <SettingsPanelHead
-        title="Travel CRM"
-        description="Cross-app navigation for your team — the sidebar card that opens your Travel CRM in a new tab."
+        title="Travel Agency CRM"
+        description="Cross-app navigation for your team — the sidebar card that opens your Travel Agency CRM in a new tab."
       />
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-foreground">
             <ArrowLeftRight className="size-4 text-primary" />
-            Travel CRM URL
+            Travel Agency CRM URL
           </CardTitle>
           <CardDescription className="text-muted-foreground">
-            URL opened when clicking &ldquo;Travel CRM&rdquo; from the
+            URL opened when clicking &ldquo;Travel Agency CRM&rdquo; from the
             sidebar.
             {isDefault
               ? ` Showing the default (${DEFAULT_TRAVEL_CRM_URL}). Replace it to point at a different workspace.`
@@ -114,7 +114,7 @@ export function TravelCrmSettings() {
         <CardContent className="space-y-4">
           <div className="grid gap-2">
             <Label className="text-muted-foreground" htmlFor="travel-crm-url">
-              Travel CRM URL
+              Travel Agency CRM URL
             </Label>
             <Input
               id="travel-crm-url"
@@ -134,7 +134,7 @@ export function TravelCrmSettings() {
             ) : (
               !canEditSettings && (
                 <p className="text-xs text-muted-foreground">
-                  Only account admins can change the Travel CRM URL.
+                  Only account admins can change the Travel Agency CRM URL.
                 </p>
               )
             )}

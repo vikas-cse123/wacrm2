@@ -1,25 +1,25 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { Inbox, Search, Table2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { Inbox, Plus, Search, Table2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from '@/components/ui/select';
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@/components/ui/sheet";
+} from '@/components/ui/sheet';
 import {
   Table,
   TableBody,
@@ -27,115 +27,145 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/table';
+import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/use-auth';
+import type { WorkspaceField } from '@/lib/flows/workspace-fields';
+import { AddColumnDialog } from '@/components/workspace/add-column-dialog';
+import { AdSourceCell } from '@/components/workspace/ad-source-cell';
+import { ColumnsMenu } from '@/components/workspace/columns-menu';
+import { CustomCell } from '@/components/workspace/custom-cell';
+import {
+  DEFAULT_WORKSPACE_PAGE_SIZE,
+  WORKSPACE_PAGE_SIZES,
+  applyWorkspacePageSizeChange,
+  formatWorkspaceRange,
+  isWorkspacePageSize,
+  workspaceRowNumber,
+  type WorkspacePageSize,
+} from '@/lib/flows/workspace-pagination';
 import type {
   FlowTableColumn,
   FlowTablePayload,
   FlowTableRow,
   FlowTableView,
-} from "@/lib/flows/flow-tables";
-import { EmptyState } from "@/components/dashboard/empty-state";
-import { Skeleton } from "@/components/dashboard/skeleton";
+} from '@/lib/flows/flow-tables';
+import { flowDisplayName } from '@/lib/flows/flow-tables';
+import {
+  applyVisibility,
+  useWorkspaceVisibility,
+} from '@/lib/flows/workspace-visibility';
+import { EmptyState } from '@/components/dashboard/empty-state';
+import { Skeleton } from '@/components/dashboard/skeleton';
 
 interface FlowOption {
   id: string;
-  name: string;
+  name: string | null;
 }
 
-const VIEWS: Array<{ id: FlowTableView; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "completed", label: "Completed" },
-  { id: "incomplete", label: "Incomplete" },
+const VIEWS: Array<{ id: Exclude<FlowTableView, 'all'>; label: string }> = [
+  { id: 'completed', label: 'Completed' },
+  { id: 'incomplete', label: 'Incomplete' },
 ];
 
 function formatDateTime(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return '—';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
-function StatusBadge({ status }: { status: FlowTableRow["status"] }) {
-  const completed = status === "completed";
+function StatusBadge({ status }: { status: FlowTableRow['status'] }) {
+  const completed = status === 'completed';
   return (
     <Badge
       variant="outline"
       className={cn(
-        "gap-1.5 text-xs font-normal",
+        'gap-1.5 text-xs font-normal',
         completed
-          ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
-          : "border-amber-500/40 text-amber-600 dark:text-amber-400",
+          ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+          : 'border-amber-500/40 text-amber-600 dark:text-amber-400'
       )}
     >
       <span
         className={cn(
-          "size-1.5 rounded-full",
-          completed ? "bg-emerald-500" : "bg-amber-500",
+          'size-1.5 rounded-full',
+          completed ? 'bg-emerald-500' : 'bg-amber-500'
         )}
       />
-      {completed ? "Completed" : "Incomplete"}
+      {completed ? 'Completed' : 'Incomplete'}
     </Badge>
   );
 }
 
-function cellText(
-  row: FlowTableRow,
-  column: FlowTableColumn,
-): string {
+function cellText(row: FlowTableRow, column: FlowTableColumn): string {
   switch (column.key) {
-    case "name":
-      return row.name ?? "—";
-    case "phone":
-      return row.phone ?? "—";
-    case "submission_time":
+    case 'name':
+      return row.name ?? '—';
+    case 'phone':
+      return row.phone ?? '—';
+    case 'submission_time':
       return formatDateTime(row.startedAt);
-    case "status":
-      return row.status === "completed" ? "Completed" : "Incomplete";
+    case 'status':
+      return row.status === 'completed' ? 'Completed' : 'Incomplete';
     default:
-      return row.answers[column.key] ?? "—";
+      return row.answers[column.key] ?? '—';
   }
 }
 
 export default function WorkspacePage() {
+  const { accountId, canEditSettings, canSendMessages } = useAuth();
   const [flows, setFlows] = useState<FlowOption[] | null>(null);
   const [flowsError, setFlowsError] = useState<string | null>(null);
   const [flowId, setFlowId] = useState<string | null>(null);
-  const [view, setView] = useState<FlowTableView>("all");
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [view, setView] = useState<FlowTableView>('completed');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<WorkspacePageSize>(
+    DEFAULT_WORKSPACE_PAGE_SIZE
+  );
   const [payload, setPayload] = useState<FlowTablePayload | null>(null);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [tableError, setTableError] = useState<string | null>(null);
   const [selected, setSelected] = useState<FlowTableRow | null>(null);
+  const [refreshSeq, setRefreshSeq] = useState(0);
+  const [addColumnOpen, setAddColumnOpen] = useState(false);
+  const [editingField, setEditingField] = useState<WorkspaceField | null>(null);
+  // Optimistic custom-cell overrides, keyed by request so a stale
+  // edit can never leak into a newer fetch (no effect needed —
+  // mismatched keys are simply ignored on read).
+  const [valueOverrides, setValueOverrides] = useState<{
+    key: string | null;
+    map: Record<string, Record<string, string | null>>;
+  }>({ key: null, map: {} });
 
   // Account-scoped flow list (same source as the rest of the app).
   useEffect(() => {
     const ctrl = new AbortController();
-    fetch("/api/flows", { signal: ctrl.signal, cache: "no-store" })
+    fetch('/api/flows', { signal: ctrl.signal, cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`Couldn't load flows (${res.status})`);
         const json = (await res.json()) as {
-          flows?: Array<{ id: string; name: string }>;
+          flows?: Array<{ id: string; name?: string | null }>;
         };
         const list = (json.flows ?? []).map((f) => ({
           id: f.id,
-          name: f.name,
+          name: f.name ?? null,
         }));
         if (ctrl.signal.aborted) return;
         setFlows(list);
         setFlowId((prev) => prev ?? list[0]?.id ?? null);
       })
       .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setFlowsError(
-          err instanceof Error ? err.message : "Couldn't load flows.",
+          err instanceof Error ? err.message : "Couldn't load flows."
         );
         setFlows([]);
       });
@@ -154,14 +184,23 @@ export default function WorkspacePage() {
   const selectFlow = useCallback((id: string | null) => {
     if (!id) return;
     setFlowId(id);
-    setView("all");
+    setView('completed');
     setPage(0);
     setSelected(null);
   }, []);
 
-  const selectView = useCallback((v: FlowTableView) => {
+  const selectView = useCallback((v: Exclude<FlowTableView, 'all'>) => {
     setView(v);
     setPage(0);
+  }, []);
+
+  const selectPageSize = useCallback((value: string | null) => {
+    if (value === null) return;
+    const size = Number(value);
+    if (!isWorkspacePageSize(size)) return;
+    const next = applyWorkspacePageSizeChange(size);
+    setPageSize(next.pageSize);
+    setPage(next.page);
   }, []);
 
   // Table rows: server-filtered + paginated per (flow, view, search, page).
@@ -169,7 +208,7 @@ export default function WorkspacePage() {
   // never sets state synchronously — responses reconcile by key, and
   // a stale response for an older key is ignored.
   const requestKey = flowId
-    ? `${flowId}|${view}|${debouncedSearch}|${page}`
+    ? `${flowId}|${view}|${debouncedSearch}|${page}|${pageSize}`
     : null;
   const loading = requestKey !== null && requestKey !== loadedKey;
   useEffect(() => {
@@ -178,22 +217,21 @@ export default function WorkspacePage() {
     const qs = new URLSearchParams({
       view,
       page: String(page),
-      pageSize: "25",
+      pageSize: String(pageSize),
     });
-    if (debouncedSearch) qs.set("search", debouncedSearch);
+    if (debouncedSearch) qs.set('search', debouncedSearch);
     fetch(`/api/flows/${flowId}/table?${qs.toString()}`, {
       signal: ctrl.signal,
-      cache: "no-store",
+      cache: 'no-store',
     })
       .then(async (res) => {
         const json = (await res.json().catch(() => null)) as
-          | (FlowTablePayload & { error?: unknown })
-          | null;
-        if (!res.ok || !json || !("rows" in json)) {
+          (FlowTablePayload & { error?: unknown }) | null;
+        if (!res.ok || !json || !('rows' in json)) {
           throw new Error(
-            json && typeof json.error === "string"
+            json && typeof json.error === 'string'
               ? json.error
-              : `Couldn't load table (${res.status})`,
+              : `Couldn't load table (${res.status})`
           );
         }
         if (ctrl.signal.aborted) return;
@@ -202,40 +240,95 @@ export default function WorkspacePage() {
         setLoadedKey(requestKey);
       })
       .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         if (ctrl.signal.aborted) return;
         setTableError(
-          err instanceof Error ? err.message : "Couldn't load table.",
+          err instanceof Error ? err.message : "Couldn't load table."
         );
         setLoadedKey(requestKey);
       });
     return () => ctrl.abort();
-  }, [flowId, requestKey, view, debouncedSearch, page]);
+  }, [flowId, requestKey, view, debouncedSearch, page, pageSize, refreshSeq]);
 
   const totalPages = useMemo(() => {
     const total = payload?.meta.total ?? 0;
-    const size = payload?.meta.pageSize ?? 25;
-    return Math.max(1, Math.ceil(total / size));
-  }, [payload]);
-  const showingFrom = useMemo(() => {
+    return Math.max(1, Math.ceil(total / pageSize));
+  }, [payload, pageSize]);
+  const rangeText = useMemo(() => {
     const total = payload?.meta.total ?? 0;
-    if (total === 0) return 0;
-    return page * (payload?.meta.pageSize ?? 25) + 1;
-  }, [payload, page]);
-  const showingTo = useMemo(() => {
-    const total = payload?.meta.total ?? 0;
-    return Math.min(total, page * (payload?.meta.pageSize ?? 25) + (payload?.rows.length ?? 0));
-  }, [payload, page]);
+    return formatWorkspaceRange({
+      page,
+      pageSize,
+      total,
+      rowsOnPage: payload?.rows.length ?? 0,
+    });
+  }, [payload, page, pageSize]);
 
   const activeFlowName = flows?.find((f) => f.id === flowId)?.name ?? null;
+
+  const customFields = useMemo(() => payload?.customFields ?? [], [payload]);
+  const overridesForRequest =
+    valueOverrides.key === requestKey ? valueOverrides.map : {};
+
+  const handleCustomSaved = useCallback(
+    (fieldId: string, runId: string, value: string | null) => {
+      if (!requestKey) return;
+      setValueOverrides((prev) => ({
+        key: requestKey,
+        map: {
+          ...(prev.key === requestKey ? prev.map : {}),
+          [runId]: {
+            ...((prev.key === requestKey ? prev.map : {})[runId] ?? {}),
+            [fieldId]: value,
+          },
+        },
+      }));
+    },
+    [requestKey]
+  );
+
+  const reloadTable = useCallback(() => {
+    setRefreshSeq((n) => n + 1);
+  }, []);
+  // Closed-trigger label: Base UI falls back to the raw value when
+  // the selected item's text isn't resolved, which leaked the flow
+  // UUID — always render the matched name explicitly instead. An
+  // unmatched id (stale selection) shows the safe fallback, never
+  // the UUID; with no selection yet the placeholder shows.
+  const activeFlowLabel =
+    flowId == null ? undefined : flowDisplayName(activeFlowName);
+
+  // UI-only: the Status column is hidden — the Completed/Incomplete
+  // tabs already communicate classification. The column stays in the
+  // payload (drawer badges, types, API untouched).
+  //
+  // Column visibility is presentation-only state (account + flow
+  // scoped, localStorage-backed): hiding filters these render
+  // arrays, never the payload — data, definitions, values, and
+  // order are preserved, so a restored column returns to its
+  // original position with Lead Source still final.
+  const visibility = useWorkspaceVisibility(accountId, flowId);
+  const {
+    flowColumns: flowColumnsVisible,
+    customFields: customFieldsVisible,
+    leadSourceVisible,
+  } = useMemo(
+    () =>
+      applyVisibility(
+        payload?.columns ?? [],
+        customFields,
+        visibility.hiddenIds
+      ),
+    [payload, customFields, visibility.hiddenIds]
+  );
 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
+        <h1 className="text-foreground text-2xl font-bold tracking-tight">
           Workspace
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="text-muted-foreground mt-1 text-sm">
           One live table per flow — every run, completed or not.
         </p>
       </div>
@@ -243,7 +336,7 @@ export default function WorkspacePage() {
       {flows === null ? (
         <Skeleton className="h-10 w-72" />
       ) : flowsError ? (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="text-destructive text-sm" role="alert">
           {flowsError}
         </p>
       ) : flows.length === 0 ? (
@@ -255,34 +348,40 @@ export default function WorkspacePage() {
       ) : (
         <>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <Select value={flowId ?? ""} onValueChange={selectFlow}>
+            <Select value={flowId ?? ''} onValueChange={selectFlow}>
               <SelectTrigger
-                className="w-full sm:w-72 border-border bg-card"
+                className="border-border bg-card w-full sm:w-72"
                 aria-label="Select flow"
               >
-                <SelectValue placeholder="Select Flow" />
+                <SelectValue placeholder="Select Flow">
+                  {activeFlowLabel}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {flows.map((f) => (
                   <SelectItem key={f.id} value={f.id}>
-                    {f.name}
+                    {flowDisplayName(f.name)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <div className="flex items-center gap-1.5" role="tablist" aria-label="Completion filter">
+            <div
+              className="flex items-center gap-1.5"
+              role="tablist"
+              aria-label="Completion filter"
+            >
               {VIEWS.map((v) => (
                 <Button
                   key={v.id}
                   role="tab"
                   aria-selected={view === v.id}
-                  variant={view === v.id ? "default" : "outline"}
+                  variant={view === v.id ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => selectView(v.id)}
                   className={cn(
-                    "h-8 rounded-full px-3.5 text-[13px] font-medium",
+                    'h-8 rounded-full px-3.5 text-[13px] font-medium',
                     view !== v.id &&
-                      "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
+                      'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
                 >
                   {v.label}
@@ -292,12 +391,12 @@ export default function WorkspacePage() {
           </div>
 
           {payload?.meta.completionNodeId ? (
-            <p className="text-xs text-muted-foreground">
-              Completion point:{" "}
-              <code className="rounded bg-muted px-1 font-mono">
+            <p className="text-muted-foreground text-xs">
+              Completion point:{' '}
+              <code className="bg-muted rounded px-1 font-mono">
                 {payload.meta.completionNodeId}
-              </code>{" "}
-              — runs that reach it show as Completed.{" "}
+              </code>{' '}
+              — runs that reach it show as Completed.{' '}
               <Link
                 href={`/flows/${payload.meta.flowId}`}
                 className="underline underline-offset-2"
@@ -307,9 +406,9 @@ export default function WorkspacePage() {
             </p>
           ) : (
             payload && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 No custom completion point — runs show as Completed when they
-                reach END.{" "}
+                reach END.{' '}
                 <Link
                   href={`/flows/${payload.meta.flowId}`}
                   className="underline underline-offset-2"
@@ -320,19 +419,51 @@ export default function WorkspacePage() {
             )
           )}
 
-          <div className="relative max-w-sm">
-            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name or phone…"
-              className="pl-9"
-              aria-label="Search table"
-            />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative w-full sm:max-w-sm">
+              <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name or phone…"
+                className="pl-9"
+                aria-label="Search table"
+              />
+            </div>
+            <div className="flex items-center gap-2 sm:ml-auto">
+              <ColumnsMenu
+                flowId={flowId}
+                flowColumns={payload?.columns ?? []}
+                customFields={customFields}
+                hiddenIds={visibility.hiddenIds}
+                onToggleVisibility={visibility.toggle}
+                onShowAll={visibility.showAll}
+                onReset={visibility.reset}
+                onEditField={(f) => {
+                  setEditingField(f);
+                  setAddColumnOpen(true);
+                }}
+                onChanged={reloadTable}
+              />
+              {canEditSettings && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    setEditingField(null);
+                    setAddColumnOpen(true);
+                  }}
+                  className="h-8"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Column
+                </Button>
+              )}
+            </div>
           </div>
 
           {tableError ? (
-            <p className="text-sm text-destructive" role="alert">
+            <p className="text-destructive text-sm" role="alert">
               {tableError}
             </p>
           ) : loading && !payload ? (
@@ -341,58 +472,112 @@ export default function WorkspacePage() {
             <EmptyState
               icon={Table2}
               title={
-                view === "all"
-                  ? "No runs yet"
-                  : view === "completed"
-                    ? "No completed runs"
-                    : "No incomplete runs"
+                view === 'all'
+                  ? 'No runs yet'
+                  : view === 'completed'
+                    ? 'No completed runs'
+                    : 'No incomplete runs'
               }
               hint="New flow runs appear here automatically."
             />
           ) : (
             <>
-              <div className="overflow-x-auto rounded-xl border border-border bg-card">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={selectPageSize}
+                  >
+                    <SelectTrigger
+                      className="border-border bg-card h-8 w-[84px] text-[13px]"
+                      aria-label="Rows per page"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WORKSPACE_PAGE_SIZES.map((size) => (
+                        <SelectItem key={size} value={String(size)}>
+                          {size}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-muted-foreground text-sm tabular-nums">
+                    {rangeText}
+                  </p>
+                </div>
+              </div>
+              <div className="border-border bg-card overflow-x-auto rounded-xl border">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      {payload.columns.map((c) => (
+                      <TableHead className="text-muted-foreground w-10">
+                        No.
+                      </TableHead>
+                      {flowColumnsVisible.map((c) => (
                         <TableHead key={c.key} className="whitespace-nowrap">
                           {c.label}
                         </TableHead>
                       ))}
+                      {customFieldsVisible.map((f) => (
+                        <TableHead key={f.id} className="whitespace-nowrap">
+                          {f.name}
+                        </TableHead>
+                      ))}
+                      {leadSourceVisible && (
+                        <TableHead className="w-16 text-center whitespace-nowrap">
+                          Lead Source
+                        </TableHead>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {payload.rows.map((row) => (
+                    {payload.rows.map((row, rowIndex) => (
                       <TableRow
                         key={row.runId}
                         className="cursor-pointer"
                         onClick={() => setSelected(row)}
                       >
-                        {payload.columns.map((c) =>
-                          c.key === "status" ? (
-                            <TableCell key={c.key}>
-                              <StatusBadge status={row.status} />
+                        <TableCell className="text-muted-foreground w-10 tabular-nums">
+                          {workspaceRowNumber({
+                            page,
+                            pageSize,
+                            index: rowIndex,
+                          }).toLocaleString()}
+                        </TableCell>
+                        {flowColumnsVisible.map((c) => (
+                          <TableCell key={c.key} className="max-w-56 truncate">
+                            {cellText(row, c)}
+                          </TableCell>
+                        ))}
+                        {flowId &&
+                          customFieldsVisible.map((f) => (
+                            <TableCell key={f.id} className="max-w-56">
+                              <CustomCell
+                                flowId={flowId}
+                                runId={row.runId}
+                                field={f}
+                                stored={
+                                  overridesForRequest[row.runId]?.[f.id] ??
+                                  payload.customValues?.[row.runId]?.[f.id] ??
+                                  null
+                                }
+                                canEdit={canSendMessages}
+                                onSaved={handleCustomSaved}
+                              />
                             </TableCell>
-                          ) : (
-                            <TableCell
-                              key={c.key}
-                              className="max-w-56 truncate"
-                            >
-                              {cellText(row, c)}
-                            </TableCell>
-                          ),
+                          ))}
+                        {leadSourceVisible && (
+                          <TableCell className="w-16 text-center">
+                            <AdSourceCell sourceUrl={row.sourceUrl} />
+                          </TableCell>
                         )}
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </div>
-              <div className="flex items-center justify-between text-sm text-muted-foreground">
-                <p className="tabular-nums">
-                  Showing {showingFrom}–{showingTo} of{" "}
-                  {payload.meta.total.toLocaleString()}
-                </p>
+              <div className="text-muted-foreground flex items-center justify-end text-sm">
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
@@ -417,6 +602,20 @@ export default function WorkspacePage() {
         </>
       )}
 
+      <AddColumnDialog
+        flowId={flowId}
+        editing={editingField}
+        open={addColumnOpen}
+        onOpenChange={(v) => {
+          setAddColumnOpen(v);
+          if (!v) setEditingField(null);
+        }}
+        onSaved={() => {
+          setEditingField(null);
+          reloadTable();
+        }}
+      />
+
       <Sheet
         open={selected !== null}
         onOpenChange={(v) => !v && setSelected(null)}
@@ -425,9 +624,9 @@ export default function WorkspacePage() {
           {selected && (
             <>
               <SheetHeader>
-                <SheetTitle>{selected.name ?? "Run"}</SheetTitle>
+                <SheetTitle>{selected.name ?? 'Run'}</SheetTitle>
                 <SheetDescription>
-                  {activeFlowName ?? "Flow run"} · started{" "}
+                  {activeFlowName ?? 'Flow run'} · started{' '}
                   {formatDateTime(selected.startedAt)}
                 </SheetDescription>
               </SheetHeader>
@@ -438,31 +637,31 @@ export default function WorkspacePage() {
                 <dl className="space-y-2 text-sm">
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Phone</dt>
-                    <dd className="font-medium text-foreground">
-                      {selected.phone ?? "—"}
+                    <dd className="text-foreground font-medium">
+                      {selected.phone ?? '—'}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Submission time</dt>
-                    <dd className="tabular-nums text-foreground">
+                    <dd className="text-foreground tabular-nums">
                       {formatDateTime(selected.startedAt)}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Completed at</dt>
-                    <dd className="tabular-nums text-foreground">
+                    <dd className="text-foreground tabular-nums">
                       {formatDateTime(selected.completedAt)}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Flow run ID</dt>
-                    <dd className="max-w-48 truncate font-mono text-xs text-foreground">
+                    <dd className="text-foreground max-w-48 truncate font-mono text-xs">
                       {selected.runId}
                     </dd>
                   </div>
                 </dl>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">
+                  <h3 className="text-foreground text-sm font-semibold">
                     Answers
                   </h3>
                   {payload && payload.columns.some((c) => !c.system) ? (
@@ -474,17 +673,17 @@ export default function WorkspacePage() {
                             key={c.key}
                             className="flex justify-between gap-4"
                           >
-                            <dt className="shrink-0 text-muted-foreground">
+                            <dt className="text-muted-foreground shrink-0">
                               {c.label}
                             </dt>
-                            <dd className="break-words text-right text-foreground">
-                              {selected.answers[c.key] ?? "—"}
+                            <dd className="text-foreground text-right break-words">
+                              {selected.answers[c.key] ?? '—'}
                             </dd>
                           </div>
                         ))}
                     </dl>
                   ) : (
-                    <p className="mt-1 text-sm text-muted-foreground">
+                    <p className="text-muted-foreground mt-1 text-sm">
                       No answers collected yet.
                     </p>
                   )}

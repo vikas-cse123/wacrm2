@@ -3,6 +3,7 @@ import {
   buildFlowTableColumns,
   classifyFlowRun,
   completedAtFor,
+  flowDisplayName,
   toFlowTableRow,
   type FlowTableRpcRow,
 } from "./flow-tables";
@@ -178,9 +179,9 @@ describe("flow table columns", () => {
       "start",
     );
     expect(columns.map((c) => c.key)).toEqual([
+      "submission_time",
       "name",
       "phone",
-      "submission_time",
       "Name",
       "TravelDate",
       "status",
@@ -189,9 +190,9 @@ describe("flow table columns", () => {
     expect(answerKeys).toEqual(["Name", "TravelDate"]);
     // System columns are flagged so answers can never overwrite them.
     expect(columns.filter((c) => c.system).map((c) => c.key)).toEqual([
+      "submission_time",
       "name",
       "phone",
-      "submission_time",
       "status",
     ]);
   });
@@ -215,5 +216,46 @@ describe("flow table columns", () => {
       "start",
     );
     expect(answerKeys).toEqual(["TravelDate"]);
+  });
+});
+
+describe("workspace column order invariant", () => {
+  it("submission Time is always index 0, then Name, Phone, answers, Status last", () => {
+    for (const keys of [[], [{ key: "A" }], [{ key: "A" }, { key: "B" }, { key: "C" }]]) {
+      const { columns } = buildFlowTableColumns(nodesFor(keys), "start");
+      const order = columns.map((c) => c.key);
+      expect(order[0]).toBe("submission_time");
+      expect(order[1]).toBe("name");
+      expect(order[2]).toBe("phone");
+      expect(order[order.length - 1]).toBe("status");
+    }
+  });
+
+  it("system/answer boundary holds regardless of flow fields", () => {
+    const { columns } = buildFlowTableColumns(
+      nodesFor([{ key: "Hotel" }, { key: "Travel month" }]),
+      "start",
+    );
+    const answerIdx = columns.findIndex((c) => !c.system);
+    const statusIdx = columns.findIndex((c) => c.key === "status");
+    expect(answerIdx).toBeGreaterThan(2);
+    expect(statusIdx).toBe(columns.length - 1);
+  });
+});
+
+describe("flowDisplayName", () => {
+  it("shows the flow name, never the UUID", () => {
+    expect(flowDisplayName("Singapore Chat Automation")).toBe(
+      "Singapore Chat Automation",
+    );
+  });
+
+  it("falls back for missing names without exposing an id", () => {
+    for (const missing of [null, undefined, "", "   "]) {
+      expect(flowDisplayName(missing)).toBe("Untitled Flow");
+    }
+    expect(flowDisplayName("dab466d7-7263-4e7b-ba40-0717091abc")).toBe(
+      "dab466d7-7263-4e7b-ba40-0717091abc",
+    );
   });
 });

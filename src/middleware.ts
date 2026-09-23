@@ -143,7 +143,7 @@ export async function middleware(request: NextRequest) {
   // Protected pages - redirect to login only when the session is
   // proven dead (case A above). On transient failures the request
   // passes through so the client can recover in place.
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/qr-codes', '/automations', '/settings']
+  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/followups', '/qr-codes', '/automations', '/settings']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     if (failure !== null && !isConfirmedUnauthenticated(failure)) {
       return supabaseResponse

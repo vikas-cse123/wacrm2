@@ -12,14 +12,13 @@ import Image from "next/image";
 import {
   Bell,
   Bot,
+  CalendarClock,
   FileText,
-  Layers,
   LayoutDashboard,
   MessageSquare,
   MessageSquareText,
   ChevronDown,
-  ChevronRight,
-  Plane,
+  ChevronUp,
   ExternalLink,
   Radio,
   Route,
@@ -45,27 +44,46 @@ interface NavItem {
   beta?: boolean;
 }
 
-const navItems: NavItem[] = [
+export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/features", label: "Features", icon: Layers },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
-  { href: "/notifications", label: "Notifications", icon: Bell },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/templates", label: "Templates", icon: FileText },
-  { href: "/quick-replies", label: "Quick Replies", icon: MessageSquareText },
-  { href: "/broadcasts", label: "Bulk Messages", icon: Radio },
-  { href: "/automations", label: "Automations", icon: Zap },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
+  { href: "/followups", label: "Follow-ups", icon: CalendarClock },
+  { href: "/workspace", label: "Workspace", icon: Table2, beta: true },
+  { href: "/broadcasts", label: "Bulk Messages", icon: Radio },
+  { href: "/quick-replies", label: "Quick Replies", icon: MessageSquareText },
+  { href: "/automations", label: "Automations", icon: Zap },
+  { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/templates", label: "Templates", icon: FileText },
+  { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/data-export", label: "Flow Sheets", icon: Sheet },
   { href: "/all-sheets", label: "All Sheets", icon: Sheet },
-  { href: "/workspace", label: "Workspace", icon: Table2, beta: true },
   { href: "/chat-assignment", label: "Chat Assignment", icon: Route },
 ];
 
 const bottomNavItems = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+/** Google Sheets starts collapsed on every sidebar mount (no persistence). */
+export const DEFAULT_SHEETS_COLLAPSED = true;
+
+/**
+ * Whether the Google Sheets group shows its children. An
+ * explicitly expanded group is always open; a collapsed group
+ * still opens when the user is on a sheets child route so the
+ * active row is never hidden.
+ */
+export function resolveSheetsOpen(
+  sheetsCollapsed: boolean,
+  pathname: string
+): boolean {
+  if (!sheetsCollapsed) return true;
+  return (
+    pathname.startsWith("/data-export") || pathname.startsWith("/all-sheets")
+  );
+}
 
 interface SidebarProps {
   /** Controlled on mobile by the Header's hamburger button. Ignored on lg+. */
@@ -82,12 +100,14 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const isTeamMembersActive =
     pathname.startsWith("/settings") && searchParams.get("tab") === "members";
   // Collapsible GOOGLE SHEETS group (Flow Sheets + All Sheets).
-  // Default expanded; forced open while a sheets page is active so
-  // the highlighted row is never hidden inside a closed group.
-  const [sheetsCollapsed, setSheetsCollapsed] = useState(false);
-  const isSheetsActive =
-    pathname.startsWith("/data-export") || pathname.startsWith("/all-sheets");
-  const sheetsOpen = !sheetsCollapsed || isSheetsActive;
+  // Default COLLAPSED on every sidebar mount — no persistence, so a
+  // refresh/reload always starts closed. Forced open while a sheets
+  // child route is active so the highlighted row is never hidden
+  // inside a closed group.
+  const [sheetsCollapsed, setSheetsCollapsed] = useState(
+    DEFAULT_SHEETS_COLLAPSED
+  );
+  const sheetsOpen = resolveSheetsOpen(sheetsCollapsed, pathname);
   // UI-only gating: Flows, AI Agents, and Settings are shown to the owner
   // only. Non-owners simply don't see these nav entries. This is purely a
   // visibility change — the backend/routes are untouched, so it can be
@@ -222,9 +242,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                       >
                         Google Sheets
                         {sheetsOpen ? (
-                          <ChevronDown className="h-3.5 w-3.5" />
+                          <ChevronUp className="h-3.5 w-3.5" />
                         ) : (
-                          <ChevronRight className="h-3.5 w-3.5" />
+                          <ChevronDown className="h-3.5 w-3.5" />
                         )}
                       </button>
                     </li>
@@ -332,17 +352,23 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               href={travelCrmUrl}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Open Travel CRM in a new tab"
-              title="Open Travel CRM in a new tab"
+              aria-label="Open Travel Agency CRM in a new tab"
+              title="Open Travel Agency CRM in a new tab"
               className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-indigo-500 ring-1 ring-inset ring-indigo-500/20 transition-colors duration-150 hover:bg-indigo-500/10"
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-indigo-500 text-white">
-                <Plane className="h-[15px] w-[15px]" aria-hidden="true" strokeWidth={2} />
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white">
+                <Image
+                  src="/logos/travel-crm-icon.png"
+                  alt="Travel Agency CRM"
+                  width={24}
+                  height={24}
+                  className="h-6 w-6 object-contain"
+                />
               </span>
               <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                <span className="truncate">Travel CRM</span>
+                <span className="truncate">Travel Agency CRM</span>
                 <span className="truncate text-[10px] font-normal text-indigo-500/80">
-                  Switch to Travel CRM
+                  Switch to Travel Agency CRM
                 </span>
               </span>
               <ExternalLink

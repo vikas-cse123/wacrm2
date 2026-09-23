@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/flows/cron", "schedule": "* * * * *" },
+    { "path": "/api/followups/cron", "schedule": "* * * * *" },
     { "path": "/api/automations/cron", "schedule": "*/5 * * * *" },
     { "path": "/api/all-sheets/cron", "schedule": "* * * * *" }
   ]

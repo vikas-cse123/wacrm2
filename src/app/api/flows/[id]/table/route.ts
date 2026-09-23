@@ -95,6 +95,50 @@ export async function GET(
   )
   const rpcRows = ((payload as { rows?: unknown }).rows ?? []) as FlowTableRpcRow[]
   const total = Number((payload as { total?: unknown }).total ?? 0) || 0
+  const rows = rpcRows.map((r) => toFlowTableRow(r, completionNodeId, nameKey, answerKeys));
+
+  // Ad Source URLs for this page: one batched contacts lookup
+  // (flow_run.contact_id → contacts.source_url), never N+1.
+  // RLS scopes the read like every other query on this route.
+  const contactIds = [...new Set(rows.map((r) => r.contactId).filter(Boolean))] as string[];
+  const sourceByContact: Record<string, string | null> = {};
+  if (contactIds.length > 0) {
+    const { data: sourceRows } = await supabase
+      .from("contacts")
+      .select("id, source_url")
+      .in("id", contactIds);
+    for (const c of (sourceRows ?? []) as Array<{ id: string; source_url: string | null }>) {
+      sourceByContact[c.id] = c.source_url;
+    }
+  }
+  for (const r of rows) {
+    r.sourceUrl = r.contactId ? (sourceByContact[r.contactId] ?? null) : null;
+  }
+
+  // Workspace custom columns + this page's values (two queries, no
+  // N+1). Additive to the response — existing shape untouched.
+  // Google Sheets never reads these tables.
+  const { data: customFields } = await supabase
+    .from("workspace_fields")
+    .select("*")
+    .eq("flow_id", id)
+    .order("position", { ascending: true })
+    .order("created_at", { ascending: true });
+  const runIds = rows.map((r) => r.runId);
+  const customValues: Record<string, Record<string, string | null>> = {};
+  if (runIds.length > 0) {
+    const { data: valueRows } = await supabase
+      .from("workspace_values")
+      .select("flow_run_id, field_id, value_text")
+      .in("flow_run_id", runIds);
+    for (const v of (valueRows ?? []) as Array<{
+      flow_run_id: string;
+      field_id: string;
+      value_text: string | null;
+    }>) {
+      (customValues[v.flow_run_id] ??= {})[v.field_id] = v.value_text;
+    }
+  }
   return NextResponse.json({
     meta: {
       flowId: (flow as { id: string }).id,
@@ -106,6 +150,18 @@ export async function GET(
       pageSize,
     },
     columns,
-    rows: rpcRows.map((r) => toFlowTableRow(r, completionNodeId, nameKey, answerKeys)),
-  })
+    rows,
+    customFields: (customFields ?? []).map((f) => {
+      const row = f as Record<string, unknown>;
+      return {
+        id: row.id,
+        name: row.name,
+        field_type: row.field_type,
+        position: row.position,
+        options: row.options ?? null,
+        default_value: row.default_value ?? null,
+      };
+    }),
+    customValues,
+  });
 }
