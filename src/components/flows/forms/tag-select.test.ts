@@ -2,9 +2,12 @@ import { describe, expect, it, beforeEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   __resetTagCacheForTests,
+  clearTagCache,
   fetchAccountTags,
   filterTagsByQuery,
+  readTagCache,
   resolveTagSelection,
+  writeTagCache,
   type TagOption,
 } from "./tag-select";
 
@@ -132,5 +135,56 @@ describe("fetchAccountTags", () => {
       ["id, name, color"],
       ["name"],
     ]);
+  });
+});
+
+describe("account-scoped tag cache", () => {
+  const TAG_A = { id: "tag-a-1", name: "Alpha" };
+  const TAG_B = { id: "tag-b-1", name: "Beta" };
+
+  it("serves an account only its own cached tags", () => {
+    writeTagCache("acct-A", [TAG_A]);
+    expect(readTagCache("acct-A")).toEqual([TAG_A]);
+    // Account B must never read Account A's entry.
+    expect(readTagCache("acct-B")).toBeNull();
+  });
+
+  it("keeps both accounts' entries isolated", () => {
+    writeTagCache("acct-A", [TAG_A]);
+    writeTagCache("acct-B", [TAG_B]);
+    expect(readTagCache("acct-A")).toEqual([TAG_A]);
+    expect(readTagCache("acct-B")).toEqual([TAG_B]);
+    // No UUID from A is reachable via B's entry.
+    expect(
+      readTagCache("acct-B")!.some((t) => t.id === TAG_A.id),
+    ).toBe(false);
+  });
+
+  it("reuses an account's own cache on revisit (no refetch needed)", () => {
+    writeTagCache("acct-A", [TAG_A], 1000);
+    expect(readTagCache("acct-A", 1000 + 59_000)).toEqual([TAG_A]);
+  });
+
+  it("expires entries after the TTL so new tags appear", () => {
+    writeTagCache("acct-A", [TAG_A], 1000);
+    expect(readTagCache("acct-A", 1000 + 60_000)).toBeNull();
+    expect(readTagCache("acct-A", 1000 + 61_000)).toBeNull();
+  });
+
+  it("clearing one account leaves the other intact; full clear empties all", () => {
+    writeTagCache("acct-A", [TAG_A]);
+    writeTagCache("acct-B", [TAG_B]);
+    clearTagCache("acct-A");
+    expect(readTagCache("acct-A")).toBeNull();
+    expect(readTagCache("acct-B")).toEqual([TAG_B]);
+    clearTagCache();
+    expect(readTagCache("acct-B")).toBeNull();
+  });
+
+  it("logout transition (clear all) isolates the next login", () => {
+    writeTagCache("acct-A", [TAG_A]);
+    clearTagCache();
+    // Next session starts with a cold cache even for the same key.
+    expect(readTagCache("acct-A")).toBeNull();
   });
 });

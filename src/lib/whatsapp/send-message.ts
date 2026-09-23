@@ -29,6 +29,7 @@ import {
 } from '@/lib/whatsapp/meta-api';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
+import { getOrCreateConversation } from '@/lib/conversations/get-or-create';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -474,4 +475,129 @@ export async function sendMessageToConversation(
   }
 
   return { messageId: messageRecord.id, whatsappMessageId: waMessageId };
+}
+
+export interface BroadcastOutboundMessageParams {
+  accountId: string;
+  contactId: string;
+  /** Audit user for conversation creation (sender for dashboard sends). */
+  auditUserId: string;
+  templateName: string;
+  /** Already-rendered body text (per-recipient params applied). */
+  renderedText: string;
+  /** Meta `wamid` from the confirmed send — the webhook correlation key. */
+  whatsappMessageId: string;
+}
+
+/**
+ * Persist an already-sent broadcast template as a normal outbound
+ * `messages` row so the Inbox displays it like any manual template
+ * send (same columns, same renderer: `content_type: 'template'` +
+ * `template_name` + rendered `content_text`).
+ *
+ * Broadcast sends previously stamped only `broadcast_recipients`,
+ * leaving the Inbox blind while analytics worked — the status
+ * webhook already mirrors onto `messages.message_id`, so once this
+ * row exists, SENT → DELIVERED → READ advances on the SAME row with
+ * no further changes.
+ *
+ * Best-effort by design: the Meta send already succeeded, so this
+ * NEVER throws — failures are logged and return null. Idempotent on
+ * (conversation_id, message_id): a retry returns the existing row
+ * instead of duplicating. No Flow-run pausing here (unlike manual
+ * sends): a bulk campaign is not a 1:1 agent reply.
+ */
+export async function persistBroadcastOutboundMessage(
+  db: SupabaseClient,
+  params: BroadcastOutboundMessageParams
+): Promise<{ messageId: string } | null> {
+  const {
+    accountId,
+    contactId,
+    auditUserId,
+    templateName,
+    renderedText,
+    whatsappMessageId,
+  } = params;
+
+  try {
+    // Same one-conversation-per-(account, contact) convention as the
+    // inbound webhook — reuses an existing thread, never forks one.
+    const resolved = await getOrCreateConversation(
+      db,
+      accountId,
+      contactId,
+      auditUserId
+    );
+    if (!resolved) {
+      console.error(
+        '[broadcast-message] could not resolve conversation for contact:',
+        contactId
+      );
+      return null;
+    }
+    const conversationId = resolved.conversation.id as string;
+
+    // Idempotency: a retried send/recipient loop carrying the same
+    // Meta message id must not duplicate the Inbox row. message_id
+    // repeats across numbers by design (migration 009), so scope the
+    // check to this conversation.
+    const { data: existing } = await db
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('message_id', whatsappMessageId)
+      .maybeSingle();
+    if (existing) {
+      return { messageId: (existing as { id: string }).id };
+    }
+
+    const contentText = renderedText || `[${templateName}]`;
+    const { data: messageRecord, error: msgError } = await db
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        content_type: 'template',
+        content_text: contentText,
+        template_name: templateName,
+        message_id: whatsappMessageId,
+        status: 'sent',
+      })
+      .select('id')
+      .single();
+
+    if (msgError || !messageRecord) {
+      console.error(
+        '[broadcast-message] error inserting outbound message:',
+        msgError
+      );
+      return null;
+    }
+
+    // Keep the conversation preview/ordering consistent with manual
+    // sends (best-effort; the row above is the source of truth).
+    const { error: convError } = await db
+      .from('conversations')
+      .update({
+        last_message_text: contentText,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+    if (convError) {
+      console.error(
+        '[broadcast-message] error touching conversation:',
+        convError
+      );
+    }
+
+    return { messageId: (messageRecord as { id: string }).id };
+  } catch (err) {
+    console.error(
+      '[broadcast-message] unexpected persistence failure:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
 }

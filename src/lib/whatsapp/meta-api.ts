@@ -1235,7 +1235,7 @@ export async function downloadMediaStream(
 }
 
 // ============================================================
-// WhatsApp Business Profile (Settings → WhatsApp → Business Profile)
+// WhatsApp Business Profile (Settings → Workspace → Business Profile)
 // ============================================================
 //
 // Meta remains the source of truth: reads come from
@@ -1442,4 +1442,237 @@ export async function uploadProfilePhoto(
   const data = (await response.json()) as { handle?: string }
   if (!data.handle) throw new Error('Meta did not return a photo handle')
   return { handle: data.handle }
+}
+
+// ============================================================
+// Message QR codes (/{phone_number_id}/message_qrdls)
+//
+// Meta is the source of truth: the code, deep link, and QR image
+// all come from Meta. WACRM stores only organizational metadata
+// (display name + last-known Meta values) in whatsapp_qr_codes.
+// ============================================================
+
+/**
+ * QR image formats Meta can render for a message QR code.
+ * SVG is the default (crisp at any print size).
+ */
+export const QR_IMAGE_FORMATS = ['SVG', 'PNG'] as const
+
+export type QrImageFormat = (typeof QR_IMAGE_FORMATS)[number]
+
+export function isQrImageFormat(value: unknown): value is QrImageFormat {
+  return (
+    typeof value === 'string' &&
+    (QR_IMAGE_FORMATS as readonly string[]).includes(value.toUpperCase())
+  )
+}
+
+export function normalizeQrImageFormat(value: unknown): QrImageFormat {
+  return isQrImageFormat(value) ? value.toUpperCase() as QrImageFormat : 'SVG'
+}
+
+/**
+ * Prefilled-message guard. Meta is the final validator (its error is
+ * surfaced verbatim), but rejecting empty/oversized input before the
+ * network call keeps the failure instant and obvious. The ceiling
+ * mirrors WhatsApp's text-message limit — Meta may accept less, and
+ * its response decides.
+ */
+export const QR_PREFILLED_MESSAGE_MAX_LENGTH = 4096
+
+export function validateQrPrefilledMessage(message: unknown): string {
+  if (typeof message !== 'string' || !message.trim()) {
+    throw new Error('Prefilled message is required.')
+  }
+  const trimmed = message.trim()
+  if (trimmed.length > QR_PREFILLED_MESSAGE_MAX_LENGTH) {
+    throw new Error(
+      `Prefilled message must be ${QR_PREFILLED_MESSAGE_MAX_LENGTH} characters or fewer.`,
+    )
+  }
+  return trimmed
+}
+
+/** One Meta message QR code, normalized from the message_qrdls shape. */
+export interface MetaQrCode {
+  code: string
+  prefilled_message: string | null
+  deep_link_url: string | null
+  qr_image_url: string | null
+}
+
+interface RawMetaQrCode {
+  code?: unknown
+  prefilled_message?: unknown
+  deep_link_url?: unknown
+  qr_image_url?: unknown
+}
+
+function normalizeMetaQrCode(raw: RawMetaQrCode): MetaQrCode | null {
+  if (!raw || typeof raw.code !== 'string' || !raw.code) return null
+  return {
+    code: raw.code,
+    prefilled_message:
+      typeof raw.prefilled_message === 'string' ? raw.prefilled_message : null,
+    deep_link_url:
+      typeof raw.deep_link_url === 'string' ? raw.deep_link_url : null,
+    qr_image_url:
+      typeof raw.qr_image_url === 'string' ? raw.qr_image_url : null,
+  }
+}
+
+export interface ListMetaQrCodesArgs {
+  phoneNumberId: string
+  accessToken: string
+}
+
+/** List the QR codes Meta holds for this phone number. */
+export async function listMetaQrCodes(
+  args: ListMetaQrCodesArgs
+): Promise<MetaQrCode[]> {
+  const { phoneNumberId, accessToken } = args
+  const response = await fetch(
+    `${META_API_BASE}/${phoneNumberId}/message_qrdls`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const json = (await response.json()) as { data?: unknown }
+  const items = Array.isArray(json.data) ? json.data : []
+  return items
+    .map((item) =>
+      normalizeMetaQrCode(
+        item && typeof item === 'object' ? (item as RawMetaQrCode) : {},
+      ),
+    )
+    .filter((qr): qr is MetaQrCode => qr !== null)
+}
+
+export interface CreateMetaQrCodeArgs {
+  phoneNumberId: string
+  accessToken: string
+  prefilledMessage: string
+  imageFormat?: QrImageFormat
+}
+
+/**
+ * Create a Meta QR code. Returns Meta's record (code, deep link,
+ * QR image). The display name lives only in WACRM — Meta has no
+ * name field.
+ */
+export async function createMetaQrCode(
+  args: CreateMetaQrCodeArgs
+): Promise<MetaQrCode> {
+  const { phoneNumberId, accessToken, imageFormat } = args
+  const prefilled_message = validateQrPrefilledMessage(args.prefilledMessage)
+  const response = await fetch(
+    `${META_API_BASE}/${phoneNumberId}/message_qrdls`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        prefilled_message,
+        generate_qr_image: imageFormat ?? 'SVG',
+      }),
+    },
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const qr = normalizeMetaQrCode(
+    (await response.json()) as RawMetaQrCode,
+  )
+  if (!qr) throw new Error('Meta did not return a QR code')
+  return qr
+}
+
+export interface UpdateMetaQrCodeArgs {
+  phoneNumberId: string
+  accessToken: string
+  code: string
+  prefilledMessage: string
+  imageFormat?: QrImageFormat
+}
+
+/**
+ * Update a Meta QR code's prefilled message (Meta identifies the
+ * code by `code`). Optionally re-render the QR image in a different
+ * format — when Meta ignores the format hint the existing image
+ * stands, so callers fall back to the list endpoint.
+ */
+export async function updateMetaQrCode(
+  args: UpdateMetaQrCodeArgs
+): Promise<MetaQrCode> {
+  const { phoneNumberId, accessToken, code, imageFormat } = args
+  if (!code) throw new Error('Meta QR code is required.')
+  const prefilled_message = validateQrPrefilledMessage(args.prefilledMessage)
+  const response = await fetch(
+    `${META_API_BASE}/${phoneNumberId}/message_qrdls`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        code,
+        prefilled_message,
+        ...(imageFormat ? { generate_qr_image: imageFormat } : {}),
+      }),
+    },
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const qr = normalizeMetaQrCode(
+    (await response.json()) as RawMetaQrCode,
+  )
+  if (!qr) throw new Error('Meta did not return a QR code')
+  return qr
+}
+
+export interface DeleteMetaQrCodeArgs {
+  phoneNumberId: string
+  accessToken: string
+  code: string
+}
+
+/** Delete a Meta QR code from the phone number. */
+export async function deleteMetaQrCode(
+  args: DeleteMetaQrCodeArgs
+): Promise<void> {
+  const { phoneNumberId, accessToken, code } = args
+  if (!code) throw new Error('Meta QR code is required.')
+  const response = await fetch(
+    `${META_API_BASE}/${phoneNumberId}/message_qrdls/${encodeURIComponent(code)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+}
+
+/**
+ * True when a Meta error means "this QR code is already gone"
+ * (already deleted in WhatsApp, or an unknown code). Callers use
+ * this to reconcile local metadata instead of crashing.
+ */
+export function isMetaQrNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : ''
+  return (
+    message.includes('does not exist') ||
+    message.includes('not found') ||
+    message.includes('invalid qr') ||
+    message.includes('(code 100') ||
+    message.includes('(code 33')
+  )
 }

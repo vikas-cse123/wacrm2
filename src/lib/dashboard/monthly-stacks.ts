@@ -147,3 +147,32 @@ export function buildMonthlyStacks(input: MonthlyFlowMonth[]): MonthlyStacks {
 
   return { keys, months }
 }
+
+export interface TooltipFlowRow extends StackKey {
+  value: number
+}
+
+export interface MonthTooltip {
+  /** Non-zero flows, largest first (matches the RPC row order). */
+  rows: TooltipFlowRow[]
+  total: number
+}
+
+/**
+ * The exact rows the month tooltip renders: every non-zero segment
+ * of the month, largest first, each carrying the same color object
+ * the bars and legend use. Totals pass through from the RPC (never
+ * recomputed), so percentages always divide by the chart total.
+ */
+export function buildMonthTooltip(stacks: MonthlyStacks, monthIndex: number): MonthTooltip {
+  const sm = stacks.months[monthIndex]
+  if (!sm) return { rows: [], total: 0 }
+  const rows = stacks.keys
+    .map((k) => ({
+      ...k,
+      value: sm.segments.find((g) => g.key === k.key)?.value ?? 0,
+    }))
+    .filter((r) => r.value > 0)
+    .sort((a, b) => b.value - a.value)
+  return { rows, total: sm.total }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_NAMED_FLOWS, buildMonthlyStacks } from './monthly-stacks'
+import { MAX_NAMED_FLOWS, buildMonthlyStacks, buildMonthTooltip } from './monthly-stacks'
 import type { MonthlyFlowMonth } from './types'
 
 function month(
@@ -82,5 +82,84 @@ describe('buildMonthlyStacks', () => {
     ])
     const colors = keys.map((k) => k.color)
     expect(new Set(colors).size).toBe(colors.length)
+  })
+
+  it('exposes the complete per-flow breakdown the tooltip needs', () => {
+    const { keys, months } = buildMonthlyStacks([
+      month(7, 1174, [
+        ['f-goa', 'GOA', 538],
+        ['f-sg', 'Singapore Chat Automation', 437],
+        ['f-hiring', 'Hiring', 152],
+        [null, 'No flow', 45],
+        ['f-couple', 'Goa Couple', 1],
+        ['f-kerala', 'Kerala Chat Automation', 1],
+      ]),
+    ])
+    const jul = months[6]!
+    // Every non-zero flow is present — nothing dropped before the tooltip.
+    const nonZero = jul.segments.filter((g) => g.value > 0)
+    expect(nonZero).toHaveLength(6)
+    // Percentages are derivable from value/total and sum to 100.
+    const pctSum = nonZero.reduce((s, g) => s + (g.value / jul.total) * 100, 0)
+    expect(pctSum).toBeCloseTo(100, 5)
+    // Largest first for the tooltip list (the tooltip sorts desc,
+    // mirroring monthly-chart.tsx).
+    const values = nonZero.map((g) => g.value)
+    expect([...values].sort((a, b) => b - a)).toEqual([
+      538, 437, 152, 45, 1, 1,
+    ])
+    // Each segment carries the same color object the bars and legend use.
+    const byKey = new Map(keys.map((k) => [k.key, k.color]))
+    for (const g of nonZero) {
+      expect(g.color).toBe(byKey.get(g.key))
+    }
+  })
+
+  it('keeps a flow color stable when it is absent in some months', () => {    const full = buildMonthlyStacks([
+      month(7, 100, [['f-a', 'A', 60], ['f-b', 'B', 40]]),
+      month(8, 60, [['f-a', 'A', 60]]),
+    ])
+    const partial = buildMonthlyStacks([month(8, 60, [['f-a', 'A', 60]])])
+    const colorFull = full.keys.find((k) => k.key === 'f-a')!.color
+    const colorPartial = partial.keys.find((k) => k.key === 'f-a')!.color
+    // Same id set shape → same deterministic color (no month flicker).
+    expect(colorFull).toBe(colorPartial)
+  })
+})
+
+describe('buildMonthTooltip', () => {
+  const stacks = buildMonthlyStacks([
+    month(7, 1174, [
+      ['f-goa', 'GOA', 538],
+      ['f-sg', 'Singapore Chat Automation', 437],
+      ['f-hiring', 'Hiring', 152],
+      [null, 'No flow', 45],
+      ['f-couple', 'Goa Couple', 1],
+      ['f-kerala', 'Kerala Chat Automation', 1],
+    ]),
+    month(8, 0, []),
+  ])
+
+  it('contains every non-zero flow with segment-matching colors', () => {
+    const { rows, total } = buildMonthTooltip(stacks, 6)
+    expect(total).toBe(1174)
+    expect(rows).toHaveLength(6)
+    // Same color objects the bars and legend use.
+    const byKey = new Map(stacks.keys.map((k) => [k.key, k.color]))
+    for (const r of rows) {
+      expect(r.color).toBe(byKey.get(r.key))
+    }
+    // Percentages divide by the chart total and sum to 100.
+    const pctSum = rows.reduce((s, r) => s + (r.value / total) * 100, 0)
+    expect(pctSum).toBeCloseTo(100, 5)
+    // Largest-first order matches the RPC row order.
+    expect(rows.map((r) => r.value)).toEqual([538, 437, 152, 45, 1, 1])
+  })
+
+  it('preserves No flow and handles empty months', () => {
+    const { rows } = buildMonthTooltip(stacks, 6)
+    expect(rows.some((r) => r.flowId === null && r.name === 'No flow')).toBe(true)
+    expect(buildMonthTooltip(stacks, 7)).toEqual({ rows: [], total: 0 })
+    expect(buildMonthTooltip(stacks, 99)).toEqual({ rows: [], total: 0 })
   })
 })

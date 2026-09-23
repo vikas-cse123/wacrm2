@@ -73,7 +73,7 @@ export const MONTH_SHORT = [
 // so queries use gte(start).lt(end) with no overlap.
 // ------------------------------------------------------------
 
-export type DashboardDateFilter = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
+export type DashboardDateFilter = 'today' | 'yesterday' | 'week' | 'month' | 'last30days' | 'custom'
 
 export interface DashboardRange {
   /** Inclusive local start. */
@@ -166,6 +166,13 @@ export function getDashboardRange(
     const end = new Date(tomorrowStart)
     const { prevStart, prevEnd } = withPrevious(start, end)
     return { start, end, prevStart, prevEnd, label: 'This month', prevLabel: 'previous period' }
+  }
+
+  if (filter === 'last30days') {
+    const start = addDays(todayStart, -29)
+    const end = new Date(tomorrowStart)
+    const { prevStart, prevEnd } = withPrevious(start, end)
+    return { start, end, prevStart, prevEnd, label: 'Last 30 days', prevLabel: 'previous 30 days' }
   }
 
   if (filter === 'custom') {

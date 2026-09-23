@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { MessageCircle, MessagesSquare, UserPlus, Users } from 'lucide-react'
+import { Users } from 'lucide-react'
 import {
   getDashboardRange,
   getYearRange,
@@ -9,10 +9,10 @@ import {
   type DashboardDateFilter,
 } from '@/lib/dashboard/date-utils'
 import { loadDashboardAnalytics } from '@/lib/dashboard/analytics-client'
-import type { DashboardKpis, FlowBreakdownRow, MonthlyFlowMonth } from '@/lib/dashboard/types'
+import type { DailyContactsDay, DailyFlowDay, DashboardKpis, MonthlyFlowMonth } from '@/lib/dashboard/types'
 import { DateFilter } from '@/components/dashboard/date-filter'
 import { KpiCard } from '@/components/dashboard/kpi-card'
-import { FlowBreakdown } from '@/components/dashboard/flow-breakdown'
+import { DailyChart } from '@/components/dashboard/daily-chart'
 import { MonthlyChart } from '@/components/dashboard/monthly-chart'
 import { SkeletonCard } from '@/components/dashboard/skeleton'
 
@@ -42,7 +42,8 @@ export default function DashboardPage() {
   )
 
   const [kpis, setKpis] = useState<DashboardKpis | null>(null)
-  const [flowRows, setFlowRows] = useState<FlowBreakdownRow[] | null>(null)
+  const [daily, setDaily] = useState<DailyContactsDay[] | null>(null)
+  const [dailyFlows, setDailyFlows] = useState<DailyFlowDay[] | null>(null)
   const [monthly, setMonthly] = useState<number[] | null>(null)
   const [monthlyFlows, setMonthlyFlows] = useState<MonthlyFlowMonth[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,7 +71,8 @@ export default function DashboardPage() {
     )
       .then((d) => {
         setKpis(d.kpis)
-        setFlowRows(d.flowRows)
+        setDaily(d.daily)
+        setDailyFlows(d.dailyFlows)
         setMonthly(d.monthly)
         setMonthlyFlows(d.monthlyFlows)
       })
@@ -95,7 +97,7 @@ export default function DashboardPage() {
   }, [])
 
   const kpiLoading = loading || !kpis
-  const flowLoading = loading || flowRows == null
+  const dailyLoading = loading || daily == null
   const monthlyLoading = loading || monthly == null
 
   return (
@@ -117,46 +119,21 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* KPI cards — only the four specified metrics */}
+      {/* KPI — unique contacts messaged in range */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {kpiLoading || !kpis ? (
-          Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
+          <SkeletonCard key="kpi" />
         ) : (
-          <>
-            <KpiCard
-              title="Total Messages"
-              value={kpis.totalMessages.current}
-              icon={MessagesSquare}
-              previous={kpis.totalMessages.previous}
-              prevLabel={range.prevLabel}
-            />
-            <KpiCard
-              title="Unique Contacts Messaged"
-              value={kpis.uniqueContacts.current}
-              icon={Users}
-              previous={kpis.uniqueContacts.previous}
-              prevLabel={range.prevLabel}
-            />
-            <KpiCard
-              title="New Contacts"
-              value={kpis.newContacts.current}
-              icon={UserPlus}
-              previous={kpis.newContacts.previous}
-              prevLabel={range.prevLabel}
-            />
-            <KpiCard
-              title="New Conversations"
-              value={kpis.newConversations.current}
-              icon={MessageCircle}
-              previous={kpis.newConversations.previous}
-              prevLabel={range.prevLabel}
-            />
-          </>
+          <KpiCard
+            title="Unique Contacts Messaged"
+            value={kpis.uniqueContacts.current}
+            icon={Users}
+          />
         )}
       </div>
 
-      {/* Primary: message breakdown by flow */}
-      <FlowBreakdown rows={flowRows} loading={flowLoading} rangeLabel={range.label} />
+      {/* Daily uniques — trailing 30 days */}
+      <DailyChart data={daily} flows={dailyFlows} loading={dailyLoading} />
 
       {/* Bottom: monthly uniques — final major section */}
       <MonthlyChart

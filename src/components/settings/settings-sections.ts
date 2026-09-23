@@ -8,6 +8,7 @@ import {
   Phone,
   PlugZap,
   Shield,
+  Store,
   Tags,
   User,
   UsersRound,
@@ -32,6 +33,7 @@ export const SETTINGS_SECTIONS = [
   'notifications',
   'travel-crm',
   'whatsapp',
+  'business-profile',
   'fields',
   'deals',
   'members',
@@ -49,6 +51,12 @@ export interface SectionMeta {
   label: string;
   icon: LucideIcon;
   group: 'top' | 'account' | 'integrations' | 'workspace';
+  /**
+   * When true the section stays reachable (deep-link + panel render)
+   * but is omitted from the rail — used for sections promoted to the
+   * main sidebar (Team members).
+   */
+  hideFromRail?: boolean;
 }
 
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
@@ -65,9 +73,10 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   notifications: { id: 'notifications', label: 'Notifications', icon: Bell, group: 'account' },
   'travel-crm': { id: 'travel-crm', label: 'Travel CRM', icon: ArrowLeftRight, group: 'integrations' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
+  'business-profile': { id: 'business-profile', label: 'Business Profile', icon: Store, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
-  members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
+  members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace', hideFromRail: true },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
    webhooks: { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'workspace' }
 };

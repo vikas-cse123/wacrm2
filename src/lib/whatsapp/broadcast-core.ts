@@ -21,6 +21,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import {
+  persistBroadcastOutboundMessage,
+  renderTemplateMessageText,
+} from '@/lib/whatsapp/send-message';
+import {
   sanitizePhoneForMeta,
   isValidE164,
   phoneVariants,
@@ -58,12 +62,15 @@ export interface CreateBroadcastParams {
 
 interface PlannedRecipient {
   recipientRowId: string;
+  contactId: string;
   phone: string;
   params: string[];
 }
 
 export interface BroadcastPlan {
   broadcastId: string;
+  accountId: string;
+  auditUserId: string;
   templateName: string;
   templateLanguage: string;
   phoneNumberId: string;
@@ -231,11 +238,18 @@ export async function createBroadcast(
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
   const planned: PlannedRecipient[] = recipientRows.map((row) => {
     const r = byContact.get(row.contact_id as string)!;
-    return { recipientRowId: row.id as string, phone: r.phone, params: r.params };
+    return {
+      recipientRowId: row.id as string,
+      contactId: r.contactId,
+      phone: r.phone,
+      params: r.params,
+    };
   });
 
   return {
     broadcastId: broadcast.id,
+    accountId,
+    auditUserId,
     templateName,
     templateLanguage,
     phoneNumberId: config.phone_number_id,
@@ -303,6 +317,29 @@ export async function deliverBroadcast(
           error_message: null,
         })
         .eq('id', recipient.recipientRowId);
+
+      // Mirror into the Inbox as a normal outbound template message
+      // (best-effort — the Meta send above already succeeded, so a
+      // persistence failure must never fail the recipient).
+      try {
+        await persistBroadcastOutboundMessage(db, {
+          accountId: plan.accountId,
+          contactId: recipient.contactId,
+          auditUserId: plan.auditUserId,
+          templateName: plan.templateName,
+          renderedText: renderTemplateMessageText(
+            plan.templateRow?.body_text ?? `[${plan.templateName}]`,
+            undefined,
+            recipient.params
+          ),
+          whatsappMessageId: sentMessageId,
+        });
+      } catch (err) {
+        console.error(
+          '[broadcast-core] inbox mirror failed (analytics unaffected):',
+          err instanceof Error ? err.message : err
+        );
+      }
     } else {
       await db
         .from('broadcast_recipients')

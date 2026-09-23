@@ -13,7 +13,7 @@ import {
 import { isValidHttpUrl } from '@/lib/whatsapp/business-profile';
 
 /**
- * Admin-only Business Profile management (Settings → WhatsApp →
+ * Admin-only Business Profile management (Settings → Workspace →
  * Business Profile). Meta is the source of truth — nothing is
  * stored locally. The access token is decrypted server-side and
  * never leaves this route.
