@@ -13,7 +13,10 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
-import { verifySessionActive } from "@/lib/auth/session-recovery";
+import {
+  confirmSignedOut,
+  verifySessionActive,
+} from "@/lib/auth/session-recovery";
 import {
   canEditSettings as canEditSettingsFor,
   canManageMembers as canManageMembersFor,
@@ -69,6 +72,13 @@ interface AuthContextValue {
    */
   profileLoading: boolean;
   signOut: () => Promise<void>;
+  /**
+   * Whether the session is confirmed dead. The dashboard shell
+   * redirects to /login ONLY on "signed-out" — a null user with
+   * "unknown" (transient blip under verification) renders blank
+   * and waits for the next auth event instead of bouncing.
+   */
+  sessionStatus: "active" | "signed-out" | "unknown";
   /** Re-fetch the current user's profile row — call after a save from
    *  the settings form so header/sidebar reflect the change without a
    *  full page reload. */
@@ -122,6 +132,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [account, setAccount] = useState<AccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  // Session liveness as last determined: 'active' while a user is
+  // known, 'signed-out' only after a verification proves death,
+  // 'unknown' while a null session is still being confirmed.
+  const [sessionStatus, setSessionStatus] = useState<
+    "active" | "signed-out" | "unknown"
+  >("unknown");
   // Tracked separately from `loading`. The session settles fast (one
   // local cookie read); the profile fetch crosses the network and
   // settles later. Callers that gate on `profile.*` need to know which
@@ -263,6 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mounted || settledRef.current) return;
       if (verification.status === "active") {
         setUser(verification.user);
+        setSessionStatus("active");
         if (verification.user.id !== lastFetchedUserIdRef.current) {
           fetchProfile(verification.user.id);
         }
@@ -271,6 +288,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null);
         setAccount(null);
         setProfileLoading(false);
+        setSessionStatus("signed-out");
       }
       // "unknown" (infrastructure failure) deliberately keeps state:
       // a blip must not log the user out. The next auth event
@@ -289,19 +307,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (!mounted) return;
         const currentUser = session?.user ?? null;
-        setUser(currentUser);
 
         if (currentUser) {
+          setUser(currentUser);
+          setSessionStatus("active");
           // Don't block session loading on profile fetch — chrome
           // (header, sidebar) can render from the user object alone,
           // profile enriches async. Callers that need to branch on
           // profile data gate on `profileLoading` instead.
           fetchProfile(currentUser.id);
         } else {
-          // No user → no profile to load. Flip profileLoading off so
-          // pages that gate on it don't wait forever on the logged-out
-          // path (the route guard or redirect should fire instead).
-          setProfileLoading(false);
+          // Null at boot can be a torn cookie read mid-rotation, not
+          // a logout — confirm before declaring the session dead so
+          // a reload landing mid-rotation doesn't bounce to /login.
+          const verification = await verifySessionActive(supabase, {
+            getUserTimeoutMs: 4000,
+          });
+          if (!mounted) return;
+          if (verification.status === "active") {
+            setUser(verification.user);
+            setSessionStatus("active");
+            if (verification.user.id !== lastFetchedUserIdRef.current) {
+              fetchProfile(verification.user.id);
+            }
+          } else {
+            // No user → no profile to load. Flip profileLoading off so
+            // pages that gate on it don't wait forever on the logged-out
+            // path (the route guard or redirect should fire instead).
+            setProfileLoading(false);
+            if (verification.status === "dead") {
+              setSessionStatus("signed-out");
+            }
+            // "unknown": status stays "unknown" — the shell holds
+            // (blank, no redirect) until the next auth event or the
+            // delayed re-verify below re-evaluates.
+          }
         }
       } catch (err) {
         console.error("[AuthProvider] init threw:", err);
@@ -319,17 +359,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
 
-      // Explicit, locally-confirmed sign-out (user clicked Sign out,
-      // another tab signed out, or the client revoked after a
-      // genuinely dead refresh): auth-js only emits SIGNED_OUT once
-      // the session is actually gone, so wipe immediately — no
-      // recovery attempts that could resurrect it.
+      // The auth client emits SIGNED_OUT for explicit sign-outs AND
+      // when a failed background refresh removes the local session —
+      // e.g. this tab lost a refresh-token rotation race while a
+      // sibling tab holds fresh tokens. Wiping blindly turns that
+      // transient race into a logout, so confirm first (unless our
+      // own explicit signOut() is in flight — wiping already won
+      // there and navigation follows).
       if (event === "SIGNED_OUT") {
+        if (signingOutRef.current) {
+          lastFetchedUserIdRef.current = null;
+          setUser(null);
+          setProfile(null);
+          setAccount(null);
+          setProfileLoading(false);
+          setSessionStatus("signed-out");
+          setLoading(false);
+          return;
+        }
+        console.warn("[auth] AUTH_SIGNED_OUT_VERIFYING before state change");
+        const dead = await confirmSignedOut(supabase, {
+          getUserTimeoutMs: 4000,
+        });
+        if (!mounted || signingOutRef.current) return;
+        if (!dead) {
+          console.warn("[auth] AUTH_SIGNED_OUT_RECOVERED keeping current page");
+          // Storage already converged (sibling tab's rotation landed
+          // or the broadcast carried a session) — re-adopt it.
+          const {
+            data: { session: current },
+          } = await supabase.auth.getSession();
+          if (!mounted) return;
+          if (current?.user) {
+            setUser(current.user);
+            setSessionStatus("active");
+            if (current.user.id !== lastFetchedUserIdRef.current) {
+              fetchProfile(current.user.id);
+            }
+          }
+          setLoading(false);
+          return;
+        }
+        console.warn("[auth] AUTH_CONFIRMED_SIGNED_OUT redirecting to login");
         lastFetchedUserIdRef.current = null;
         setUser(null);
         setProfile(null);
         setAccount(null);
         setProfileLoading(false);
+        setSessionStatus("signed-out");
         setLoading(false);
         return;
       }
@@ -337,6 +414,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = session?.user ?? null;
       if (currentUser) {
         setUser(currentUser);
+        setSessionStatus("active");
         if (currentUser.id !== lastFetchedUserIdRef.current) {
           fetchProfile(currentUser.id);
         }
@@ -359,6 +437,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (verification.status === "active") {
           console.warn("[auth] AUTH_SESSION_RECOVERED keeping current page");
           setUser(verification.user);
+          setSessionStatus("active");
           if (verification.user.id !== lastFetchedUserIdRef.current) {
             fetchProfile(verification.user.id);
           }
@@ -369,10 +448,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setProfile(null);
           setAccount(null);
           setProfileLoading(false);
+          setSessionStatus("signed-out");
         }
-        // "unknown" (timeout/network/5xx): keep existing state. A blip
-        // must not log the user out; the next auth event re-evaluates,
-        // and data fetches surface their own errors meanwhile.
+        // "unknown" (timeout/network/5xx/rotation-race): keep existing
+        // state and stay "unknown". A blip must not log the user out;
+        // the next auth event (or the delayed re-verify below)
+        // re-evaluates, and data fetches surface their own errors
+        // meanwhile.
       } finally {
         recoveringRef.current = false;
         if (mounted) setLoading(false);
@@ -386,11 +468,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [fetchProfile]);
 
+  // One delayed re-verify while a null session stays unconfirmed.
+  // Covers reloads landing mid-rotation (no further auth events may
+  // arrive to re-evaluate). Single shot per unknown episode — no
+  // polling loop that could hammer Supabase during an outage.
+  const reverifyArmedRef = useRef(false);
+  useEffect(() => {
+    if (loading || user || sessionStatus !== "unknown" || reverifyArmedRef.current) {
+      if (sessionStatus !== "unknown") reverifyArmedRef.current = false;
+      return;
+    }
+    reverifyArmedRef.current = true;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const supabase = createClient();
+      const verification = await verifySessionActive(supabase, {
+        getUserTimeoutMs: 4000,
+      });
+      if (cancelled || signingOutRef.current) return;
+      if (verification.status === "active") {
+        setUser(verification.user);
+        setSessionStatus("active");
+        if (verification.user.id !== lastFetchedUserIdRef.current) {
+          fetchProfile(verification.user.id);
+        }
+      } else if (verification.status === "dead") {
+        setUser(null);
+        setProfile(null);
+        setAccount(null);
+        setProfileLoading(false);
+        setSessionStatus("signed-out");
+      }
+      // Still unknown: stop retrying. Later auth events (visibility
+      // return, sibling-tab broadcast, rotation) re-evaluate.
+    }, 6000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [loading, user, sessionStatus, fetchProfile]);
+
   const signOut = useCallback(async () => {
     // Mark the explicit sign-out FIRST: a null-session event landing
     // in this window must not trigger recovery (which could restore
     // state mid-logout). Reset only if signOut itself throws — the
     // success path reloads to /login and discards all refs.
+    // The SIGNED_OUT event this fires takes the wipe-immediately
+    // branch above (signingOutRef is set), so intentional logout is
+    // never delayed by verification.
     signingOutRef.current = true;
     try {
     // Unsubscribe Web Push before signing out so the server stops
@@ -458,6 +583,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         loading,
         profileLoading,
+        sessionStatus,
         signOut,
         refreshProfile,
         account,
@@ -486,6 +612,7 @@ export function useAuth(): AuthContextValue {
       profile: null,
       loading: false,
       profileLoading: false,
+      sessionStatus: "unknown" as const,
       signOut: async () => {
         window.location.href = "/login";
       },
