@@ -8,7 +8,6 @@ import { useAuth } from '@/hooks/use-auth';
 import { getTravelCrmUrl } from '@/lib/travel-crm';
 import { useTheme } from '@/hooks/use-theme';
 import { FONTS, THEMES } from '@/lib/themes';
-import { CURRENCIES } from '@/lib/currency';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -36,7 +35,7 @@ export function SettingsOverview({
   onSelect: (section: SettingsSection) => void;
   visibleSections?: ReadonlySet<SettingsSection>;
 }) {
-  const { user, profile, account, accountId, accountRole, defaultCurrency } =
+  const { user, profile, account, accountId, accountRole } =
     useAuth();
   const { mode, theme, font } = useTheme();
 
@@ -127,8 +126,6 @@ export function SettingsOverview({
   const roleMeta = accountRole ? ROLE_META[accountRole] : null;
   const RoleIcon = roleMeta?.icon;
 
-  const currencyLabel =
-    CURRENCIES.find((c) => c.code === defaultCurrency)?.label ?? defaultCurrency;
   const themeName = THEMES.find((t) => t.id === theme)?.name ?? theme;
   const fontName = FONTS.find((f) => f.id === font)?.name ?? font;
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -154,11 +151,6 @@ export function SettingsOverview({
           <StatusDot tone="muted" /> Needs reconnecting
         </>
       ),
-    },
-    {
-      section: 'deals',
-      loading: false,
-      subtitle: `${defaultCurrency} — ${currencyLabel}`,
     },
     {
       section: 'travel-crm',

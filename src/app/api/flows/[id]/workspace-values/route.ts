@@ -40,6 +40,7 @@ async function loadField(
     position: row.position as number,
     options: (row.options as string[] | null) ?? null,
     default_value: (row.default_value as string | null) ?? null,
+    currency_code: (row.currency_code as string | null) ?? null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };

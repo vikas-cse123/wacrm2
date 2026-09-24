@@ -171,6 +171,55 @@ describe("POST workspace fields", () => {
     expect(res.status).toBe(400);
   });
 
+  it("creates a currency column defaulting to INR", async () => {
+    const res = await POST(
+      post({ name: "Package Price", field_type: "currency" }),
+      params,
+    );
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { field: Record<string, unknown> };
+    expect(json.field).toMatchObject({
+      name: "Package Price",
+      field_type: "currency",
+      currency_code: "INR",
+    });
+  });
+
+  it("creates a currency column with an explicit currency", async () => {
+    for (const code of ["USD", "EUR", "AED"]) {
+      const res = await POST(
+        post({ name: `Price ${code}`, field_type: "currency", currency_code: code }),
+        params,
+      );
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { field: Record<string, unknown> };
+      expect(json.field).toMatchObject({ currency_code: code });
+    }
+  });
+
+  it("400s on unsupported currency and non-currency usage", async () => {
+    expect(
+      (
+        await POST(
+          post({
+            name: "Price",
+            field_type: "currency",
+            currency_code: "USDX",
+          }),
+          params,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await POST(
+          post({ name: "Notes", field_type: "text", currency_code: "USD" }),
+          params,
+        )
+      ).status,
+    ).toBe(400);
+  });
+
   it("409s on duplicate column names", async () => {
     h.insertError = { code: "23505", message: "duplicate" };
     const res = await POST(post({ name: "Status", field_type: "text" }), params);

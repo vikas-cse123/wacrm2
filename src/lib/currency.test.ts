@@ -4,6 +4,9 @@ import {
   DEFAULT_CURRENCY,
   formatCurrency,
   formatCurrencyShort,
+  formatWorkspaceCurrency,
+  normalizeCurrencyCode,
+  resolveCurrencyCode,
 } from "./currency";
 
 describe("formatCurrency", () => {
@@ -14,7 +17,8 @@ describe("formatCurrency", () => {
     expect(out).not.toContain(".00");
   });
 
-  it("defaults to USD when no currency is given", () => {
+  it("defaults to INR when no currency is given", () => {
+    expect(DEFAULT_CURRENCY).toBe("INR");
     expect(formatCurrency(10)).toBe(formatCurrency(10, DEFAULT_CURRENCY));
   });
 
@@ -61,5 +65,71 @@ describe("formatCurrencyShort", () => {
 
   it("falls back to the code prefix for unknown currencies (no throw)", () => {
     expect(formatCurrencyShort(1_000, "ZZZ")).toBe("ZZZ 1.0k");
+  });
+});
+
+describe("workspace currency codes", () => {
+  it("offers every required picker currency", () => {
+    const codes = new Set(CURRENCIES.map((c) => c.code));
+    for (const required of [
+      "INR",
+      "USD",
+      "EUR",
+      "GBP",
+      "AED",
+      "SGD",
+      "AUD",
+      "CAD",
+      "JPY",
+      "THB",
+      "MYR",
+      "SAR",
+      "QAR",
+      "NZD",
+      "CHF",
+    ]) {
+      expect(codes.has(required)).toBe(true);
+    }
+  });
+
+  it("normalizes codes and defaults blanks to INR", () => {
+    expect(normalizeCurrencyCode("  usd ")).toBe("USD");
+    expect(normalizeCurrencyCode(null)).toBe("INR");
+    expect(normalizeCurrencyCode("")).toBe("INR");
+    expect(() => normalizeCurrencyCode("USDX")).toThrow();
+  });
+
+  it("resolves legacy/unknown codes to INR without throwing", () => {
+    expect(resolveCurrencyCode(null)).toBe("INR");
+    expect(resolveCurrencyCode("")).toBe("INR");
+    expect(resolveCurrencyCode("USDX")).toBe("INR");
+    expect(resolveCurrencyCode("aed")).toBe("AED");
+  });
+});
+
+describe("formatWorkspaceCurrency", () => {
+  it("groups INR with Indian digit grouping", () => {
+    expect(formatWorkspaceCurrency(234234, "INR")).toBe("₹2,34,234");
+  });
+
+  it("groups USD/EUR with Western grouping", () => {
+    expect(formatWorkspaceCurrency(234234, "USD")).toBe("$234,234");
+    expect(formatWorkspaceCurrency(234234, "EUR")).toBe("€234,234");
+  });
+
+  it("prefixes AED with its symbol", () => {
+    expect(formatWorkspaceCurrency(234234, "AED")).toBe("د.إ 234,234");
+  });
+
+  it("keeps values numeric (display-only, no minor units)", () => {
+    expect(formatWorkspaceCurrency(80000, "INR")).toBe("₹80,000");
+    expect(formatWorkspaceCurrency(80000, "INR")).not.toContain(".");
+  });
+
+  it("treats missing currency as INR and never throws", () => {
+    expect(formatWorkspaceCurrency(1000)).toBe(
+      formatWorkspaceCurrency(1000, "INR"),
+    );
+    expect(() => formatWorkspaceCurrency(1000, "bogus")).not.toThrow();
   });
 });

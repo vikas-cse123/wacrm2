@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   user: { id: "u-1" } as { id: string } | null,
   flow: {
     id: "flow-1",
+    account_id: "acct-1",
     name: "Singapore Chat Automation",
     completion_node_id: null,
     entry_node_id: "start",
@@ -71,6 +72,10 @@ const h = vi.hoisted(() => ({
     ],
   },
   rpcArgs: null as Record<string, unknown> | null,
+  // Service-role provisioning capture (default business columns).
+  adminFields: [] as Array<Record<string, unknown>>,
+  adminInserts: [] as Array<Record<string, unknown>[]>,
+  adminScopes: [] as Array<{ accountId: unknown; flowId: unknown }>,
 }));
 
 function tableBuilder(rows: unknown) {
@@ -81,6 +86,40 @@ function tableBuilder(rows: unknown) {
   builder.maybeSingle = async () => ({ data: rows, error: null });
   return builder;
 }
+
+function adminFieldsBuilder() {
+  return {
+    select: () => ({
+      eq: (col: string, val: unknown) => ({
+        eq: async (col2: string, val2: unknown) => {
+          const scope = { accountId: undefined as unknown, flowId: undefined as unknown };
+          for (const [c, v] of [
+            [col, val],
+            [col2, val2],
+          ] as Array<[string, unknown]>) {
+            if (c === "account_id") scope.accountId = v;
+            if (c === "flow_id") scope.flowId = v;
+          }
+          h.adminScopes.push(scope);
+          return { data: h.adminFields, error: null };
+        },
+      }),
+    }),
+    insert: async (rows: Array<Record<string, unknown>>) => {
+      h.adminInserts.push(rows);
+      return { data: rows, error: null };
+    },
+  };
+}
+
+vi.mock("@/lib/flows/admin-client", () => ({
+  supabaseAdmin: () => ({
+    from: (table: string) => {
+      if (table === "workspace_fields") return adminFieldsBuilder();
+      throw new Error(`unexpected admin table ${table}`);
+    },
+  }),
+}));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
@@ -139,11 +178,15 @@ beforeEach(() => {
   h.user = { id: "u-1" };
   h.flow = {
     id: "flow-1",
+    account_id: "acct-1",
     name: "Singapore Chat Automation",
     completion_node_id: null,
     entry_node_id: "start",
   };
   h.rpcArgs = null;
+  h.adminFields = [];
+  h.adminInserts = [];
+  h.adminScopes = [];
 });
 
 describe("GET /api/flows/[id]/table", () => {
@@ -231,5 +274,61 @@ describe("GET /api/flows/[id]/table", () => {
       { params: Promise.resolve({ id: "flow-1" }) },
     );
     expect(res.status).toBe(404);
+    // No provisioning is attempted for a flow the caller may not see.
+    expect(h.adminInserts).toHaveLength(0);
+  });
+
+  it("provisions the same flow-scoped defaults for Completed and Incomplete", async () => {
+    for (const view of ["completed", "incomplete"]) {
+      const res = await GET(
+        new Request(`https://app.test/api/flows/flow-1/table?view=${view}`),
+        { params: Promise.resolve({ id: "flow-1" }) },
+      );
+      expect(res.status).toBe(200);
+    }
+    // Both views share ONE flow-scoped definition — the same 12
+    // names scoped to the same (account, flow), never per-view
+    // records. (Cross-request dedupe is covered by the idempotency
+    // unit tests; the route mock does not persist between calls.)
+    expect(h.adminInserts).toHaveLength(2);
+    for (const rows of h.adminInserts) {
+      expect(rows.map((r) => r.name)).toEqual([
+        "Assigned To",
+        "Call Status",
+        "No. of Calls Tried",
+        "Lead Quality",
+        "Quotation / Package",
+        "Follow-Up Status",
+        "Last Contact Date",
+        "Customer Response",
+        "Next Follow-up Date & Time",
+        "Next Action",
+        "Reason for Lost Lead",
+        "Final Remark",
+      ]);
+      for (const row of rows) {
+        expect(row.account_id).toBe("acct-1");
+        expect(row.flow_id).toBe("flow-1");
+      }
+    }
+    expect(h.adminScopes).toEqual([
+      { accountId: "acct-1", flowId: "flow-1" },
+      { accountId: "acct-1", flowId: "flow-1" },
+    ]);
+  });
+
+  it("skips provisioning when the flow already has its defaults", async () => {
+    h.adminFields = [{ name: "Assigned To", position: 0 }];
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table?view=completed"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    // Only the 11 missing columns are filled — the existing one kept.
+    expect(h.adminInserts).toHaveLength(1);
+    expect(h.adminInserts[0]).toHaveLength(11);
+    expect(
+      (h.adminInserts[0] as Array<Record<string, unknown>>).map((r) => r.name),
+    ).not.toContain("Assigned To");
   });
 });

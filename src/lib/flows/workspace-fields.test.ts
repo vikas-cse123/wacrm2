@@ -3,6 +3,7 @@ import {
   displayWorkspaceValue,
   isWorkspaceFieldType,
   parseMultiSelectValue,
+  resolveWorkspaceCurrency,
   validateWorkspaceFieldDef,
   validateWorkspaceValue,
 } from "./workspace-fields";
@@ -100,6 +101,80 @@ describe("workspace field definitions", () => {
     const def = validateWorkspaceFieldDef({ name: "T", field_type: "text" });
     expect(def.default_value).toBeNull();
     expect(def.options).toBeNull();
+  });
+
+  it("defaults currency columns to INR", () => {
+    expect(
+      validateWorkspaceFieldDef({ name: "Price", field_type: "currency" })
+        .currency_code,
+    ).toBe("INR");
+    expect(
+      validateWorkspaceFieldDef({
+        name: "Price",
+        field_type: "currency",
+        currency_code: "",
+      }).currency_code,
+    ).toBe("INR");
+    expect(
+      validateWorkspaceFieldDef({
+        name: "Price",
+        field_type: "currency",
+        currency_code: null,
+      }).currency_code,
+    ).toBe("INR");
+  });
+
+  it("accepts an explicit supported currency per column", () => {
+    for (const code of ["INR", "USD", "EUR", "AED"]) {
+      const def = validateWorkspaceFieldDef({
+        name: "Price",
+        field_type: "currency",
+        currency_code: code,
+      });
+      expect(def.currency_code).toBe(code);
+    }
+    // Case-insensitive, whitespace-tolerant.
+    expect(
+      validateWorkspaceFieldDef({
+        name: "Price",
+        field_type: "currency",
+        currency_code: "  aed ",
+      }).currency_code,
+    ).toBe("AED");
+  });
+
+  it("rejects unsupported currencies and non-currency usage", () => {
+    expect(() =>
+      validateWorkspaceFieldDef({
+        name: "Price",
+        field_type: "currency",
+        currency_code: "USDX",
+      }),
+    ).toThrow(/currency/i);
+    expect(() =>
+      validateWorkspaceFieldDef({
+        name: "Notes",
+        field_type: "text",
+        currency_code: "USD",
+      }),
+    ).toThrow(/only currency/i);
+  });
+
+  it("resolves legacy currency columns (no code) to INR", () => {
+    expect(resolveWorkspaceCurrency({ currency_code: null })).toBe("INR");
+    expect(resolveWorkspaceCurrency({ currency_code: "AED" })).toBe("AED");
+  });
+
+  it("keeps currency values numeric regardless of currency", () => {
+    expect(validateWorkspaceValue("currency", null, "234234")).toBe("234234");
+    const def = validateWorkspaceFieldDef({
+      name: "Dubai Price",
+      field_type: "currency",
+      currency_code: "AED",
+      default_value: "234234",
+    });
+    expect(def.default_value).toBe("234234");
+    expect(def.currency_code).toBe("AED");
   });
 });
 

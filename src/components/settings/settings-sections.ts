@@ -76,9 +76,12 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   'business-profile': { id: 'business-profile', label: 'Business Profile', icon: Store, group: 'account' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
-  deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
+  // Navigation-only: hidden from the left rail but still reachable
+  // via deep-link/panel render — the underlying functionality,
+  // routes, APIs, and components are untouched.
+  deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace', hideFromRail: true },
   members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace', hideFromRail: true },
-  api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
+  api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace', hideFromRail: true },
    webhooks: { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'workspace' }
 };
 
