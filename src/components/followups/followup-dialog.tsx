@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,17 +15,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
 import {
   FOLLOWUP_MESSAGE_MAX,
+  normalizeRecipientPhone,
   type Followup,
 } from "@/lib/followups/types";
 
@@ -34,10 +30,14 @@ interface ContactOption {
   phone: string;
 }
 
-interface TemplateOption {
-  name: string;
-  language: string;
-}
+/**
+ * Create / edit a reminder. The reminder is delivered TO THE
+ * CREATOR's own stored WhatsApp number (`profiles.whatsapp_number`,
+ * snapshotted at creation) FROM the already-connected WhatsApp
+ * Business number, shown read-only. The customer is optional
+ * context only and never the recipient — there is no "send to"
+ * selector because the recipient is always the creator.
+ */
 
 function toLocalInputValue(iso: string): { date: string; time: string } {
   const d = new Date(iso);
@@ -50,11 +50,9 @@ function toLocalInputValue(iso: string): { date: string; time: string } {
 }
 
 /**
- * Create / edit a follow-up. Contacts come from the existing
- * account-scoped search (no duplicates created); the sender is the
+ * Create / edit a reminder. The contact picker is optional context
+ * (personal reminders have no customer); the sender is the
  * already-connected WhatsApp Business number, shown read-only.
- * An optional approved template covers sends outside the 24h
- * customer-service window (decided at send time, not here).
  */
 export function FollowupDialog({
   open,
@@ -76,11 +74,15 @@ export function FollowupDialog({
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [message, setMessage] = useState("");
-  const [templates, setTemplates] = useState<TemplateOption[]>([]);
-  const [templateName, setTemplateName] = useState<string>("");
+  // The creator's own WhatsApp number — the reminder recipient.
+  // Fetched separately (not via useAuth) so a pre-migration schema
+  // degrades to the blocking state instead of breaking the dialog.
+  const [agentNumber, setAgentNumber] = useState<string | null>(null);
+  const [agentNumberLoading, setAgentNumberLoading] = useState(true);
   const [senderLine, setSenderLine] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { user } = useAuth();
 
   useEffect(() => {
     if (!open) return;
@@ -91,7 +93,6 @@ export function FollowupDialog({
       setDate(local.date);
       setTime(local.time);
       setMessage(editing.message_text);
-      setTemplateName(editing.template_name ?? "");
     } else {
       setContactId(null);
       setContactLabel("");
@@ -99,11 +100,43 @@ export function FollowupDialog({
       setDate("");
       setTime("");
       setMessage("");
-      setTemplateName("");
     }
     setContactOptions([]);
-    // Connected sender (read-only context) + approved templates.
+    // Recipient check: the creator's own number. Missing/invalid =
+    // blocking state (the server also fails closed on save).
+    setAgentNumberLoading(true);
+    setAgentNumber(null);
     const supabase = createClient();
+    if (user?.id) {
+      // Two-arg `then` (no `.catch`): the PostgREST builder's
+      // thenable types as PromiseLike, which has no `catch`.
+      void supabase
+        .from("profiles")
+        .select("whatsapp_number")
+        .eq("user_id", user.id)
+        .maybeSingle()
+        .then(
+          ({ data, error }) => {
+            if (error || !data) {
+              setAgentNumber(null);
+            } else {
+              setAgentNumber(
+                normalizeRecipientPhone(
+                  (data as { whatsapp_number?: unknown }).whatsapp_number,
+                ),
+              );
+            }
+            setAgentNumberLoading(false);
+          },
+          () => {
+            setAgentNumber(null);
+            setAgentNumberLoading(false);
+          },
+        );
+    } else {
+      setAgentNumberLoading(false);
+    }
+    // Connected sender (read-only context).
     fetch("/api/whatsapp/business-profile", { cache: "no-store" })
       .then((r) => r.json().catch(() => null))
       .then((json) => {
@@ -120,20 +153,7 @@ export function FollowupDialog({
         }
       })
       .catch(() => setSenderLine(null));
-    supabase
-      .from("message_templates")
-      .select("name, language")
-      .eq("status", "APPROVED")
-      .order("name")
-      .limit(100)
-      .then(({ data }) => {
-        setTemplates(
-          ((data ?? []) as Array<{ name: string; language: string | null }>).map(
-            (t) => ({ name: t.name, language: t.language ?? "en_US" }),
-          ),
-        );
-      });
-  }, [open, editing]);
+  }, [open, editing, user?.id]);
 
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -177,8 +197,14 @@ export function FollowupDialog({
     scheduledISO !== null &&
     !Number.isNaN(scheduledISO.getTime()) &&
     scheduledISO.getTime() > Date.now();
+  // Customer is optional; the recipient is always the creator, so a
+  // missing agent number blocks submission (fail closed).
   const canSubmit =
-    !saving && contactId !== null && scheduledValid && message.trim().length > 0;
+    !saving &&
+    !agentNumberLoading &&
+    agentNumber !== null &&
+    scheduledValid &&
+    message.trim().length > 0;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -189,8 +215,10 @@ export function FollowupDialog({
         contact_id: contactId,
         scheduled_for: scheduledISO.toISOString(),
         message_text: message.trim(),
-        template_name: templateName || null,
-        template_language: "en_US",
+        // New reminders are text-only. Preserve any template stored
+        // on a legacy row being edited (no UI to change it).
+        template_name: editing?.template_name ?? null,
+        template_language: editing?.template_language ?? "en_US",
       };
       const url = editing ? `/api/followups/${editing.id}` : "/api/followups";
       const res = await fetch(url, {
@@ -201,12 +229,12 @@ export function FollowupDialog({
       const json = (await res.json().catch(() => null)) as {
         error?: string;
       } | null;
-      if (!res.ok) throw new Error(json?.error ?? "Could not save the follow-up.");
-      toast.success(editing ? "Follow-up updated." : "Follow-up scheduled.");
+      if (!res.ok) throw new Error(json?.error ?? "Could not save the reminder.");
+      toast.success(editing ? "Reminder updated." : "Reminder scheduled.");
       onOpenChange(false);
       onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save the follow-up.");
+      toast.error(err instanceof Error ? err.message : "Could not save the reminder.");
     } finally {
       setSaving(false);
     }
@@ -216,29 +244,57 @@ export function FollowupDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit follow-up" : "New follow-up"}</DialogTitle>
+          <DialogTitle>{editing ? "Edit reminder" : "New Reminder"}</DialogTitle>
           <DialogDescription>
-            Sent from your connected WhatsApp Business number at the
-            scheduled time.
+            Delivered to your WhatsApp number from your connected
+            WhatsApp Business number at the scheduled time.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4">
+          {!agentNumberLoading && agentNumber === null && (
+            <p
+              role="alert"
+              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+            >
+              Add your WhatsApp number in{" "}
+              <Link href="/settings?tab=profile" className="font-medium underline">
+                Settings → Your profile
+              </Link>{" "}
+              before creating a reminder.
+            </p>
+          )}
           <div className="grid gap-2">
-            <Label>Customer</Label>
+            <Label>
+              Customer <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
             {contactId ? (
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted px-3 py-2 text-sm">
                 <span className="truncate text-foreground">{contactLabel || "Selected contact"}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setContactId(null);
-                    setContactLabel("");
-                  }}
-                >
-                  Change
-                </Button>
+                <span className="flex shrink-0 gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setContactId(null);
+                      setContactLabel("");
+                    }}
+                  >
+                    Remove
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setContactId(null);
+                      setContactLabel("");
+                      setContactOpen(true);
+                    }}
+                  >
+                    Change
+                  </Button>
+                </span>
               </div>
             ) : (
               <div className="relative">
@@ -308,7 +364,7 @@ export function FollowupDialog({
 
           <div className="grid gap-2">
             <div className="flex items-baseline justify-between">
-              <Label htmlFor="fu-message">Message</Label>
+              <Label htmlFor="fu-message">Reminder message</Label>
               <span className="text-xs text-muted-foreground">
                 {message.trim().length}/{FOLLOWUP_MESSAGE_MAX}
               </span>
@@ -318,32 +374,8 @@ export function FollowupDialog({
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               rows={4}
-              placeholder="Hi Rahul, just following up on your Singapore trip enquiry…"
+              placeholder="Call Rahul about the Singapore package…"
             />
-          </div>
-
-          <div className="grid gap-2">
-            <Label>Fallback template (optional)</Label>
-            <Select
-              value={templateName || "__none__"}
-              onValueChange={(v) => setTemplateName(v === "__none__" ? "" : (v ?? ""))}
-            >
-              <SelectTrigger className="border-border bg-card">
-                <SelectValue placeholder="No template — text only in window" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">No template</SelectItem>
-                {templates.map((t) => (
-                  <SelectItem key={`${t.name}|${t.language}`} value={t.name}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Used only if the 24-hour messaging window is closed at send
-              time. Decided when sending, not now.
-            </p>
           </div>
 
           <div className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm">
@@ -351,6 +383,7 @@ export function FollowupDialog({
             <span className="font-medium text-foreground">
               {senderLine ?? "WhatsApp Business (connect in Settings)"}
             </span>
+            <span className="text-muted-foreground"> to your WhatsApp number</span>
           </div>
 
           <DialogFooter>
@@ -370,7 +403,7 @@ export function FollowupDialog({
               ) : (
                 <>
                   <Check className="h-4 w-4" />
-                  {editing ? "Save changes" : "Schedule Follow-up"}
+                  {editing ? "Save changes" : "Schedule Reminder"}
                 </>
               )}
             </Button>

@@ -52,7 +52,7 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
     images: [
       {
-        url: '/interscale-logo.png',
+        url: '/whatsappmax-logo.png',
         width: 512,
         height: 512,
         alt: PRODUCT_NAME,
@@ -63,7 +63,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: PRODUCT_NAME,
     description: DESCRIPTION,
-    images: ['/interscale-logo.png'],
+    images: ['/whatsappmax-logo.png'],
   },
 };
 
@@ -182,7 +182,7 @@ function Header() {
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <Link href="/" className="flex items-center gap-2.5">
           <Image
-            src="/interscale-logo.png"
+            src="/whatsappmax-logo.png"
             alt={COMPANY_NAME}
             width={36}
             height={36}
@@ -790,7 +790,7 @@ function Footer() {
           <div className="max-w-sm">
             <div className="flex items-center gap-2.5">
               <Image
-                src="/interscale-logo.png"
+                src="/whatsappmax-logo.png"
                 alt={COMPANY_NAME}
                 width={32}
                 height={32}

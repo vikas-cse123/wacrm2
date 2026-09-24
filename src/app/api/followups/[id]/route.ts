@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
+import { canManageReminder } from "@/lib/followups/ownership";
 import { validateFollowupInput } from "@/lib/followups/types";
 
 async function loadFollowup(
@@ -24,10 +25,12 @@ function bad(message: string) {
 }
 
 /**
- * PATCH /api/followups/[id] — Agent+.
+ * PATCH /api/followups/[id] — Agent+, creator-owned (admin override).
  * - { action: "cancel" }: scheduled → cancelled (never sent after).
  * - { message_text?, scheduled_for?, template_name?, template_language? }:
- *   edit a scheduled (or failed) follow-up. Sent rows are immutable.
+ *   edit a scheduled (or failed) reminder. Sent rows are immutable.
+ *   The recipient snapshot is never editable; the customer context
+ *   is preserved as-is.
  */
 export async function PATCH(
   request: Request,
@@ -35,10 +38,17 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const { supabase, accountId } = await requireRole("agent");
+    const { supabase, accountId, userId, role } = await requireRole("agent");
     const row = await loadFollowup(supabase, accountId, id);
     if (!row) {
-      return NextResponse.json({ error: "Follow-up not found." }, { status: 404 });
+      return NextResponse.json({ error: "Reminder not found." }, { status: 404 });
+    }
+    // Ownership: only the creator (or an admin) may edit or cancel.
+    if (!canManageReminder(role, row, userId)) {
+      return NextResponse.json(
+        { error: "Only the reminder creator or an admin can change it." },
+        { status: 403 },
+      );
     }
     const body = (await request.json().catch(() => null)) as Record<
       string,
@@ -50,7 +60,7 @@ export async function PATCH(
 
     if (body.action === "cancel") {
       if (row.status !== "scheduled" && row.status !== "processing") {
-        return bad("Only scheduled follow-ups can be cancelled.");
+        return bad("Only scheduled reminders can be cancelled.");
       }
       const { error } = await supabase
         .from("whatsapp_followups")
@@ -63,7 +73,7 @@ export async function PATCH(
     }
 
     if (row.status !== "scheduled" && row.status !== "failed") {
-      return bad("Only scheduled or failed follow-ups can be edited.");
+      return bad("Only scheduled or failed reminders can be edited.");
     }
     let input;
     try {

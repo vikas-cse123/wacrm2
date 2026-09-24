@@ -7,8 +7,10 @@ const h = vi.hoisted(() => ({
   userId: "user-1",
   contact: { id: "c-1", account_id: "acct-1", phone: "+91111", name: "Rahul" } as Record<string, unknown> | null,
   conversation: null as Record<string, unknown> | null,
+  agentProfile: { whatsapp_number: "+91 98765 43210" } as Record<string, unknown> | null,
+  profileError: false,
   rows: [] as Array<Record<string, unknown>>,
-  convoCreated: 0,
+  tablesRead: [] as string[],
 }));
 
 function statusError(status: number, message: string) {
@@ -40,13 +42,6 @@ vi.mock("@/lib/auth/account", () => ({
   },
 }));
 
-vi.mock("@/lib/conversations/get-or-create", () => ({
-  getOrCreateConversation: async () => {
-    h.convoCreated += 1;
-    return { conversation: { id: "conv-9" }, created: true };
-  },
-}));
-
 function fakeSupabase() {
   const state = { table: "", filters: [] as Array<[string, unknown]>, write: null as Record<string, unknown> | null };
   const matched = () =>
@@ -62,6 +57,10 @@ function fakeSupabase() {
     maybeSingle: async () => {
       if (state.table === "contacts") return { data: h.contact, error: null };
       if (state.table === "conversations") return { data: h.conversation, error: null };
+      if (state.table === "profiles") {
+        if (h.profileError) return { data: null, error: { message: "column missing" } };
+        return { data: h.agentProfile, error: null };
+      }
       return { data: null, error: null };
     },
     single: async () => {
@@ -82,7 +81,7 @@ function fakeSupabase() {
     },
     then: (resolve: (v: unknown) => void) => resolve({ data: matched(), error: null }),
   };
-  return { from: (table: string) => { state.table = table; return api; } };
+  return { from: (table: string) => { state.table = table; h.tablesRead.push(table); return api; } };
 }
 
 const { GET, POST } = await import("./route");
@@ -101,8 +100,10 @@ beforeEach(() => {
   h.accountId = "acct-1";
   h.contact = { id: "c-1", account_id: "acct-1", phone: "+91111", name: "Rahul" };
   h.conversation = null;
+  h.agentProfile = { whatsapp_number: "+91 98765 43210" };
+  h.profileError = false;
   h.rows = [];
-  h.convoCreated = 0;
+  h.tablesRead = [];
 });
 
 describe("GET /api/followups", () => {
@@ -133,20 +134,61 @@ describe("POST /api/followups", () => {
   const valid = {
     contact_id: "c-1",
     scheduled_for: "2999-01-01T10:00:00.000Z",
-    message_text: "Hi Rahul",
+    message_text: "Call Rahul about Singapore package",
   };
 
-  it("creates a scheduled follow-up with the caller's account", async () => {
+  it("snapshots the creator's number as recipient, never the customer's", async () => {
     const res = await POST(post(valid));
     expect(res.status).toBe(201);
     const json = (await res.json()) as { followup: Record<string, unknown> };
     expect(json.followup).toMatchObject({
       account_id: "acct-1",
       status: "scheduled",
-      message_text: "Hi Rahul",
+      created_by: "user-1",
+      // Agent's normalized number — NOT the customer's +91111.
+      recipient_phone: "919876543210",
     });
-    // No existing thread → resolved once via get-or-create (no dupes).
-    expect(h.convoCreated).toBe(1);
+    const inserted = h.rows[0];
+    expect(inserted.contact_id).toBe("c-1");
+    // No customer thread is created or attached for delivery.
+    expect(inserted.conversation_id).toBeNull();
+    expect(h.tablesRead).not.toContain("messages");
+  });
+
+  it("creates a personal reminder with no customer", async () => {
+    const res = await POST(
+      post({
+        scheduled_for: "2999-01-01T10:00:00.000Z",
+        message_text: "Call the Dubai lead after lunch",
+      }),
+    );
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { followup: Record<string, unknown> };
+    expect(json.followup).toMatchObject({ recipient_phone: "919876543210" });
+    expect(h.rows[0].contact_id).toBeNull();
+    expect(h.rows[0].conversation_id).toBeNull();
+  });
+
+  it("fails closed without an agent number — no customer fallback", async () => {
+    h.agentProfile = null;
+    const res = await POST(post(valid));
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/whatsapp number/i);
+    // Nothing created: the customer's phone must never substitute.
+    expect(h.rows).toHaveLength(0);
+  });
+
+  it("fails closed on an invalid agent number and on profile errors", async () => {
+    h.agentProfile = { whatsapp_number: "not-a-number" };
+    const bad = await POST(post(valid));
+    expect(bad.status).toBe(400);
+    expect(h.rows).toHaveLength(0);
+
+    h.profileError = true;
+    const errRes = await POST(post(valid));
+    expect(errRes.status).toBe(400);
+    expect(h.rows).toHaveLength(0);
   });
 
   it("rejects past times and viewers", async () => {

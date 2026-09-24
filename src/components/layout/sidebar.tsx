@@ -48,7 +48,7 @@ export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
-  { href: "/followups", label: "Follow-ups", icon: CalendarClock },
+  { href: "/followups", label: "Reminders", icon: CalendarClock },
   { href: "/workspace", label: "Workspace", icon: Table2, beta: true },
   { href: "/broadcasts", label: "Bulk Messages", icon: Radio },
   { href: "/quick-replies", label: "Quick Replies", icon: MessageSquareText },
@@ -187,15 +187,15 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
           <Link href="/dashboard" className="flex items-center gap-2">
   <Image
-    src="/interscale-logo.png"
+    src="/whatsappmax-logo.png"
     alt="Interscale Marketing"
     width={32}
     height={32}
     className="h-8 w-8 rounded-lg"
   />
   <span className="text-sm font-semibold text-foreground">
-  <p className="text-[15.6px] leading-tight">WhatsApp CRM</p>
-  <p className="text-[9.8px] leading-tight text-muted-foreground">from Interscale Marketing</p>
+  <p className="text-[15.6px] leading-tight">WhatsApp Max</p>
+  <p className="text-[9.8px] leading-tight text-muted-foreground">By Interscale Marketing</p>
 </span>
 </Link>
           <button
@@ -358,18 +358,15 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             >
               <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white">
                 <Image
-                  src="/logos/travel-crm-icon.png"
+                  src="/icons/travel-agency-crm.png"
                   alt="Travel Agency CRM"
                   width={24}
                   height={24}
                   className="h-6 w-6 object-contain"
                 />
               </span>
-              <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                <span className="truncate">Travel Agency CRM</span>
-                <span className="truncate text-[10px] font-normal text-indigo-500/80">
-                  Switch to Travel Agency CRM
-                </span>
+              <span className="min-w-0 flex-1 truncate leading-tight">
+                Travel Agency CRM
               </span>
               <ExternalLink
                 className="h-3.5 w-3.5 shrink-0 opacity-70"

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { toast } from "sonner";
 import {
   CalendarClock,
@@ -13,7 +12,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
@@ -75,10 +74,10 @@ export function FollowupsPage() {
         error?: string;
         followups?: Followup[];
       } | null;
-      if (!res.ok) throw new Error(json?.error ?? "Could not load follow-ups.");
+      if (!res.ok) throw new Error(json?.error ?? "Could not load reminders.");
       setItems(json?.followups ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load follow-ups.");
+      setError(err instanceof Error ? err.message : "Could not load reminders.");
     } finally {
       setLoading(false);
     }
@@ -101,7 +100,7 @@ export function FollowupsPage() {
         error?: string;
       } | null;
       if (!res.ok) throw new Error(json?.error ?? "Could not cancel.");
-      toast.success("Follow-up cancelled — it will never send.");
+      toast.success("Reminder cancelled — it will never send.");
       setCancelling(null);
       load();
     } catch (err) {
@@ -120,7 +119,7 @@ export function FollowupsPage() {
         error?: string;
       } | null;
       if (!res.ok) throw new Error(json?.error ?? "Could not retry.");
-      toast.success("Follow-up re-scheduled for immediate send.");
+      toast.success("Reminder re-scheduled for immediate send.");
       load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not retry.");
@@ -134,10 +133,11 @@ export function FollowupsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            WhatsApp Follow-up
+            WhatsApp Reminders
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Schedule messages that send from your connected WhatsApp number.
+            Personal reminders delivered to your WhatsApp number from your
+            connected WhatsApp number.
           </p>
         </div>
         {canSendMessages && (
@@ -149,7 +149,7 @@ export function FollowupsPage() {
             }}
           >
             <Plus className="h-4 w-4" />
-            New Follow-up
+            New Reminder
           </Button>
         )}
       </div>
@@ -157,7 +157,7 @@ export function FollowupsPage() {
       <div
         className="mt-5 flex gap-1.5"
         role="tablist"
-        aria-label="Follow-up status"
+        aria-label="Reminder status"
       >
         {TABS.map((t) => (
           <button
@@ -188,7 +188,7 @@ export function FollowupsPage() {
         ) : error ? (
           <Card className="px-5 py-12 text-center">
             <p className="text-base font-semibold text-foreground">
-              Could not load follow-ups
+              Could not load reminders
             </p>
             <p className="mt-1 text-sm text-muted-foreground">{error}</p>
             <Button type="button" variant="outline" className="mt-4" onClick={load}>
@@ -200,12 +200,12 @@ export function FollowupsPage() {
             <CalendarClock className="mx-auto h-8 w-8 text-muted-foreground" />
             <p className="mt-3 text-base font-semibold text-foreground">
               {tab === "scheduled"
-                ? "No scheduled follow-ups"
-                : `No ${tab} follow-ups`}
+                ? "No scheduled reminders"
+                : `No ${tab} reminders`}
             </p>
             <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-              Pick a customer, choose a date and time, write the message —
-              WACRM sends it from your connected number.
+              Add an optional customer for context, choose a date and time,
+              write the message — WACRM delivers it to your WhatsApp number.
             </p>
             {canSendMessages && tab === "scheduled" && (
               <Button
@@ -217,7 +217,7 @@ export function FollowupsPage() {
                 }}
               >
                 <Plus className="h-4 w-4" />
-                New Follow-up
+                New Reminder
               </Button>
             )}
           </Card>
@@ -228,10 +228,11 @@ export function FollowupsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">
-                      {f.contact_name || f.contact_phone || "Customer"}
+                      {f.contact_name || f.contact_phone || "Personal reminder"}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      {f.contact_phone ?? ""} · {formatWhen(f.scheduled_for)}
+                      {f.contact_phone ? `${f.contact_phone} · ` : ""}
+                      {formatWhen(f.scheduled_for)}
                     </span>
                     <Badge variant="outline" className={cn("gap-1.5 text-xs font-normal", STATUS_TONE[f.status])}>
                       <span className="size-1.5 rounded-full bg-current" />
@@ -289,14 +290,6 @@ export function FollowupsPage() {
                       Retry
                     </Button>
                   )}
-                  {f.status === "sent" && f.conversation_id && (
-                    <Link
-                      href={`/inbox?c=${f.conversation_id}`}
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
-                    >
-                      View Conversation
-                    </Link>
-                  )}
                 </div>
               </Card>
             ))}
@@ -314,7 +307,7 @@ export function FollowupsPage() {
       <Dialog open={cancelling !== null} onOpenChange={(v) => !v && setCancelling(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Cancel this follow-up?</DialogTitle>
+            <DialogTitle>Cancel this reminder?</DialogTitle>
             <DialogDescription>
               It will never send. This cannot be undone.
             </DialogDescription>
@@ -340,7 +333,7 @@ export function FollowupsPage() {
                   Cancelling…
                 </>
               ) : (
-                "Cancel follow-up"
+                "Cancel reminder"
               )}
             </Button>
           </DialogFooter>

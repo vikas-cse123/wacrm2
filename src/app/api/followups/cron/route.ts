@@ -5,12 +5,17 @@ import { supabaseAdmin } from "@/lib/followups/admin-client";
 import { drainDueFollowups } from "@/lib/followups/scheduler";
 
 /**
- * GET /api/followups/cron — drain due follow-ups. Meant to be hit
- * every minute (Vercel Cron / external pinger), same pattern as
+ * GET /api/followups/cron — drain due reminders. Meant to be hit
+ * every minute (Vercel Cron / external pinger / EC2 system cron via
+ * scripts/setup-automation-cron.sh), same pattern as
  * /api/automations/cron: shared secret via `x-cron-secret`
  * (CRON_SECRET or AUTOMATION_CRON_SECRET — no new env required).
  * The scheduler claims rows atomically, so overlapping invocations
  * never double-send. Never throws — always JSON.
+ *
+ * Local development has no automatic trigger — invoke it manually:
+ *   curl -H "x-cron-secret: $AUTOMATION_CRON_SECRET" \
+ *     http://localhost:3000/api/followups/cron
  */
 export const dynamic = "force-dynamic";
 

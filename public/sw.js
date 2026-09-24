@@ -51,8 +51,8 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'New message';
   const options = {
     body: payload.body || '',
-    icon: '/interscale-logo.png',
-    badge: '/interscale-logo.png',
+    icon: '/whatsappmax-logo.png',
+    badge: '/whatsappmax-logo.png',
     // Same tag → a follow-up push for the same conversation replaces the
     // previous notification instead of stacking.
     tag: payload.tag || undefined,

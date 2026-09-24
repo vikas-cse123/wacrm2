@@ -9,6 +9,7 @@
 #   1. ensures AUTOMATION_CRON_SECRET exists in .env.local (generates one)
 #   2. restarts the app so it picks the secret up
 #   3. installs a per-minute user cron that drains due runs
+#      (automations + personal reminders + flows + all-sheets)
 #   4. verifies the endpoint answers
 #
 # Idempotent — safe to run again after rotating the secret or redeploying.
@@ -24,12 +25,14 @@ APP_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PUBLIC_URL="${2:-https://interscalechat.co.in}"
 ENV_FILE="$APP_DIR/.env.local"
 AUTOMATION_CRON_URL="${PUBLIC_URL%/}/api/automations/cron"
+FOLLOWUPS_CRON_URL="${PUBLIC_URL%/}/api/followups/cron"
 FLOW_CRON_URL="${PUBLIC_URL%/}/api/flows/cron"
 ALL_SHEETS_CRON_URL="${PUBLIC_URL%/}/api/all-sheets/cron"
 MARKER="# wacrm-automation-cron"
 
 echo "▸ App dir     : $APP_DIR"
 echo "▸ Cron targets: $AUTOMATION_CRON_URL"
+echo "               $FOLLOWUPS_CRON_URL"
 echo "               $FLOW_CRON_URL"
 echo "               $ALL_SHEETS_CRON_URL"
 
@@ -70,11 +73,13 @@ fi
 # Reads the secret from .env.local at run time, so rotating it + re-running
 # this script keeps the two in sync automatically.
 #
+# The reminders (followups) drain sits second so a failure in the
+# flows/all-sheets endpoints can never starve personal reminders.
 # The All Sheets curl is appended LAST with && so that a failure from the
-# All Sheets endpoint can never prevent the existing automations/flows
-# crons from running (nothing follows it). The existing
-# automations-cron && flows-cron sequence is byte-identical to before.
-CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$AUTOMATION_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$FLOW_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$ALL_SHEETS_CRON_URL\" >/dev/null 2>&1 $MARKER"
+# All Sheets endpoint can never prevent the existing automations/reminders/
+# flows crons from running (nothing follows it). The existing
+# automations-cron && flows-cron sequence is otherwise unchanged.
+CRON_LINE="* * * * * S=\$(grep -E '^AUTOMATION_CRON_SECRET=' \"$ENV_FILE\" | head -1 | cut -d= -f2-); [ -n \"\$S\" ] && curl -fsS -H \"x-cron-secret: \$S\" \"$AUTOMATION_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$FOLLOWUPS_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$FLOW_CRON_URL\" >/dev/null 2>&1 && curl -fsS -H \"x-cron-secret: \$S\" \"$ALL_SHEETS_CRON_URL\" >/dev/null 2>&1 $MARKER"
 
 # Replace any prior line we installed, keep everything else. Both `crontab -l`
 # (no crontab yet) and `grep -v` (empty input) legitimately exit non-zero, so
@@ -115,5 +120,5 @@ fi
 echo "✓ Flow sweep working — endpoint responded: $FLOW_RESP"
 
 echo
-echo "Done. Wait-step automations, incomplete-flow sheets, and All Sheets lifecycle now update every minute."
+echo "Done. Wait-step automations, personal reminders, incomplete-flow sheets, and All Sheets lifecycle now update every minute."
 echo "Watch it run:  crontab -l | grep automation-cron"

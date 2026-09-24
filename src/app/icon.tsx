@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// Uses the Interscale Marketing logo (same asset as the login page and
+// Uses the WhatsApp Max logo (same asset as the login page and
 // sidebar) as the browser favicon. Next.js renders this at build time
 // and auto-injects <link rel="icon"> into <head>.
 //
@@ -14,7 +14,7 @@ export const contentType = "image/png";
 
 export default async function Icon() {
   const logoData = await readFile(
-    join(process.cwd(), "public", "interscale-logo.png"),
+    join(process.cwd(), "public", "whatsappmax-logo.png"),
   );
   const logoSrc = `data:image/png;base64,${logoData.toString("base64")}`;
 

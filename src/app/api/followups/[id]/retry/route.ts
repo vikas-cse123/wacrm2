@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
+import { canManageReminder } from "@/lib/followups/ownership";
 
 /**
- * POST /api/followups/[id]/retry — Agent+. Re-arms a failed
- * follow-up for immediate send (scheduled_for = now). Only failed
- * rows; sent rows are never re-sent from here. The scheduler's
- * atomic claim still guards the actual send against duplicates.
+ * POST /api/followups/[id]/retry — Agent+, creator-owned (admin
+ * override). Re-arms a failed reminder for immediate send
+ * (scheduled_for = now). Only failed rows; sent rows are never
+ * re-sent from here. The scheduler's atomic claim still guards
+ * the actual send against duplicates. The recipient snapshot is
+ * untouched — the retry goes to the same agent number.
  */
 export async function POST(
   _request: Request,
@@ -14,7 +17,23 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const { supabase, accountId } = await requireRole("agent");
+    const { supabase, accountId, userId, role } = await requireRole("agent");
+    const { data: existing } = await supabase
+      .from("whatsapp_followups")
+      .select("id, created_by")
+      .eq("id", id)
+      .eq("account_id", accountId)
+      .maybeSingle();
+    if (!existing) {
+      return NextResponse.json({ error: "Reminder not found." }, { status: 404 });
+    }
+    // Ownership: only the creator (or an admin) may retry.
+    if (!canManageReminder(role, existing as Record<string, unknown>, userId)) {
+      return NextResponse.json(
+        { error: "Only the reminder creator or an admin can retry it." },
+        { status: 403 },
+      );
+    }
     const { data, error } = await supabase
       .from("whatsapp_followups")
       .update({
@@ -31,7 +50,7 @@ export async function POST(
     if (error) throw error;
     if (!data) {
       return NextResponse.json(
-        { error: "Only failed follow-ups can be retried." },
+        { error: "Only failed reminders can be retried." },
         { status: 400 },
       );
     }
