@@ -130,7 +130,7 @@ function SignupPageInner() {
       <UsersRound className="h-6 w-6 text-primary" />
     ) : (
       <Image
-        src="/interscale-logo.png"
+        src="/whatsappmax-logo.png"
         alt="Interscale Marketing"
         width={48}
         height={48}
@@ -179,7 +179,7 @@ function SignupPageInner() {
     <UsersRound className="h-6 w-6 text-primary" />
   ) : (
     <Image
-      src="/interscale-logo.png"
+      src="/whatsappmax-logo.png"
       alt="Interscale Marketing"
       width={48}
       height={48}

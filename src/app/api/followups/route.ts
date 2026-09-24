@@ -6,9 +6,9 @@ import {
   requireRole,
   toErrorResponse,
 } from "@/lib/auth/account";
-import { getOrCreateConversation } from "@/lib/conversations/get-or-create";
 import {
   isFollowupStatus,
+  normalizeRecipientPhone,
   validateFollowupInput,
   type Followup,
 } from "@/lib/followups/types";
@@ -17,6 +17,7 @@ function toFollowup(row: Record<string, unknown>): Followup {
   return {
     id: row.id as string,
     account_id: row.account_id as string,
+    recipient_phone: (row.recipient_phone as string | null) ?? null,
     contact_id: (row.contact_id as string | null) ?? null,
     conversation_id: (row.conversation_id as string | null) ?? null,
     scheduled_for: row.scheduled_for as string,
@@ -53,8 +54,31 @@ async function loadContact(
 }
 
 /**
+ * Load the creating agent's stored WhatsApp number
+ * (`profiles.whatsapp_number`) and normalize it to the canonical
+ * digits-only form Meta expects. Returns null when the agent has
+ * no (or no valid) stored number — and also when the column does
+ * not exist yet (pre-migration schema): both cases fail closed at
+ * the caller, never substituting another number.
+ */
+async function loadAgentRecipientPhone(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("whatsapp_number")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return normalizeRecipientPhone(
+    (data as { whatsapp_number?: unknown }).whatsapp_number,
+  );
+}
+
+/**
  * GET /api/followups?status=scheduled|sent|failed|cancelled —
- * account-scoped list for the Follow-up page. Any member may read.
+ * account-scoped list for the Reminders page. Any member may read.
  */
 export async function GET(request: Request) {
   try {
@@ -75,8 +99,9 @@ export async function GET(request: Request) {
       .order("scheduled_for", { ascending })
       .limit(100);
     if (error) throw error;
-    // Recipient context in the same round trip (no N+1): contact
-    // names/phones for the listed rows only.
+    // Customer context in the same round trip (no N+1): contact
+    // names/phones for the listed rows only. Display context —
+    // never the recipient.
     const rows = (data ?? []) as Record<string, unknown>[];
     const contactIds = [...new Set(rows.map((r) => r.contact_id).filter(Boolean))] as string[];
     const contactsById: Record<string, { name: string | null; phone: string }> = {};
@@ -107,10 +132,14 @@ export async function GET(request: Request) {
 }
 
 /**
- * POST /api/followups — schedule a follow-up. Agent+.
- * Contact must belong to the caller's account (no duplicates
- * created — selection only). Conversation is linked when one
- * exists; the scheduler resolves it otherwise.
+ * POST /api/followups — schedule a reminder. Agent+.
+ *
+ * The reminder is delivered TO ITS CREATOR's stored WhatsApp
+ * number (`profiles.whatsapp_number`), snapshotted into
+ * `recipient_phone` at creation. Creation FAILS CLOSED when the
+ * agent has no valid stored number — the customer phone is never
+ * substituted. `contact_id` is optional context only; no customer
+ * conversation is created or attached (no empty threads).
  */
 export async function POST(request: Request) {
   try {
@@ -137,28 +166,41 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const contact = await loadContact(supabase, accountId, input.contact_id);
-    if (!contact) {
+    const contact = input.contact_id
+      ? await loadContact(supabase, accountId, input.contact_id)
+      : null;
+    if (input.contact_id && !contact) {
       return NextResponse.json({ error: "Contact not found." }, { status: 404 });
     }
-    // Link the existing thread when there is one; the scheduler
-    // get-or-creates otherwise (never forks duplicates).
-    const { data: existingConv } = await supabase
-      .from("conversations")
-      .select("id")
-      .eq("account_id", accountId)
-      .eq("contact_id", contact.id)
-      .maybeSingle();
+
+    // Resolve the creator's stored WhatsApp number and snapshot it.
+    // Fail closed: without a valid agent number there is no
+    // recipient, and NO fallback (customer / business / email) may
+    // be substituted. A missing column (pre-migration schema) also
+    // fails closed — the error tells the agent what to do.
+    const recipient_phone = await loadAgentRecipientPhone(
+      supabase,
+      userId,
+    );
+    if (!recipient_phone) {
+      return NextResponse.json(
+        {
+          error:
+            "Add your WhatsApp number in Settings → Your profile before creating a reminder.",
+        },
+        { status: 400 },
+      );
+    }
 
     const { data, error } = await supabase
       .from("whatsapp_followups")
       .insert({
         account_id: accountId,
-        contact_id: contact.id,
-        conversation_id:
-          (existingConv as { id: string } | null)?.id ??
-          (await getOrCreateConversation(supabase, accountId, contact.id, userId))?.conversation.id ??
-          null,
+        recipient_phone,
+        contact_id: contact?.id ?? null,
+        // No thread for a self-reminder: delivery goes straight to
+        // the agent's number, never into a customer conversation.
+        conversation_id: null,
         scheduled_for: input.scheduled_for,
         message_text: input.message_text,
         template_name: input.template_name,

@@ -20,19 +20,19 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: '#020617',
     icons: [
       {
-        src: '/interscale-logo.png',
+        src: '/whatsappmax-logo.png',
         sizes: '192x192',
         type: 'image/png',
         purpose: 'any',
       },
       {
-        src: '/interscale-logo.png',
+        src: '/whatsappmax-logo.png',
         sizes: '512x512',
         type: 'image/png',
         purpose: 'any',
       },
       {
-        src: '/interscale-logo.png',
+        src: '/whatsappmax-logo.png',
         sizes: '512x512',
         type: 'image/png',
         purpose: 'maskable',

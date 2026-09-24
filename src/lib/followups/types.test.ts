@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   FOLLOWUP_MESSAGE_MAX,
   isFollowupStatus,
+  normalizeRecipientPhone,
   validateFollowupInput,
 } from "./types";
 
 const FUTURE = "2999-01-01T10:00:00.000Z";
 const PAST = "2000-01-01T10:00:00.000Z";
 
-describe("follow-up input validation", () => {
-  it("accepts a future follow-up", () => {
+describe("reminder input validation", () => {
+  it("accepts a future reminder with customer context", () => {
     const out = validateFollowupInput({
       contact_id: "c-1",
       scheduled_for: FUTURE,
@@ -22,6 +23,17 @@ describe("follow-up input validation", () => {
     });
   });
 
+  it("treats customer as optional context", () => {
+    for (const contact_id of [undefined, null, ""]) {
+      const out = validateFollowupInput({
+        contact_id,
+        scheduled_for: FUTURE,
+        message_text: "Call the Dubai lead after lunch",
+      });
+      expect(out.contact_id).toBeNull();
+    }
+  });
+
   it("rejects past date/time", () => {
     expect(() =>
       validateFollowupInput({
@@ -32,10 +44,10 @@ describe("follow-up input validation", () => {
     ).toThrow(/future/i);
   });
 
-  it("requires date, time (as instant), contact, and message", () => {
+  it("requires date, time (as instant), and message — but not a customer", () => {
     expect(() =>
-      validateFollowupInput({ contact_id: "", scheduled_for: FUTURE, message_text: "Hi" }),
-    ).toThrow(/contact/i);
+      validateFollowupInput({ contact_id: 123, scheduled_for: FUTURE, message_text: "Hi" }),
+    ).toThrow(/customer/i);
     expect(() =>
       validateFollowupInput({ contact_id: "c-1", scheduled_for: "not-a-date", message_text: "Hi" }),
     ).toThrow(/valid date/i);
@@ -75,5 +87,22 @@ describe("follow-up input validation", () => {
       expect(isFollowupStatus(s)).toBe(true);
     }
     expect(isFollowupStatus("pending")).toBe(false);
+  });
+});
+
+describe("normalizeRecipientPhone", () => {
+  it("normalizes to digits-only E.164", () => {
+    expect(normalizeRecipientPhone("+91 98765 43210")).toBe("919876543210");
+    expect(normalizeRecipientPhone("+1 (415) 555-1212")).toBe("14155551212");
+  });
+
+  it("fails closed on anything else — never falls back", () => {
+    expect(normalizeRecipientPhone(null)).toBeNull();
+    expect(normalizeRecipientPhone(undefined)).toBeNull();
+    expect(normalizeRecipientPhone("")).toBeNull();
+    expect(normalizeRecipientPhone("   ")).toBeNull();
+    expect(normalizeRecipientPhone("not a number")).toBeNull();
+    expect(normalizeRecipientPhone("123")).toBeNull();
+    expect(normalizeRecipientPhone(919876543210)).toBeNull();
   });
 });

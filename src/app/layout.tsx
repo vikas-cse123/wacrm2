@@ -89,9 +89,9 @@ export const metadata: Metadata = {
     
   },
   icons: {
-    icon: "/interscale-logo.png",
-    shortcut: "/interscale-logo.png",
-    apple: "/interscale-logo.png",
+    icon: "/whatsappmax-logo.png",
+    shortcut: "/whatsappmax-logo.png",
+    apple: "/whatsappmax-logo.png",
   },
   description: "Interscale Marketing WhatsApp CRM",
   // Lets iOS treat the installed shortcut as a standalone app (required

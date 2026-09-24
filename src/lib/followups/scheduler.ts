@@ -1,43 +1,43 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { getOrCreateConversation } from '@/lib/conversations/get-or-create';
 import {
   SendMessageError,
-  sendMessageToConversation,
-} from '@/lib/whatsapp/send-message';
+  sendReminderToAgent,
+} from '@/lib/followups/reminder-send';
 
 // ============================================================
-// Follow-up scheduler: claim due rows, enforce Meta's messaging
-// policy at SEND time, send through the existing send core, and
-// persist results. Mirrors the automations-cron claim pattern
+// Reminder scheduler: claim due rows and deliver each reminder TO
+// ITS CREATOR's stored WhatsApp number (`recipient_phone`,
+// snapshotted at creation) FROM the account's connected WhatsApp
+// Business number. Mirrors the automations-cron claim pattern
 // (status flip = lock, affected-row check = ownership).
 //
-// Send-time policy (Meta customer-service window):
-//   - customer message within 24h → free-form text send.
-//   - window closed + approved template set → template send.
-//   - window closed + no template → failed with an actionable
-//     reason (edit to add a template, or wait for inbound).
-// The decision is re-evaluated at every send attempt, because the
-// window may have opened or closed since scheduling.
+// A reminder is personal, not a customer message, so this path
+// deliberately avoids everything customer-related:
+//   - no contact / conversation lookup or creation,
+//   - no customer `messages` row, no preview mutation,
+//   - no flow-run pausing, no contact phone auto-correct,
+//   - no 24-hour customer-service window, no template fallback.
+// The destination is ALWAYS the row's `recipient_phone` snapshot;
+// nothing may override it (not latest messages, assignment, or
+// profile state — a later profile-number change does not alter
+// already-created reminders).
 //
 // Idempotency: a row is only processed after an atomic
 // scheduled→processing flip affecting exactly that row; already-sent
 // rows are never re-sent; stale 'processing' rows (crashed worker)
 // are reclaimed while attempts < MAX_ATTEMPTS, then failed.
-// Webhook delivered/read/failed updates land on the SAME messages
-// row via the stored wamid (existing webhook correlation).
 // ============================================================
 
 export const FOLLOWUP_BATCH_LIMIT = 25;
 export const FOLLOWUP_MAX_ATTEMPTS = 3;
 /** Crashed-worker reclaim horizon (updated_at older than this). */
 export const FOLLOWUP_STALE_MS = 10 * 60 * 1000;
-/** Meta 24-hour customer service window. */
-export const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 interface FollowupRow {
   id: string;
   account_id: string;
+  recipient_phone: string | null;
   contact_id: string | null;
   conversation_id: string | null;
   scheduled_for: string;
@@ -53,6 +53,7 @@ function toFollowup(row: Record<string, unknown>): FollowupRow {
   return {
     id: row.id as string,
     account_id: row.account_id as string,
+    recipient_phone: (row.recipient_phone as string | null) ?? null,
     contact_id: (row.contact_id as string | null) ?? null,
     conversation_id: (row.conversation_id as string | null) ?? null,
     scheduled_for: row.scheduled_for as string,
@@ -63,29 +64,6 @@ function toFollowup(row: Record<string, unknown>): FollowupRow {
     attempts: (row.attempts as number) ?? 0,
     created_by: (row.created_by as string | null) ?? null,
   };
-}
-
-/**
- * True when the conversation had inbound customer activity within
- * the Meta 24h customer-service window (evaluated at send time).
- */
-export async function isServiceWindowOpen(
-  db: SupabaseClient,
-  conversationId: string,
-  now: Date = new Date(),
-): Promise<boolean> {
-  const { data, error } = await db
-    .from('messages')
-    .select('created_at')
-    .eq('conversation_id', conversationId)
-    .eq('sender_type', 'customer')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error || !data) return false;
-  const at = Date.parse((data as { created_at: string }).created_at);
-  if (Number.isNaN(at)) return false;
-  return now.getTime() - at <= SERVICE_WINDOW_MS;
 }
 
 export interface DrainResult {
@@ -122,70 +100,41 @@ async function processOne(
   if (current.status === 'cancelled' || current.status === 'sent') {
     return 'skipped';
   }
-  if (!current.contact_id) {
-    await markFollowup(db, row.id, {
-      status: 'failed',
-      failed_at: new Date().toISOString(),
-      failure_reason: 'Contact no longer exists.',
-    });
-    return 'failed';
-  }
-
-  // Resolve (or create) the thread — never fork duplicates.
-  // Audit attribution uses the follow-up creator.
-  if (!row.created_by) {
-    await markFollowup(db, row.id, {
-      status: 'failed',
-      failed_at: new Date().toISOString(),
-      failure_reason: 'Follow-up has no creator for audit attribution.',
-    });
-    return 'failed';
-  }
-  const convResult = await getOrCreateConversation(
-    db,
-    current.account_id,
-    current.contact_id,
-    row.created_by,
-  );
-  if (!convResult) {
-    await markFollowup(db, row.id, {
-      status: 'failed',
-      failed_at: new Date().toISOString(),
-      failure_reason: 'Could not open a conversation for this contact.',
-    });
-    return 'failed';
-  }
-  const conversationId = convResult.conversation.id as string;
-  if (conversationId !== current.conversation_id) {
-    await markFollowup(db, row.id, { conversation_id: conversationId });
-  }
-
-  // Send-time Meta policy decision.
-  const inWindow = await isServiceWindowOpen(db, conversationId);
-  const useTemplate = !inWindow;
-  if (useTemplate && !current.template_name) {
+  // The recipient is the immutable creation-time snapshot of the
+  // creator's own WhatsApp number. Legacy rows without one fail
+  // loudly — the scheduler must never guess (no customer phone,
+  // no profile re-read, no conversation inference).
+  if (!current.recipient_phone) {
     await markFollowup(db, row.id, {
       status: 'failed',
       failed_at: new Date().toISOString(),
       failure_reason:
-        'Outside the 24-hour messaging window and no approved template is set. Edit the follow-up to add one, or retry after the customer messages.',
+        'Reminder has no recipient phone number. Re-create it after adding your WhatsApp number in Settings → Your profile.',
+    });
+    return 'failed';
+  }
+
+  // Audit attribution uses the reminder creator. No conversation is
+  // opened: a self-reminder is delivered directly, never threaded
+  // into a customer conversation.
+  if (!row.created_by) {
+    await markFollowup(db, row.id, {
+      status: 'failed',
+      failed_at: new Date().toISOString(),
+      failure_reason: 'Reminder has no creator for audit attribution.',
     });
     return 'failed';
   }
 
   try {
-    const result = await sendMessageToConversation(db, current.account_id, {
-      conversationId,
-      messageType: useTemplate ? 'template' : 'text',
-      contentText: useTemplate ? undefined : current.message_text,
-      templateName: useTemplate ? current.template_name ?? undefined : undefined,
-      templateLanguage: useTemplate ? current.template_language ?? 'en_US' : undefined,
+    const result = await sendReminderToAgent(db, current.account_id, {
+      to: current.recipient_phone,
+      text: current.message_text,
     });
     await markFollowup(db, row.id, {
       status: 'sent',
       sent_at: new Date().toISOString(),
       whatsapp_message_id: result.whatsappMessageId,
-      message_id: result.messageId,
       failure_reason: null,
     });
     return 'sent';
@@ -196,16 +145,10 @@ async function processOne(
         : err instanceof Error
           ? err.message
           : 'Send failed.';
-    // A DB-persist failure AFTER a Meta accept is the one case a
-    // blind retry could double-send — say so explicitly.
-    const suffix =
-      err instanceof SendMessageError && err.code === 'db_error'
-        ? ' The message may already have been sent — check the inbox before retrying.'
-        : '';
     await markFollowup(db, row.id, {
       status: 'failed',
       failed_at: new Date().toISOString(),
-      failure_reason: `${reason}${suffix}`,
+      failure_reason: reason,
     });
     return 'failed';
   }
