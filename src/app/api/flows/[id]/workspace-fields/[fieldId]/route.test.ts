@@ -139,6 +139,36 @@ describe("PATCH workspace field", () => {
     expect(h.updates[0]).toMatchObject({ default_value: "Contacted" });
   });
 
+  it("changes a currency column's currency without touching values", async () => {
+    h.field = {
+      ...BASE_FIELD,
+      field_type: "currency",
+      options: null,
+      default_value: "234234",
+      currency_code: "INR",
+    };
+    const res = await PATCH(patch({ currency_code: "USD" }), params);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { field: Record<string, unknown> };
+    expect(json.field.currency_code).toBe("USD");
+    expect(json.field.default_value).toBe("234234");
+    expect(h.valueWrites).toBe(0);
+    expect(h.updates[0]).toMatchObject({ currency_code: "USD" });
+  });
+
+  it("rejects unsupported currencies on edit", async () => {
+    h.field = {
+      ...BASE_FIELD,
+      field_type: "currency",
+      options: null,
+      default_value: null,
+      currency_code: "INR",
+    };
+    const res = await PATCH(patch({ currency_code: "USDX" }), params);
+    expect(res.status).toBe(400);
+    expect(h.valueWrites).toBe(0);
+  });
+
   it("404s cross-account fields", async () => {
     h.field = null;
     const res = await PATCH(patch({ name: "X" }), params);

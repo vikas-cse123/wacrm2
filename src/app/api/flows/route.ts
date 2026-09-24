@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
 import { DEFAULT_FALLBACK_POLICY } from '@/lib/flows/types'
+import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
 
 /**
  * GET /api/flows — list the caller's flows.
@@ -89,6 +90,23 @@ export async function POST(request: Request) {
 
   const admin = supabaseAdmin()
 
+  // Every flow's Workspace ships with the 12 default business
+  // columns (Assigned To … Final Remark). Best-effort: flow
+  // creation is primary, and the Workspace table read path
+  // fills any gap lazily — a failure here must never fail the
+  // create. The admin client bypasses RLS so provisioning works
+  // for every role; scope is the flow's own account.
+  async function provisionWorkspaceDefaults(
+    accountId: string,
+    flowId: string
+  ) {
+    try {
+      await ensureWorkspaceDefaultFields(admin, accountId, flowId)
+    } catch (err) {
+      console.error('workspace defaults provisioning failed', err)
+    }
+  }
+
   // -------- Template clone path --------
   if (body.template_slug) {
     const template = getFlowTemplate(body.template_slug)
@@ -139,6 +157,10 @@ export async function POST(request: Request) {
         )
       }
     }
+    await provisionWorkspaceDefaults(
+      accountId,
+      (flow as { id: string }).id
+    )
     return NextResponse.json({ flow }, { status: 201 })
   }
 
@@ -168,5 +190,6 @@ export async function POST(request: Request) {
       { status: 500 },
     )
   }
+  await provisionWorkspaceDefaults(accountId, (data as { id: string }).id)
   return NextResponse.json({ flow: data }, { status: 201 })
 }

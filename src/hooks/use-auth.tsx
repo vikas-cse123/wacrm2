@@ -44,8 +44,8 @@ interface Profile {
 interface AccountSummary {
   id: string;
   name: string;
-  /** Default deal currency (ISO-4217). NOT NULL DEFAULT 'USD' in the
-   *  DB (migration 021); narrowed to DEFAULT_CURRENCY when absent. */
+  /** Default deal currency (ISO-4217). NOT NULL DEFAULT 'INR' in the
+   *  DB (migration 021 as updated by 092); narrowed to DEFAULT_CURRENCY when absent. */
   default_currency: string;
   /** Travel CRM URL for the sidebar cross-app card (migration 076).
    *  Null (or empty) hides the card. Narrowed to null for older

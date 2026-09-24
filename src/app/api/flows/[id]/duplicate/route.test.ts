@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
     // Service-role writes.
     flowInserts: [] as Record<string, unknown>[],
     nodeInserts: [] as Record<string, unknown>[],
+    fieldInserts: [] as Record<string, unknown>[][],
     flowDeletes: [] as string[],
     nodeInsertError: null as { message: string } | null,
   },
@@ -95,6 +96,9 @@ function makeBuilder(table: string, admin: boolean) {
       for (const row of payload as Record<string, unknown>[]) {
         state.nodeInserts.push(row);
       }
+    }
+    if (table === "workspace_fields") {
+      state.fieldInserts.push(payload as Record<string, unknown>[]);
     }
     return b;
   });
@@ -189,6 +193,7 @@ describe("POST /api/flows/[id]/duplicate", () => {
     s.nameRows = [];
     s.flowInserts = [];
     s.nodeInserts = [];
+    s.fieldInserts = [];
     s.flowDeletes = [];
     s.nodeInsertError = null;
 
@@ -281,5 +286,31 @@ describe("POST /api/flows/[id]/duplicate", () => {
     expect(res.status).toBe(500);
     expect(json.error).toBe("insert failed");
     expect(h.state.flowDeletes).toContain("flow-copy-1");
+  });
+
+  it("provisions the 12 default business columns on the copy", async () => {
+    const res = await postDuplicate();
+    expect(res.status).toBe(201);
+    expect(h.state.fieldInserts).toHaveLength(1);
+    const rows = h.state.fieldInserts[0];
+    expect(rows).toHaveLength(12);
+    expect(rows.map((r) => r.name)).toEqual([
+      "Assigned To",
+      "Call Status",
+      "No. of Calls Tried",
+      "Lead Quality",
+      "Quotation / Package",
+      "Follow-Up Status",
+      "Last Contact Date",
+      "Customer Response",
+      "Next Follow-up Date & Time",
+      "Next Action",
+      "Reason for Lost Lead",
+      "Final Remark",
+    ]);
+    for (const row of rows) {
+      expect(row.account_id).toBe("acct-1");
+      expect(row.flow_id).toBe("flow-copy-1");
+    }
   });
 });

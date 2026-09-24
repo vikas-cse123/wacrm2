@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
+import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
 import {
   buildFlowTableColumns,
   toFlowTableRow,
@@ -49,7 +51,7 @@ export async function GET(
 
   const { data: flow, error: flowErr } = await supabase
     .from('flows')
-    .select('id, name, completion_node_id, entry_node_id')
+    .select('id, name, account_id, completion_node_id, entry_node_id')
     .eq('id', id)
     .maybeSingle()
   if (flowErr) {
@@ -118,6 +120,20 @@ export async function GET(
   // Workspace custom columns + this page's values (two queries, no
   // N+1). Additive to the response — existing shape untouched.
   // Google Sheets never reads these tables.
+  //
+  // First-use safety net: flows predating default business columns
+  // (or created outside the API) get their missing defaults here,
+  // so Completed and Incomplete — views over the SAME flow fields
+  // — always share one configuration. Best-effort and
+  // role-independent (service-role write scoped to this flow's own
+  // account, which the RLS-scoped fetch above already proved the
+  // caller may see); a failure never breaks the read.
+  try {
+    const typed = flow as { id: string; account_id: string }
+    await ensureWorkspaceDefaultFields(supabaseAdmin(), typed.account_id, typed.id)
+  } catch (err) {
+    console.error('workspace defaults provisioning failed', err)
+  }
   const { data: customFields } = await supabase
     .from("workspace_fields")
     .select("*")
@@ -160,6 +176,7 @@ export async function GET(
         position: row.position,
         options: row.options ?? null,
         default_value: row.default_value ?? null,
+        currency_code: row.currency_code ?? null,
       };
     }),
     customValues,

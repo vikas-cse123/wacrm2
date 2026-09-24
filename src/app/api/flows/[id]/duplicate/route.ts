@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { uniqueCopyName } from '@/lib/flows/duplicate'
+import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
 
 /**
  * POST /api/flows/[id]/duplicate — copy an existing flow.
@@ -111,6 +112,19 @@ export async function POST(
       await admin.from('flows').delete().eq('id', copy.id)
       return NextResponse.json({ error: insErr.message }, { status: 500 })
     }
+  }
+
+  // A duplicated flow is a new flow: its Workspace gets the same
+  // 12 default business columns. Best-effort — the copy itself is
+  // primary, and the Workspace read path fills gaps lazily.
+  try {
+    await ensureWorkspaceDefaultFields(
+      admin,
+      (original as { account_id: string }).account_id,
+      (copy as { id: string }).id
+    )
+  } catch (err) {
+    console.error('workspace defaults provisioning failed', err)
   }
 
   return NextResponse.json({ flow: copy }, { status: 201 })

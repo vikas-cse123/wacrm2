@@ -19,10 +19,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { DEFAULT_CURRENCY, formatCurrency } from "@/lib/currency";
+import { formatWorkspaceCurrency } from "@/lib/currency";
 import {
   displayWorkspaceValue,
   parseMultiSelectValue,
+  resolveWorkspaceCurrency,
   type WorkspaceField,
 } from "@/lib/flows/workspace-fields";
 
@@ -34,7 +35,7 @@ function formatDisplay(field: WorkspaceField, stored: string | null): string {
       const n = Number(shown);
       if (!Number.isFinite(n)) return shown;
       try {
-        return formatCurrency(n, DEFAULT_CURRENCY);
+        return formatWorkspaceCurrency(n, resolveWorkspaceCurrency(field));
       } catch {
         return shown;
       }

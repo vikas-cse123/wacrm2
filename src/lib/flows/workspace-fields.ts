@@ -9,6 +9,12 @@
 // "true"/"false", multi-select JSON array string).
 // ============================================================
 
+import {
+  DEFAULT_CURRENCY,
+  normalizeCurrencyCode,
+  resolveCurrencyCode,
+} from "@/lib/currency";
+
 export const WORKSPACE_FIELD_TYPES = [
   "text",
   "number",
@@ -53,8 +59,27 @@ export interface WorkspaceField {
   options: string[] | null;
   /** Default for NEW records only — never backfilled. Null = none. */
   default_value: string | null;
+  /**
+   * ISO-4217 currency for `currency` columns only (migration 093).
+   * Null for other types; legacy currency columns (NULL) render as
+   * INR. Numeric values are currency-agnostic — only display changes.
+   */
+  currency_code: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Default currency for a new Currency column (Add Column modal). */
+export const WORKSPACE_CURRENCY_DEFAULT = DEFAULT_CURRENCY;
+
+/**
+ * Display currency for a currency column. Legacy rows without a
+ * configured code fall back to INR; stored numbers are untouched.
+ */
+export function resolveWorkspaceCurrency(
+  field: Pick<WorkspaceField, "currency_code">,
+): string {
+  return resolveCurrencyCode(field.currency_code);
 }
 
 /** Values keyed by run id, then field id. Missing = unset. */
@@ -117,6 +142,7 @@ export interface WorkspaceFieldInput {
   field_type: unknown;
   options?: unknown;
   default_value?: unknown;
+  currency_code?: unknown;
 }
 
 export interface ValidWorkspaceFieldDef {
@@ -124,6 +150,7 @@ export interface ValidWorkspaceFieldDef {
   field_type: WorkspaceFieldType;
   options: string[] | null;
   default_value: string | null;
+  currency_code: string | null;
 }
 
 /**
@@ -196,7 +223,27 @@ export function validateWorkspaceFieldDef(
     }
   }
 
-  return { name, field_type, options, default_value };
+  // Per-column currency: currency columns always carry an
+  // explicit code (missing/empty → INR); other types must not.
+  let currency_code: string | null = null;
+  if (field_type === "currency") {
+    try {
+      currency_code = normalizeCurrencyCode(
+        input.currency_code,
+        WORKSPACE_CURRENCY_DEFAULT,
+      );
+    } catch {
+      throw new Error("Choose a supported currency for this column.");
+    }
+  } else if (
+    input.currency_code !== undefined &&
+    input.currency_code !== null &&
+    !(typeof input.currency_code === "string" && input.currency_code.trim() === "")
+  ) {
+    throw new Error("Only currency columns take a currency.");
+  }
+
+  return { name, field_type, options, default_value, currency_code };
 }
 
 /**

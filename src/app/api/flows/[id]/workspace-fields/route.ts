@@ -45,6 +45,7 @@ function toField(row: Record<string, unknown>): WorkspaceField {
     position: row.position as number,
     options: (row.options as string[] | null) ?? null,
     default_value: (row.default_value as string | null) ?? null,
+    currency_code: (row.currency_code as string | null) ?? null,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   };
@@ -100,6 +101,7 @@ export async function POST(
         field_type: body.field_type,
         options: body.options,
         default_value: body.default_value,
+        currency_code: body.currency_code,
       });
     } catch (err) {
       return NextResponse.json(
@@ -130,6 +132,7 @@ export async function POST(
         position,
         options: def.options,
         default_value: def.default_value,
+        currency_code: def.currency_code,
       })
       .select()
       .single();
