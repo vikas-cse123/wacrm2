@@ -3,6 +3,13 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
 import {
+  parseAssigneeParam,
+  serializeAssigneeSelection,
+  validateWorkspaceDateRange,
+  type WorkspaceAssigneeSelection,
+  type WorkspaceDateRange,
+} from '@/lib/flows/workspace-filters'
+import {
   buildFlowTableColumns,
   toFlowTableRow,
   FLOW_TABLE_PAGE_SIZE,
@@ -11,7 +18,7 @@ import {
 } from '@/lib/flows/flow-tables'
 
 /**
- * GET /api/flows/[id]/table?view=all|completed|incomplete&search=&page=&pageSize=
+ * GET /api/flows/[id]/table?view=all|completed|incomplete&search=&page=&pageSize=&dateFrom=&dateTo=&assignee=
  *
  * Workspace foundation read: one row per flow_run (identity =
  * flow_run_id), columns derived from the flow's own nodes,
@@ -19,6 +26,18 @@ import {
  * configured completion node (END fallback). Server-side filter +
  * pagination — runs are never fanned out to the browser.
  * RLS scopes every read to the caller's account.
+ *
+ * Exactly two additive filters (both optional, combinable AND):
+ *   dateFrom/dateTo — half-open [from, to) ISO window over
+ *     Submission Time (flow_runs.started_at). The client resolves
+ *     Today / Yesterday / Last 7 / Last 30 / Custom to concrete
+ *     bounds in the viewer's local timezone; the server only
+ *     validates ISO shape + from <= to (400 otherwise) and pushes
+ *     both into the paginated RPC, so total + page stay correct.
+ *   assignee — "all" (default) | "unassigned" | <member user_id>.
+ *     Member filtering matches the stable ID server-side; unknown
+ *     or foreign IDs match zero rows (account isolation holds
+ *     inside the account-scoped RPC).
  */
 export async function GET(
   request: Request,
@@ -40,6 +59,39 @@ export async function GET(
     Math.max(Number(url.searchParams.get('pageSize') ?? FLOW_TABLE_PAGE_SIZE) || FLOW_TABLE_PAGE_SIZE, 1),
     100,
   )
+
+  // Workspace filters — additive query keys; absent = inactive.
+  // Date bounds are validated ISO instants (400 on garbage or an
+  // inverted range); the assignee keyword/id is parsed leniently
+  // (unknown ids match zero rows rather than 400ing the table).
+  let dateRange: WorkspaceDateRange | null = null
+  const rawFrom = url.searchParams.get('dateFrom')
+  const rawTo = url.searchParams.get('dateTo')
+  if (rawFrom !== null || rawTo !== null) {
+    if (!rawFrom || !rawTo) {
+      return NextResponse.json(
+        { error: 'dateFrom and dateTo are required together.' },
+        { status: 400 },
+      )
+    }
+    try {
+      dateRange = validateWorkspaceDateRange({ from: rawFrom, to: rawTo })
+    } catch {
+      return NextResponse.json(
+        { error: 'dateFrom/dateTo must be valid ISO datetimes with from <= to.' },
+        { status: 400 },
+      )
+    }
+  }
+  let assignee: WorkspaceAssigneeSelection
+  try {
+    assignee = parseAssigneeParam(url.searchParams.get('assignee'))
+  } catch {
+    return NextResponse.json(
+      { error: 'Invalid assignee filter.' },
+      { status: 400 },
+    )
+  }
 
   const supabase = await createClient()
   const {
@@ -78,6 +130,13 @@ export async function GET(
       p_search: search || null,
       p_page: page,
       p_page_size: pageSize,
+      // Server-side filters (migration 094 — NULL/absent = inactive,
+      // so unfiltered reads behave exactly as before). Pagination
+      // applies to the FILTERED set, keeping total + row numbering
+      // correct with any combination active.
+      p_started_from: dateRange?.from ?? null,
+      p_started_to: dateRange?.to ?? null,
+      p_assignee: serializeAssigneeSelection(assignee),
     },
   )
   if (rpcErr) {
@@ -164,6 +223,13 @@ export async function GET(
       total,
       page,
       pageSize,
+      // Echo of the applied filters (additive — existing shape
+      // untouched). Nulls/absent-equivalent mean "inactive".
+      filters: {
+        dateFrom: dateRange?.from ?? null,
+        dateTo: dateRange?.to ?? null,
+        assignee: serializeAssigneeSelection(assignee),
+      },
     },
     columns,
     rows,

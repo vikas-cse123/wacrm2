@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -10,9 +11,12 @@ import {
 import type { WorkspaceField } from "./workspace-fields";
 import {
   WORKSPACE_DEFAULT_FIELDS,
+  CALLS_TRIED_OPTIONS,
+  QUOTATION_OPTIONS,
   ensureWorkspaceDefaultFields,
   isWorkspaceDefaultName,
 } from "./workspace-defaults";
+import { validateWorkspaceValue } from "./workspace-fields";
 
 // ---------------------------------------------------------------------------
 // Proof tests: Workspace default business columns (Assigned To … Final
@@ -91,6 +95,14 @@ function defaultFields(): WorkspaceField[] {
   }));
 }
 
+/** Read the 096 conversion migration for content assertions. */
+function readMigration096(): string {
+  return readFileSync(
+    `${process.cwd()}/supabase/migrations/096_workspace_default_select_fields.sql`,
+    "utf8",
+  );
+}
+
 describe("default business column spec", () => {
   it("defines exactly the 12 required columns in order", () => {
     expect(WORKSPACE_DEFAULT_FIELDS.map((f) => f.name)).toEqual([
@@ -113,9 +125,9 @@ describe("default business column spec", () => {
     const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
     expect(byName.get("Assigned To")?.field_type).toBe("single_select");
     expect(byName.get("Call Status")?.field_type).toBe("single_select");
-    expect(byName.get("No. of Calls Tried")?.field_type).toBe("number");
+    expect(byName.get("No. of Calls Tried")?.field_type).toBe("single_select");
     expect(byName.get("Lead Quality")?.field_type).toBe("single_select");
-    expect(byName.get("Quotation / Package")?.field_type).toBe("text");
+    expect(byName.get("Quotation / Package")?.field_type).toBe("single_select");
     expect(byName.get("Follow-Up Status")?.field_type).toBe("single_select");
     expect(byName.get("Last Contact Date")?.field_type).toBe("date");
     expect(byName.get("Customer Response")?.field_type).toBe("text");
@@ -138,6 +150,22 @@ describe("default business column spec", () => {
       "Busy",
       "Call Back Later",
       "Invalid Number",
+    ]);
+    expect(byName.get("No. of Calls Tried")?.options).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+    ]);
+    expect(byName.get("Quotation / Package")?.options).toEqual([
+      "Sent",
+      "Not Yet",
     ]);
     expect(byName.get("Lead Quality")?.options).toEqual([
       "Hot",
@@ -162,8 +190,6 @@ describe("default business column spec", () => {
     ]);
     // Non-select columns take no options (validator rejects them).
     for (const name of [
-      "No. of Calls Tried",
-      "Quotation / Package",
       "Last Contact Date",
       "Customer Response",
       "Next Follow-up Date & Time",
@@ -171,6 +197,132 @@ describe("default business column spec", () => {
       "Final Remark",
     ]) {
       expect(byName.get(name)?.options).toBeNull();
+    }
+  });
+
+  it("1/2. No. of Calls Tried is single-select with exactly 1–10", () => {
+    expect([...CALLS_TRIED_OPTIONS]).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+    ]);
+    const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
+    expect(byName.get("No. of Calls Tried")).toMatchObject({
+      field_type: "single_select",
+      options: [...CALLS_TRIED_OPTIONS],
+    });
+  });
+
+  it("4/5. Quotation / Package is single-select with exactly Sent/Not Yet", () => {
+    expect([...QUOTATION_OPTIONS]).toEqual(["Sent", "Not Yet"]);
+    const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
+    expect(byName.get("Quotation / Package")).toMatchObject({
+      field_type: "single_select",
+      options: [...QUOTATION_OPTIONS],
+    });
+  });
+
+  it("3/6. arbitrary text cannot be entered in either dropdown", () => {
+    const callsOpts = [...CALLS_TRIED_OPTIONS];
+    expect(validateWorkspaceValue("single_select", callsOpts, "5")).toBe("5");
+    for (const bad of ["abc", "0", "11", "3.5", "five", ""]) {
+      if (bad === "") {
+        // Empty clears the cell (deletes the row) — still no text stored.
+        expect(validateWorkspaceValue("single_select", callsOpts, bad)).toBeNull();
+      } else {
+        expect(() =>
+          validateWorkspaceValue("single_select", callsOpts, bad),
+        ).toThrow();
+      }
+    }
+    const quoteOpts = [...QUOTATION_OPTIONS];
+    expect(validateWorkspaceValue("single_select", quoteOpts, "Sent")).toBe("Sent");
+    expect(validateWorkspaceValue("single_select", quoteOpts, "Not Yet")).toBe(
+      "Not Yet",
+    );
+    for (const bad of ["maybe", "sent", "SENT", "Pending", "Yes"]) {
+      expect(() =>
+        validateWorkspaceValue("single_select", quoteOpts, bad),
+      ).toThrow();
+    }
+  });
+
+  it("9. existing valid values validate through unchanged", () => {
+    // Pre-existing numeric entries 1–10 already store in the exact
+    // option form, so conversion preserves them byte-for-byte.
+    for (const v of ["1", "7", "10"]) {
+      expect(
+        validateWorkspaceValue("single_select", [...CALLS_TRIED_OPTIONS], v),
+      ).toBe(v);
+    }
+    for (const v of ["Sent", "Not Yet"]) {
+      expect(
+        validateWorkspaceValue("single_select", [...QUOTATION_OPTIONS], v),
+      ).toBe(v);
+    }
+  });
+
+  it("7/8/10. provisioning writes the converted specs once per flow (both views share them)", async () => {
+    const store = newStore();
+    await ensureWorkspaceDefaultFields(fakeClient(store), "acct-1", "flow-1");
+    const rows = store.inserts[0];
+    // Still exactly 12 names — no duplicates added.
+    expect(rows.map((r) => r.name)).toEqual(
+      WORKSPACE_DEFAULT_FIELDS.map((f) => f.name),
+    );
+    expect(new Set(rows.map((r) => r.name)).size).toBe(12);
+    const byName = new Map(rows.map((r) => [r.name, r]));
+    expect(byName.get("No. of Calls Tried")).toMatchObject({
+      field_type: "single_select",
+      options: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+    });
+    expect(byName.get("Quotation / Package")).toMatchObject({
+      field_type: "single_select",
+      options: ["Sent", "Not Yet"],
+    });
+    // Completed and Incomplete are views over these SAME rows:
+    // provisioning touches only workspace_fields, never per-view data.
+    expect(new Set(store.tablesTouched)).toEqual(new Set(["workspace_fields"]));
+  });
+
+  it("migration 096 converts types safely and reports instead of destroying", () => {
+    const sql = readMigration096();    // Converts ONLY rows still on the old types (idempotent reruns
+    // match zero rows); user-owned single_selects are untouched.
+    expect(sql).toContain("AND field_type = 'number'::workspace_field_type");
+    expect(sql).toContain("AND field_type = 'text'::workspace_field_type");
+    expect(sql).toContain("SET field_type = 'single_select'::workspace_field_type");
+    // Exact option payloads.
+    expect(sql).toContain(
+      `'["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]'::jsonb`,
+    );
+    expect(sql).toContain(`'["Sent", "Not Yet"]'::jsonb`);
+    // Values are never written or deleted — only counted/sampled.
+    expect(sql).not.toMatch(/UPDATE\s+workspace_values/i);
+    expect(sql).not.toMatch(/DELETE\s+FROM\s+workspace_values/i);
+    expect(sql).toContain("RAISE NOTICE");
+    expect(sql).toContain("preserved as-is (not rewritten)");
+  });
+
+  it("11. Google Sheets is unaffected by the conversion", () => {
+    // Sheets derives columns from flow nodes only; it never reads
+    // workspace_fields / workspace_values (migration 088 contract).
+    for (const rel of [
+      "src/app/api/flows/[id]/sheet/route.ts",
+      "src/app/api/flows/[id]/incomplete-sheet/route.ts",
+      "src/lib/flows/sheet-columns.ts",
+    ]) {
+      const src = readFileSync(`${process.cwd()}/${rel}`, "utf8");
+      expect(src).not.toContain("workspace_fields");
+      expect(src).not.toContain("workspace_values");
+      expect(src).not.toContain("No. of Calls Tried");
+      expect(src).not.toContain("Quotation / Package");
     }
   });
 

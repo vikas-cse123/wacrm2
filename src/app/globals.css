@@ -287,3 +287,22 @@ html[data-theme="rose"] {
     @apply font-sans;
   }
 }
+
+/* ============================================================
+ * Workspace enterprise grid — single scroll viewport.
+ *
+ * The shared shadcn Table primitive renders its own inner
+ * `overflow-x-auto` container. Nested scroll containers would
+ * each capture one axis (inner: horizontal, outer: vertical),
+ * which breaks sticky positioning (header + pinned columns
+ * resolve to the INNER container and can never stick) and
+ * produces two competing scrollbars. Neutralizing the inner
+ * container to `visible` leaves exactly ONE scrollport — the
+ * bordered `.workspace-table-viewport` — so one native
+ * scrollbar pair serves the table, sticky top/left resolve to
+ * it, and header/body columns stay aligned. Scoped to
+ * Workspace; every other Table in the app is untouched.
+ * ============================================================ */
+.workspace-table-viewport [data-slot="table-container"] {
+  overflow: visible;
+}

@@ -18,15 +18,22 @@
 //     workspace_fields, which Sheets never reads (migration 088).
 //   - "Assigned To" is single_select with a single structural
 //     "Unassigned" option, mirroring the deals Assigned-To
-//     convention (deal-form "Unassigned" default). Admins add
-//     team-member names as options via the existing Edit-column
-//     UI; member sync itself is out of scope.
-//   - "No. of Calls Tried" is a Number column (free numeric
-//     entry); the 1–7 Sheet dropdown convention is documented
-//     here but not enforced — non-select columns take no options.
-//   - "Quotation / Package" is a Text column per the required
-//     type mapping; its Sheet dropdown convention (Sent /
-//     Not Yet) is likewise documented, not enforced.
+//     convention (deal-form "Unassigned" default). The dropdown
+//     itself is DYNAMIC: Workspace loads the live account roster
+//     from GET /api/account/members (the Team Members source of
+//     truth) and stores the stable member user_id per cell —
+//     member names are never duplicated into field options.
+//   - "No. of Calls Tried" is a single_select dropdown with
+//     exactly the options 1–10 (strings "1" … "10"). Free numeric
+//     entry is intentionally NOT allowed — one pick, no arbitrary
+//     text. Pre-existing numeric values 1–10 already store in that
+//     exact form, so they carry over untouched (migration 096
+//     converts the column type and reports — never rewrites —
+//     any out-of-range legacy values).
+//   - "Quotation / Package" is a single_select dropdown with
+//     exactly ["Sent", "Not Yet"]. Pre-existing matching values
+//     carry over untouched; anything else is reported, not
+//     destroyed (migration 096).
 // ============================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -40,6 +47,28 @@ export interface WorkspaceDefaultSpec {
   /** Select options. Null for non-select types. */
   options: string[] | null;
 }
+
+/**
+ * Exact dropdown options for "No. of Calls Tried": the strings
+ * "1" … "10", in order. Stored cell values use this exact form
+ * (single_select validates by equality), so pre-existing numeric
+ * entries 1–10 need no conversion.
+ */
+export const CALLS_TRIED_OPTIONS: readonly string[] = [
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+];
+
+/** Exact dropdown options for "Quotation / Package". */
+export const QUOTATION_OPTIONS: readonly string[] = ["Sent", "Not Yet"];
 
 export const WORKSPACE_DEFAULT_FIELDS: readonly WorkspaceDefaultSpec[] = [
   { name: "Assigned To", field_type: "single_select", options: ["Unassigned"] },
@@ -55,7 +84,7 @@ export const WORKSPACE_DEFAULT_FIELDS: readonly WorkspaceDefaultSpec[] = [
       "Invalid Number",
     ],
   },
-  { name: "No. of Calls Tried", field_type: "number", options: null },
+  { name: "No. of Calls Tried", field_type: "single_select", options: [...CALLS_TRIED_OPTIONS] },
   {
     name: "Lead Quality",
     field_type: "single_select",
@@ -63,8 +92,8 @@ export const WORKSPACE_DEFAULT_FIELDS: readonly WorkspaceDefaultSpec[] = [
   },
   {
     name: "Quotation / Package",
-    field_type: "text",
-    options: null,
+    field_type: "single_select",
+    options: [...QUOTATION_OPTIONS],
   },
   {
     name: "Follow-Up Status",

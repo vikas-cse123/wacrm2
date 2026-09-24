@@ -34,6 +34,11 @@ import { cn } from '@/lib/utils';
 import type { FlowTableColumn } from '@/lib/flows/flow-tables';
 import type { WorkspaceField } from '@/lib/flows/workspace-fields';
 import {
+  defaultHeaderColor,
+  resolveHeaderColor,
+} from '@/lib/flows/header-colors';
+import { HeaderColorSwatches } from './header-color-picker';
+import {
   describeVisibilityMenu,
   filterVisibilityMenu,
   customFieldVisId,
@@ -65,6 +70,10 @@ export function ColumnsMenu({
   onReset,
   onEditField,
   onChanged,
+  headerColors,
+  onSaveHeaderColor,
+  canCustomizeColors,
+  headerColorMap,
 }: {
   flowId: string | null;
   flowColumns: FlowTableColumn[];
@@ -76,9 +85,35 @@ export function ColumnsMenu({
   onReset: () => void;
   onEditField: (field: WorkspaceField) => void;
   onChanged: () => void;
+  /**
+   * Stored header-color overrides by stable visibility id. Omitted
+   * (with onSaveHeaderColor) hides the color affordance — the menu
+   * then behaves exactly as before.
+   */
+  headerColors?: Record<string, string>;
+  /** Persist one column's header tint; null resets to the default. */
+  onSaveHeaderColor?: (columnKey: string, color: string | null) => void;
+  /** Agent+ writers see the color dots; viewers never do. */
+  canCustomizeColors?: boolean;
+  /**
+   * Effective header colors for the visible set (unique map from
+   * buildHeaderColorMap). Dots preview the exact painted color;
+   * falls back to per-column resolution when omitted.
+   */
+  headerColorMap?: Record<string, string>;
 }) {
   const [deleting, setDeleting] = useState<WorkspaceField | null>(null);
+  const [coloring, setColoring] = useState<VisibilityMenuItem | null>(null);
   const [busy, setBusy] = useState(false);
+  // Effective colors of every OTHER visible column — picking one
+  // of these in the dialog is blocked with an explicit message so
+  // no two columns ever share a header color.
+  const coloringTakenColors =
+    coloring === null
+      ? []
+      : Object.entries(headerColorMap ?? {})
+          .filter(([key]) => key !== coloring.id)
+          .map(([, color]) => color);
 
   async function handleDelete() {
     if (!deleting || !flowId || busy) return;
@@ -133,6 +168,9 @@ export function ColumnsMenu({
             onReset={onReset}
             onEditField={onEditField}
             onDeleteField={setDeleting}
+            headerColors={headerColors}
+            onColorColumn={setColoring}
+            canCustomizeColors={canCustomizeColors}
           />
         </DropdownMenuContent>
       </DropdownMenu>
@@ -176,6 +214,39 @@ export function ColumnsMenu({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={coloring !== null}
+        onOpenChange={(v) => !v && setColoring(null)}
+      >
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Header color</DialogTitle>
+            <DialogDescription>
+              Tint the “{coloring?.label}” header. Saved per Workspace —
+              hiding or resetting columns never changes it.
+            </DialogDescription>
+          </DialogHeader>
+          {coloring && (
+            <HeaderColorSwatches
+              label={coloring.label}
+              defaultHex={defaultHeaderColor(coloring.id, coloring.label)}
+              custom={headerColors?.[coloring.id] ?? null}
+              takenColors={coloringTakenColors}
+              onPick={(color) => onSaveHeaderColor?.(coloring.id, color)}
+            />
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setColoring(null)}
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -195,6 +266,10 @@ function VisibilityPanel({
   onReset,
   onEditField,
   onDeleteField,
+  headerColors,
+  onColorColumn,
+  canCustomizeColors,
+  headerColorMap,
 }: {
   flowColumns: FlowTableColumn[];
   customFields: WorkspaceField[];
@@ -204,6 +279,10 @@ function VisibilityPanel({
   onReset: () => void;
   onEditField: (field: WorkspaceField) => void;
   onDeleteField: (field: WorkspaceField) => void;
+  headerColors?: Record<string, string>;
+  onColorColumn?: (item: VisibilityMenuItem) => void;
+  canCustomizeColors?: boolean;
+  headerColorMap?: Record<string, string>;
 }) {
   const [query, setQuery] = useState('');
   const model = useMemo(
@@ -268,7 +347,14 @@ function VisibilityPanel({
               </DropdownMenuLabel>
               <div className="px-1 pb-1">
                 {model.core.map((item) => (
-                  <LockedRow key={item.id} item={item} />
+                  <LockedRow
+                    key={item.id}
+                    item={item}
+                    headerColors={headerColors}
+                    onColorColumn={onColorColumn}
+                    canCustomizeColors={canCustomizeColors}
+                    headerColorMap={headerColorMap}
+                  />
                 ))}
               </div>
             </>
@@ -286,6 +372,10 @@ function VisibilityPanel({
                     item={item}
                     checked={!hidden.has(item.id)}
                     onToggle={() => onToggleVisibility(item.id)}
+                    headerColors={headerColors}
+                    onColorColumn={onColorColumn}
+                    canCustomizeColors={canCustomizeColors}
+                    headerColorMap={headerColorMap}
                   />
                 ))}
               </div>
@@ -309,6 +399,10 @@ function VisibilityPanel({
                       onToggle={() => onToggleVisibility(item.id)}
                       onEdit={() => onEditField(field)}
                       onDelete={() => onDeleteField(field)}
+                      headerColors={headerColors}
+                      onColorColumn={onColorColumn}
+                      canCustomizeColors={canCustomizeColors}
+                      headerColorMap={headerColorMap}
                     />
                   );
                 })}
@@ -326,6 +420,10 @@ function VisibilityPanel({
                   item={model.leadSource}
                   checked={!hidden.has(model.leadSource.id)}
                   onToggle={() => onToggleVisibility(model.leadSource!.id)}
+                  headerColors={headerColors}
+                  onColorColumn={onColorColumn}
+                  canCustomizeColors={canCustomizeColors}
+                  headerColorMap={headerColorMap}
                 />
               </div>
             </>
@@ -357,8 +455,60 @@ function VisibilityPanel({
   );
 }
 
+/** Compact header-tint dot. Writers (agent+) only; viewers never see it. */
+function HeaderColorDot({
+  item,
+  headerColors,
+  onColorColumn,
+  canCustomizeColors,
+  headerColorMap,
+}: {
+  item: VisibilityMenuItem;
+  headerColors?: Record<string, string>;
+  onColorColumn?: (item: VisibilityMenuItem) => void;
+  canCustomizeColors?: boolean;
+  headerColorMap?: Record<string, string>;
+}) {
+  if (!canCustomizeColors || !onColorColumn) return null;
+  // Exact painted color when the visible-set map is provided.
+  const current =
+    headerColorMap?.[item.id] ?? resolveHeaderColor(item.id, item.label, headerColors);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        // The dot lives inside label rows — don't toggle visibility.
+        e.preventDefault();
+        e.stopPropagation();
+        onColorColumn(item);
+      }}
+      aria-label={`Header color for ${item.label}`}
+      title="Header color"
+      className="focus-visible:ring-ring flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:outline-none"
+    >
+      <span
+        aria-hidden="true"
+        className="border-border block h-3.5 w-3.5 rounded-full border"
+        style={{ backgroundColor: current }}
+      />
+    </button>
+  );
+}
+
 /** Locked system column: always visible, toggle disabled. */
-function LockedRow({ item }: { item: VisibilityMenuItem }) {
+function LockedRow({
+  item,
+  headerColors,
+  onColorColumn,
+  canCustomizeColors,
+  headerColorMap,
+}: {
+  item: VisibilityMenuItem;
+  headerColors?: Record<string, string>;
+  onColorColumn?: (item: VisibilityMenuItem) => void;
+  canCustomizeColors?: boolean;
+  headerColorMap?: Record<string, string>;
+}) {
   return (
     <div
       className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px]"
@@ -371,6 +521,13 @@ function LockedRow({ item }: { item: VisibilityMenuItem }) {
       <span className="text-muted-foreground min-w-0 flex-1 truncate">
         {item.label}
       </span>
+      <HeaderColorDot
+        item={item}
+        headerColors={headerColors}
+        onColorColumn={onColorColumn}
+        canCustomizeColors={canCustomizeColors}
+        headerColorMap={headerColorMap}
+      />
       <Checkbox
         checked
         disabled
@@ -388,10 +545,18 @@ function HideableRow({
   item,
   checked,
   onToggle,
+  headerColors,
+  onColorColumn,
+  canCustomizeColors,
+  headerColorMap,
 }: {
   item: VisibilityMenuItem;
   checked: boolean;
   onToggle: () => void;
+  headerColors?: Record<string, string>;
+  onColorColumn?: (item: VisibilityMenuItem) => void;
+  canCustomizeColors?: boolean;
+  headerColorMap?: Record<string, string>;
 }) {
   return (
     <label className="text-foreground hover:bg-muted flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors">
@@ -401,6 +566,13 @@ function HideableRow({
         aria-label={`${checked ? 'Hide' : 'Show'} ${item.label}`}
       />
       <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      <HeaderColorDot
+        item={item}
+        headerColors={headerColors}
+        onColorColumn={onColorColumn}
+        canCustomizeColors={canCustomizeColors}
+        headerColorMap={headerColorMap}
+      />
     </label>
   );
 }
@@ -416,12 +588,20 @@ function CustomVisibilityRow({
   onToggle,
   onEdit,
   onDelete,
+  headerColors,
+  onColorColumn,
+  canCustomizeColors,
+  headerColorMap,
 }: {
   item: VisibilityMenuItem;
   checked: boolean;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  headerColors?: Record<string, string>;
+  onColorColumn?: (item: VisibilityMenuItem) => void;
+  canCustomizeColors?: boolean;
+  headerColorMap?: Record<string, string>;
 }) {
   return (
     <div className="group hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors">
@@ -438,6 +618,13 @@ function CustomVisibilityRow({
       >
         {item.label}
       </button>
+      <HeaderColorDot
+        item={item}
+        headerColors={headerColors}
+        onColorColumn={onColorColumn}
+        canCustomizeColors={canCustomizeColors}
+        headerColorMap={headerColorMap}
+      />
       <button
         type="button"
         aria-label={`Edit ${item.label}`}

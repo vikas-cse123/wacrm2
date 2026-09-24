@@ -26,10 +26,43 @@ import {
   resolveWorkspaceCurrency,
   type WorkspaceField,
 } from "@/lib/flows/workspace-fields";
+import {
+  ASSIGNED_TO_CLEAR_SENTINEL,
+  ASSIGNED_TO_UNASSIGNED,
+  buildAssigneeOptions,
+  isAssigneeField,
+  resolveAssigneeDisplay,
+  type AssigneeMember,
+} from "@/lib/flows/workspace-assignee";
+import {
+  assigneeChipFor,
+  getSelectChip,
+  UNASSIGNED_CHIP,
+  type SelectChip,
+} from "@/lib/flows/workspace-select-chips";
+
+/**
+ * Sheets-style value chip: compact rounded pill, colored
+ * background + readable text, sized to its content. No borders,
+ * shadows, gradients, or icons — color is decorative only, the
+ * text label carries the meaning (and stays in the a11y tree).
+ */
+function SelectChipView({ chip, children }: { chip: SelectChip; children: string }) {
+  return (
+    <span
+      className="inline-flex max-w-full items-center justify-center rounded-full px-2 py-0.5 align-middle text-[12px] leading-4 font-medium whitespace-nowrap"
+      style={{ backgroundColor: chip.background, color: chip.color }}
+    >
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
 
 function formatDisplay(field: WorkspaceField, stored: string | null): string {
   const shown = displayWorkspaceValue(field, stored);
-  if (shown === null || shown === "") return "—";
+  // Empty cells render BLANK (never a dash placeholder) —
+  // display-only; the stored value is untouched.
+  if (shown === null || shown === "") return "";
   switch (field.field_type) {
     case "currency": {
       const n = Number(shown);
@@ -63,12 +96,26 @@ function formatDisplay(field: WorkspaceField, stored: string | null): string {
       });
     }
     case "multi_select":
-      return parseMultiSelectValue(shown).join(", ") || "—";
+      return parseMultiSelectValue(shown).join(", ");
     case "checkbox":
       return shown === "true" ? "Yes" : "No";
     default:
       return shown;
   }
+}
+
+/**
+ * Native editor input type for one workspace field type. Text-like
+ * fields edit as text, dates use the native date affordance —
+ * never a generic select chevron.
+ */
+export function editorInputType(
+  field_type: WorkspaceField["field_type"],
+): "date" | "datetime-local" | "number" | "text" {
+  if (field_type === "date") return "date";
+  if (field_type === "datetime") return "datetime-local";
+  if (field_type === "number" || field_type === "currency") return "number";
+  return "text";
 }
 
 /**
@@ -83,6 +130,7 @@ export function CustomCell({
   stored,
   canEdit,
   onSaved,
+  members,
 }: {
   flowId: string;
   runId: string;
@@ -90,6 +138,14 @@ export function CustomCell({
   stored: string | null | undefined;
   canEdit: boolean;
   onSaved: (fieldId: string, runId: string, value: string | null) => void;
+  /**
+   * Live account roster for the "Assigned To" column (same data as
+   * Settings → Team Members via GET /api/account/members).
+   * Ignored for every other column. Empty/omitted renders the
+   * stored value as-is (preserved) with Clear + Unassigned still
+   * available.
+   */
+  members?: readonly AssigneeMember[];
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -128,6 +184,87 @@ export function CustomCell({
 
   const shown = displayWorkspaceValue(field, stored ?? null);
 
+  // "Assigned To" is dynamic: Clear + Unassigned + the live account
+  // roster (Settings → Team Members via /api/account/members).
+  // Stored value is the stable member user_id; the name resolves at
+  // render so renames propagate and new teammates appear with no
+  // code change. Unknown stored values (legacy display strings or
+  // removed members) render as-is and are never rewritten here.
+  if (isAssigneeField(field)) {
+    const roster = members ?? [];
+    const rosterIds = roster.map((m) => m.user_id);
+    const base = shown;
+    const display = resolveAssigneeDisplay(base, roster);
+    // Member chips: deterministic per member within the live
+    // roster (never hardcoded); Unassigned takes the ONLY gray
+    // chip; Clear stays plain; legacy/removed values stay plain.
+    const assigneeChip =
+      base === ASSIGNED_TO_UNASSIGNED
+        ? UNASSIGNED_CHIP
+        : base
+          ? assigneeChipFor(base.trim(), rosterIds)
+          : null;
+    if (!canEdit) {
+      if (display == null || display === "") return <span></span>;
+      return assigneeChip ? (
+        <SelectChipView chip={assigneeChip}>{display}</SelectChipView>
+      ) : (
+        <span>{display}</span>
+      );
+    }
+    const options = buildAssigneeOptions(roster, base);
+    return (
+      <span onClick={(e) => e.stopPropagation()}>
+        <Select
+          value={base ?? ""}
+          disabled={saving}
+          onValueChange={(v) =>
+            save(v === ASSIGNED_TO_CLEAR_SENTINEL ? null : v)
+          }
+        >
+          <SelectTrigger
+            className="h-8 w-full min-w-28 border-transparent bg-transparent px-1 text-[13px] hover:border-border data-[state=open]:border-border"
+            aria-label={`${field.name} value`}
+          >
+            <SelectValue placeholder="">
+              {display == null ? undefined : assigneeChip ? (
+                <SelectChipView chip={assigneeChip}>{display}</SelectChipView>
+              ) : (
+                display
+              )}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((o) => {
+              if (o.kind === "clear") {
+                return (
+                  <SelectItem key={o.value} value={o.value}>
+                    <span className="text-muted-foreground">Clear</span>
+                  </SelectItem>
+                );
+              }
+              const optionChip =
+                o.kind === "unassigned"
+                  ? UNASSIGNED_CHIP
+                  : o.kind === "member"
+                    ? assigneeChipFor(o.value, rosterIds)
+                    : null;
+              return (
+                <SelectItem key={`${o.kind}:${o.value}`} value={o.value}>
+                  {optionChip ? (
+                    <SelectChipView chip={optionChip}>{o.label}</SelectChipView>
+                  ) : (
+                    o.label
+                  )}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      </span>
+    );
+  }
+
   if (!canEdit) {
     if (field.field_type === "url" && shown) {
       return (
@@ -141,6 +278,14 @@ export function CustomCell({
           {formatDisplay(field, stored ?? null)}
         </a>
       );
+    }
+    if (field.field_type === "single_select" && !isAssigneeField(field)) {
+      const text = formatDisplay(field, stored ?? null);
+      const chip = shown ? getSelectChip(field.name, shown) : null;
+      if (text !== "" && chip) {
+        return <SelectChipView chip={chip}>{text}</SelectChipView>;
+      }
+      return <span>{text}</span>;
     }
     return <span>{formatDisplay(field, stored ?? null)}</span>;
   }
@@ -161,6 +306,11 @@ export function CustomCell({
   }
 
   if (field.field_type === "single_select") {
+    // Business dropdowns paint Sheets-style chips in both the
+    // selected value and every option (same pure mapping, so the
+    // two can never disagree). Unknown/legacy values render as
+    // plain text; empty cells render blank.
+    const selectedChip = shown ? getSelectChip(field.name, shown) : null;
     return (
       <span onClick={(e) => e.stopPropagation()}>
         <Select
@@ -168,18 +318,27 @@ export function CustomCell({
           disabled={saving}
           onValueChange={(v) => save(v === "__clear__" ? null : v)}
         >
-          <SelectTrigger className="h-8 min-w-28 border-transparent bg-transparent px-1 text-[13px] hover:border-border data-[state=open]:border-border">
-            <SelectValue placeholder="—" />
+          <SelectTrigger className="h-8 w-full min-w-28 border-transparent bg-transparent px-1 text-[13px] hover:border-border data-[state=open]:border-border">
+            <SelectValue placeholder="">
+              {shown == null || shown === "" ? undefined : selectedChip ? (
+                <SelectChipView chip={selectedChip}>{shown}</SelectChipView>
+              ) : (
+                shown
+              )}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__clear__">
               <span className="text-muted-foreground">Clear</span>
             </SelectItem>
-            {(field.options ?? []).map((o) => (
-              <SelectItem key={o} value={o}>
-                {o}
-              </SelectItem>
-            ))}
+            {(field.options ?? []).map((o) => {
+              const chip = getSelectChip(field.name, o);
+              return (
+                <SelectItem key={o} value={o}>
+                  {chip ? <SelectChipView chip={chip}>{o}</SelectChipView> : o}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </span>
@@ -193,12 +352,12 @@ export function CustomCell({
         <DropdownMenu>
           <DropdownMenuTrigger
             className={cn(
-              "inline-flex h-8 max-w-44 items-center gap-1 rounded-md px-1 text-[13px] transition-colors",
+              "flex h-8 w-full items-center gap-1 rounded-md px-1 text-[13px] transition-colors",
               "hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
             )}
           >
-            <span className="truncate">
-              {picked.length > 0 ? picked.join(", ") : "—"}
+            <span className="min-w-0 flex-1 truncate text-left">
+              {picked.length > 0 ? picked.join(", ") : ""}
             </span>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
@@ -248,22 +407,22 @@ export function CustomCell({
           setDraft(shown ?? "");
           setEditing(true);
         }}
-        className="block max-w-44 truncate rounded px-1 py-0.5 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        // Full-cell click target: the button spans the cell width
+        // with a minimum select-like height, so clicking ANYWHERE
+        // in the cell (value or blank area) enters edit mode —
+        // clicks never fall through to the row below. Plain text,
+        // no chevron, no pill: only true selects render chevrons
+        // (via the shared SelectTrigger).
+        className="flex min-h-8 w-full items-center rounded px-1 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         title="Click to edit"
+        aria-label={`${field.name} value`}
       >
-        <span className={cn(text === "—" && "text-muted-foreground")}>{text}</span>
+        <span className={cn("min-w-0 flex-1 truncate", text === "" && "text-muted-foreground")}>{text}</span>
       </button>
     );
   }
 
-  const inputType =
-    field.field_type === "date"
-      ? "date"
-      : field.field_type === "datetime"
-        ? "datetime-local"
-        : field.field_type === "number" || field.field_type === "currency"
-          ? "number"
-          : "text";
+  const inputType = editorInputType(field.field_type);
 
   return (
     <span
