@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   > | null,
   upserts: [] as Array<Record<string, unknown>>,
   deletes: 0,
+  roster: [] as string[],
+  profileEqFilters: [] as Array<[string, unknown]>,
 }));
 
 function statusError(status: number, message: string) {
@@ -61,7 +63,19 @@ function fakeSupabase() {
     return chain;
   };
   chain.select = () => chain;
-  chain.eq = () => chain;
+  chain.eq = (col: string, val: unknown) => {
+    // Assigned-To roster lookup is a single account-scoped profiles
+    // read (same source as GET /api/account/members). Resolve it
+    // directly so tests prove account isolation via the filter.
+    if (state.table === "profiles") {
+      h.profileEqFilters.push([col, val]);
+      return Promise.resolve({
+        data: h.roster.map((user_id) => ({ user_id })),
+        error: null,
+      });
+    }
+    return chain;
+  };
   chain.maybeSingle = async () => {
     if (state.table === "workspace_fields") {
       return { data: h.field, error: null };
@@ -101,6 +115,19 @@ beforeEach(() => {
   h.accountId = "acct-1";
   h.upserts = [];
   h.deletes = 0;
+  h.roster = [];
+  h.profileEqFilters = [];
+  h.field = {
+    id: "field-1",
+    account_id: "acct-1",
+    flow_id: "flow-1",
+    name: "Status",
+    field_type: "single_select",
+    position: 0,
+    options: ["New", "Contacted"],
+    default_value: "New",
+  };
+  h.run = { id: "run-1", account_id: "acct-1", flow_id: "flow-1" };
 });
 
 describe("PUT workspace values", () => {
@@ -167,5 +194,127 @@ describe("PUT workspace values", () => {
     );
     expect(wrongFlow.status).toBe(404);
     h.run = { id: "run-1", account_id: "acct-1", flow_id: "flow-1" };
+  });
+});
+
+describe("PUT workspace Assigned To (dynamic team members)", () => {
+  const MEMBER_A = "11111111-1111-4111-8111-111111111111";
+  const MEMBER_B = "22222222-2222-4222-8222-222222222222";
+  const FOREIGN = "99999999-9999-4999-8999-999999999999";
+
+  function assigneeField() {
+    h.field = {
+      id: "field-assigned",
+      account_id: "acct-1",
+      flow_id: "flow-1",
+      name: "Assigned To",
+      field_type: "single_select",
+      position: 0,
+      options: ["Unassigned"],
+      default_value: null,
+    };
+  }
+
+  it("6. stores the stable member user_id for a current member", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A, MEMBER_B];
+    const res = await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: MEMBER_A }),
+      params,
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { value: string };
+    expect(json.value).toBe(MEMBER_A);
+    expect(h.upserts[0]).toMatchObject({ value_text: MEMBER_A });
+  });
+
+  it("5. scopes the roster lookup to the current account only", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A];
+    await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: MEMBER_A }),
+      params,
+    );
+    expect(h.profileEqFilters).toContainEqual(["account_id", "acct-1"]);
+  });
+
+  it("5. rejects another account's member id", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A, MEMBER_B];
+    const res = await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: FOREIGN }),
+      params,
+    );
+    expect(res.status).toBe(400);
+    expect(h.upserts).toHaveLength(0);
+  });
+
+  it("3/4. a newly added member validates; a removed one does not", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A, MEMBER_B];
+    const added = await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: MEMBER_B }),
+      params,
+    );
+    expect(added.status).toBe(200);
+
+    h.upserts = [];
+    h.roster = [MEMBER_A];
+    const removed = await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: MEMBER_B }),
+      params,
+    );
+    expect(removed.status).toBe(400);
+    expect(h.upserts).toHaveLength(0);
+  });
+
+  it("rejects legacy display names for new assignments (ids only)", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A];
+    const res = await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: "Asha Rao" }),
+      params,
+    );
+    expect(res.status).toBe(400);
+    expect(h.upserts).toHaveLength(0);
+  });
+
+  it("8. Clear deletes the value row", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A];
+    for (const v of [null, "", "__clear__"]) {
+      h.deletes = 0;
+      h.upserts = [];
+      const res = await PUT(
+        put({ field_id: "field-assigned", flow_run_id: "run-1", value: v }),
+        params,
+      );
+      expect(res.status).toBe(200);
+      expect(h.deletes).toBe(1);
+      expect(h.upserts).toHaveLength(0);
+    }
+  });
+
+  it("9. Unassigned stores the structural option", async () => {
+    assigneeField();
+    h.roster = [MEMBER_A];
+    const res = await PUT(
+      put({ field_id: "field-assigned", flow_run_id: "run-1", value: "Unassigned" }),
+      params,
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { value: string };
+    expect(json.value).toBe("Unassigned");
+  });
+
+  it("non-assignee single_select columns still use static options", async () => {
+    // Regression guard: the dynamic path must not leak into other fields.
+    h.roster = [MEMBER_A];
+    const res = await PUT(
+      put({ field_id: "field-1", flow_run_id: "run-1", value: MEMBER_A }),
+      params,
+    );
+    expect(res.status).toBe(400);
+    expect(h.profileEqFilters).toHaveLength(0);
   });
 });

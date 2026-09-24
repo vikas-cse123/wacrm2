@@ -3,6 +3,7 @@ import {
   buildFlowTableColumns,
   classifyFlowRun,
   completedAtFor,
+  flowColumnRenderKey,
   flowDisplayName,
   toFlowTableRow,
   type FlowTableRpcRow,
@@ -257,5 +258,37 @@ describe("flowDisplayName", () => {
     expect(flowDisplayName("dab466d7-7263-4e7b-ba40-0717091abc")).toBe(
       "dab466d7-7263-4e7b-ba40-0717091abc",
     );
+  });
+});
+
+describe("flowColumnRenderKey", () => {
+  it("namespaces system vs answer columns sharing a logical key", () => {
+    expect(flowColumnRenderKey({ key: "name", system: true })).toBe("sys:name");
+    expect(flowColumnRenderKey({ key: "name", system: false })).toBe("flow:name");
+  });
+
+  it("is stable and never depends on the display label", () => {
+    // Signature accepts key+system only, so a label rename can never
+    // shift the key — full FlowTableColumn objects narrow fine too.
+    const full: { key: string; label: string; system: boolean } = {
+      key: "TravelDate",
+      label: "Renamed!",
+      system: false,
+    };
+    expect(flowColumnRenderKey(full)).toBe("flow:TravelDate");
+  });
+
+  it("keeps every sibling unique when a var_key collides with a system key", () => {
+    // Reported error: "Encountered two children with the same key,
+    // `name`". A collect_input with var_key "name" is name-promoted
+    // into an answer column beside the system Name column — display
+    // names and data stay as-is, but render keys must differ.
+    const { columns } = buildFlowTableColumns(nodesFor([{ key: "name" }]), "start");
+    const keys = columns.map((c) => c.key);
+    expect(keys.filter((k) => k === "name")).toHaveLength(2);
+    const renderKeys = columns.map(flowColumnRenderKey);
+    expect(new Set(renderKeys).size).toBe(columns.length);
+    expect(renderKeys).toContain("sys:name");
+    expect(renderKeys).toContain("flow:name");
   });
 });

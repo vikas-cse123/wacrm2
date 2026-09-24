@@ -332,3 +332,126 @@ describe("GET /api/flows/[id]/table", () => {
     ).not.toContain("Assigned To");
   });
 });
+
+describe("GET table with Workspace filters (server-side)", () => {
+  const MEMBER = "11111111-1111-4111-8111-111111111111";
+  const FROM = "2026-09-18T00:00:00.000Z";
+  const TO = "2026-09-25T00:00:00.000Z";
+
+  it("forwards date + assignee into the paginated RPC", async () => {
+    const res = await GET(
+      new Request(
+        `https://app.test/api/flows/flow-1/table?view=completed&dateFrom=${encodeURIComponent(FROM)}&dateTo=${encodeURIComponent(TO)}&assignee=${MEMBER}`,
+      ),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    // Server-side: the RPC paginates the FILTERED set (total + page
+    // slice computed after every predicate — rows are never fanned
+    // out to the browser).
+    expect(h.rpcArgs).toMatchObject({
+      p_flow_id: "flow-1",
+      p_view: "completed",
+      p_started_from: FROM,
+      p_started_to: TO,
+      p_assignee: MEMBER,
+    });
+    const json = (await res.json()) as {
+      meta: { filters: { dateFrom: string; dateTo: string; assignee: string } };
+    };
+    expect(json.meta.filters).toEqual({ dateFrom: FROM, dateTo: TO, assignee: MEMBER });
+  });
+
+  it("12. completed and incomplete both respect the filters", async () => {
+    for (const view of ["completed", "incomplete"]) {
+      const res = await GET(
+        new Request(
+          `https://app.test/api/flows/flow-1/table?view=${view}&dateFrom=${encodeURIComponent(FROM)}&dateTo=${encodeURIComponent(TO)}&assignee=unassigned`,
+        ),
+        { params: Promise.resolve({ id: "flow-1" }) },
+      );
+      expect(res.status).toBe(200);
+      expect(h.rpcArgs).toMatchObject({
+        p_view: view,
+        p_started_from: FROM,
+        p_started_to: TO,
+        p_assignee: "unassigned",
+      });
+    }
+  });
+
+  it("7/13. unassigned + search combine with filters in one RPC call", async () => {
+    const res = await GET(
+      new Request(
+        `https://app.test/api/flows/flow-1/table?view=incomplete&search=rahul&page=2&pageSize=50&assignee=unassigned`,
+      ),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(h.rpcArgs).toMatchObject({
+      p_view: "incomplete",
+      p_search: "rahul",
+      p_page: 2,
+      p_page_size: 50,
+      p_assignee: "unassigned",
+      p_started_from: null,
+      p_started_to: null,
+    });
+  });
+
+  it("11. unfiltered reads pass null/all (byte-identical to before)", async () => {
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table?view=all"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    expect(h.rpcArgs).toMatchObject({
+      p_started_from: null,
+      p_started_to: null,
+      p_assignee: "all",
+    });
+    const json = (await res.json()) as {
+      meta: { filters: { dateFrom: null; dateTo: null; assignee: string } };
+    };
+    expect(json.meta.filters).toEqual({ dateFrom: null, dateTo: null, assignee: "all" });
+  });
+
+  it("unknown member ids forward for zero-match (never 400 the table)", async () => {
+    const res = await GET(
+      new Request(
+        "https://app.test/api/flows/flow-1/table?assignee=99999999-9999-4999-8999-999999999999",
+      ),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    // Account isolation holds inside the account-scoped RPC — a
+    // foreign id simply matches zero rows.
+    expect(h.rpcArgs).toMatchObject({
+      p_assignee: "99999999-9999-4999-8999-999999999999",
+    });
+  });
+
+  it("400s half, malformed, and inverted date ranges", async () => {
+    const half = await GET(
+      new Request(
+        `https://app.test/api/flows/flow-1/table?dateFrom=${encodeURIComponent(FROM)}`,
+      ),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(half.status).toBe(400);
+
+    const bad = await GET(
+      new Request("https://app.test/api/flows/flow-1/table?dateFrom=soon&dateTo=later"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(bad.status).toBe(400);
+
+    const inverted = await GET(
+      new Request(
+        `https://app.test/api/flows/flow-1/table?dateFrom=${encodeURIComponent(TO)}&dateTo=${encodeURIComponent(FROM)}`,
+      ),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(inverted.status).toBe(400);
+  });
+});

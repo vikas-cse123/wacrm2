@@ -6,6 +6,10 @@ import {
   validateWorkspaceValue,
   type WorkspaceField,
 } from "@/lib/flows/workspace-fields";
+import {
+  isAssigneeField,
+  validateAssigneeValue,
+} from "@/lib/flows/workspace-assignee";
 
 /**
  * PUT /api/flows/[id]/workspace-values — set or clear ONE custom
@@ -13,6 +17,12 @@ import {
  * (deletes the value row); defaults are read-time fallbacks and
  * are never written here, so history is never rewritten.
  * Flow vars/node config are never touched — only workspace_values.
+ *
+ * "Assigned To" cells store the stable member user_id (or the
+ * structural "Unassigned"), validated against the live account
+ * roster (profiles for this account — the Team Members source of
+ * truth). Existing legacy/removed assignments are preserved on
+ * read and never rewritten here.
  */
 
 async function loadField(
@@ -87,7 +97,28 @@ export async function PUT(
 
     let stored: string | null;
     try {
-      stored = validateWorkspaceValue(field.field_type, field.options, value);
+      if (isAssigneeField(field)) {
+        // "Assigned To" stores the stable member user_id (or the
+        // structural "Unassigned"), validated against the CURRENT
+        // account roster — the same profiles rows shown in
+        // Settings → Team Members. Account-scoped via the
+        // account_id filter (RLS scopes it too); never another
+        // account's members, never bare auth.users rows. Legacy
+        // display strings are preserved on read but rejected for
+        // new writes; removed members stop being selectable while
+        // their existing rows are left untouched.
+        const { data: roster, error: rosterErr } = await supabase
+          .from("profiles")
+          .select("user_id")
+          .eq("account_id", accountId);
+        if (rosterErr) throw rosterErr;
+        const memberIds = new Set(
+          ((roster ?? []) as Array<{ user_id: string }>).map((r) => r.user_id),
+        );
+        stored = validateAssigneeValue(value, memberIds);
+      } else {
+        stored = validateWorkspaceValue(field.field_type, field.options, value);
+      }
     } catch (err) {
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "Invalid value." },

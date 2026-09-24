@@ -32,6 +32,22 @@ export interface FlowTableColumn {
   system: boolean;
 }
 
+/**
+ * Stable UNIQUE React rendering key for one flow-table column.
+ * A flow answer can legally share its logical key with a system
+ * column (e.g. a `var_key` of exactly "name" sits beside the
+ * system Name column) — keying by `c.key` alone then renders
+ * siblings with duplicate keys. Namespacing by column kind keeps
+ * display names, data, and order untouched while guaranteeing
+ * sibling uniqueness: stable DB/field ids first (custom fields
+ * keep `f.id` at the call site), then this kind-qualified key.
+ */
+export function flowColumnRenderKey(
+  column: Pick<FlowTableColumn, "key" | "system">,
+): string {
+  return `${column.system ? "sys" : "flow"}:${column.key}`;
+}
+
 export interface FlowTableMeta {
   flowId: string;
   flowName: string;
@@ -41,6 +57,17 @@ export interface FlowTableMeta {
   total: number;
   page: number;
   pageSize: number;
+  /**
+   * Echo of the applied Workspace filters (additive, migration
+   * 094). Absent on older responses — always treated as inactive.
+   * dateFrom/dateTo are ISO instants or null; assignee is "all" |
+   * "unassigned" | <member user_id>.
+   */
+  filters?: {
+    dateFrom: string | null;
+    dateTo: string | null;
+    assignee: string;
+  } | null;
 }
 
 export interface FlowTableRow {
