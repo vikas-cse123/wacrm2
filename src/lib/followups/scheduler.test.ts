@@ -8,9 +8,15 @@ const h = vi.hoisted(() => ({
   sendBehavior: "ok" as "ok" | "meta-fail",
   tablesRead: [] as string[],
   writes: [] as Array<{ table: string; op: string }>,
-  // A "current" profile number that DIFFERS from every row snapshot —
-  // proves the scheduler never re-reads the profile for delivery.
-  profileNumber: "9999999999",
+  // Creator's CURRENT Reminder WhatsApp Number. Defaults to the
+  // row snapshot (no refresh); dedicated tests change it to prove
+  // stale snapshots are re-pointed before sending.
+  profileNumber: "919876543210",
+  // Window-check fixtures: the agent's number messaged the business
+  // recently, so the default path stays free-text (existing tests).
+  contacts: [] as Array<Record<string, unknown>>,
+  conversations: [] as Array<Record<string, unknown>>,
+  messages: [] as Array<Record<string, unknown>>,
 }));
 
 // The self-reminder sender is mocked at the module boundary: no Meta
@@ -30,6 +36,22 @@ vi.mock("./reminder-send", async (importOriginal) => {
         throw new actual.SendMessageError("meta_error", "Meta API error", 502);
       }
       return { whatsappMessageId: `wamid-${h.sends.length}` };
+    },
+    sendReminderViaTemplate: async (
+      _db: unknown,
+      accountId: string,
+      params: { to: string; text: string },
+    ) => {
+      h.sends.push({ ...params, accountId });
+      if (h.sendBehavior === "meta-fail") {
+        throw new actual.SendMessageError("meta_error", "Meta API error", 502);
+      }
+      return {
+        whatsappMessageId: `wamid-tpl-${h.sends.length}`,
+        phoneNumberId: "pn-1",
+        via: "template" as const,
+        templateName: "reminder_fallback",
+      };
     },
   };
 });
@@ -69,8 +91,13 @@ function fakeDb() {
       _patch: null as Row | null,
       _table: table,
     };
-    const store = () =>
-      table === "whatsapp_followups" ? h.followups : [];
+    const store = () => {
+      if (table === "whatsapp_followups") return h.followups;
+      if (table === "contacts") return h.contacts;
+      if (table === "conversations") return h.conversations;
+      if (table === "messages") return h.messages;
+      return [];
+    };
     q.select = () => q;
     q.eq = (col: string, val: unknown) => {
       (q._filters as Array<(x: Row) => boolean>).push((r) => r[col] === val);
@@ -79,6 +106,13 @@ function fakeDb() {
     q.in = (col: string, vals: unknown[]) => {
       (q._filters as Array<(x: Row) => boolean>).push((r) =>
         (vals as unknown[]).includes(r[col]),
+      );
+      return q;
+    };
+    q.like = (col: string, pattern: string) => {
+      const suffix = String(pattern).replace(/^%/, "");
+      (q._filters as Array<(x: Row) => boolean>).push((r) =>
+        String(r[col] ?? "").endsWith(suffix),
       );
       return q;
     };
@@ -103,7 +137,13 @@ function fakeDb() {
       });
       return q;
     };
-    q.order = () => q;
+    q.order = (col: string, opts?: { ascending?: boolean }) => {
+      (q._orderBy as { col: string; ascending: boolean } | null) = {
+        col,
+        ascending: opts?.ascending ?? true,
+      };
+      return q;
+    };
     q.limit = () => q;
     q.update = (patch: Row) => {
       h.writes.push({ table, op: "update" });
@@ -112,8 +152,12 @@ function fakeDb() {
     };
     q.insert = (obj: Row) => {
       h.writes.push({ table, op: "insert" });
-      void obj;
-      return q;
+      const created: Row = { id: `${table}-new-${h.writes.length}`, ...obj };
+      store().push(created);
+      const single = async () => ({ data: created, error: null });
+      return {
+        select: (_cols?: string) => ({ single, maybeSingle: single }),
+      };
     };
     q.maybeSingle = async () => {
       // The scheduler never resolves recipients from profiles; serve
@@ -124,9 +168,21 @@ function fakeDb() {
           error: null,
         };
       }
-      const rows = store().filter((r) =>
+      let rows = store().filter((r) =>
         matches(r, q._filters as Array<(x: Row) => boolean>),
       );
+      const orderBy = q._orderBy as { col: string; ascending: boolean } | null;
+      if (orderBy) {
+        rows = [...rows].sort((a, b) =>
+          orderBy.ascending
+            ? String(a[orderBy.col]) < String(b[orderBy.col])
+              ? -1
+              : 1
+            : String(a[orderBy.col]) > String(b[orderBy.col])
+              ? -1
+              : 1,
+        );
+      }
       if (q._patch) {
         for (const r of rows) Object.assign(r, q._patch);
         return { data: rows[0] ?? null, error: null };
@@ -158,16 +214,47 @@ beforeEach(() => {
   h.sendBehavior = "ok";
   h.tablesRead = [];
   h.writes = [];
+  // Open-window fixtures: the agent's number messaged the business
+  // recently, so the default path stays free-text (existing tests).
+  // created_at tracks real now; every drain NOW in these tests is an
+  // older fixed instant, so the window reads open deterministically.
+  const recent = new Date(Date.now() - 3600_000).toISOString();
+  h.contacts = [{ id: "contact-9", account_id: "acct-1", phone: "919876543210" }];
+  h.conversations = [
+    { id: "conv-9", contact_id: "contact-9", account_id: "acct-1" },
+  ];
+  h.messages = [
+    { conversation_id: "conv-9", sender_type: "customer", created_at: recent },
+  ];
 });
 
-/** Every write the scheduler performs must target its own rows. */
-function expectNoCustomerSideEffects() {
-  expect(h.tablesRead).not.toContain("messages");
-  expect(h.tablesRead).not.toContain("conversations");
-  expect(h.tablesRead).not.toContain("contacts");
+/** Every write the scheduler performs must target its own reminder
+ *  rows or the RECIPIENT's Inbox thread (contact/conversation/message
+ *  for the recipient snapshot). Reads cover the recipient snapshot's
+ *  window evidence (contacts/conversations/messages), the creator's
+ *  current number (profiles — stale-snapshot refresh only), plus
+ *  sender config — never customer threads selected via contact_id,
+ *  never flow runs. */
+function expectNoCustomerSideEffects(recipientPhone = "919876543210") {
   expect(h.tablesRead).not.toContain("flow_runs");
   for (const w of h.writes) {
-    expect(w.table).toBe("whatsapp_followups");
+    expect([
+      "whatsapp_followups",
+      "contacts",
+      "conversations",
+      "messages",
+    ]).toContain(w.table);
+  }
+  // Recipient-thread only: no message may land in any other
+  // conversation, and no contact may be created for any other phone.
+  const recipientContactIds = h.contacts
+    .filter((c) => String(c.phone ?? "").replace(/\D/g, "").endsWith(recipientPhone.slice(-10)))
+    .map((c) => c.id);
+  const recipientConvIds = h.conversations
+    .filter((c) => recipientContactIds.includes(c.contact_id))
+    .map((c) => c.id);
+  for (const m of h.messages.filter((m) => m.sender_type === "agent")) {
+    expect(recipientConvIds).toContain(m.conversation_id);
   }
 }
 
@@ -193,14 +280,29 @@ describe("drainDueFollowups (self-reminders)", () => {
     expect(h.sends).toHaveLength(1);
   });
 
-  it("ignores later profile-number changes (snapshot is immutable)", async () => {
-    h.followups = [row({})];
+  it("re-points a stale snapshot to the creator's current number", async () => {
+    // Snapshot predates a profile change: the send must go to the
+    // CURRENT number and the row must record it. History is only
+    // ever rewritten on still-scheduled rows under claim.
+    h.followups = [row({ recipient_phone: "918737064453" })];
     h.profileNumber = "911111111111";
     const db = fakeDb();
     const out = await drainDueFollowups(db as never, NOW);
     expect(out).toMatchObject({ sent: 1 });
+    expect(h.sends[0].to).toBe("911111111111");
+    expect(h.followups[0].recipient_phone).toBe("911111111111");
+    expect(h.tablesRead).toContain("profiles");
+    expectNoCustomerSideEffects("911111111111");
+  });
+
+  it("keeps the snapshot when the creator has no valid current number", async () => {
+    h.followups = [row({})];
+    h.profileNumber = "not-a-number";
+    const db = fakeDb();
+    const out = await drainDueFollowups(db as never, NOW);
+    expect(out).toMatchObject({ sent: 1 });
     expect(h.sends[0].to).toBe("919876543210");
-    expect(h.tablesRead).not.toContain("profiles");
+    expect(h.followups[0].recipient_phone).toBe("919876543210");
   });
 
   it("sends without a customer and without any template or window", async () => {
@@ -219,9 +321,10 @@ describe("drainDueFollowups (self-reminders)", () => {
     const db = fakeDb();
     const out = await drainDueFollowups(db as never, NOW);
     expect(out).toMatchObject({ sent: 1 });
-    // The scheduler never even looks at the messages table.
-    expect(h.tablesRead).not.toContain("messages");
+    // Window evidence may be read, but the recipient stays the
+    // immutable snapshot — never derived from activity.
     expect(h.sends[0].to).toBe("919876543210");
+    expectNoCustomerSideEffects();
   });
 
   it("fails loudly on legacy rows without a recipient snapshot", async () => {
@@ -278,6 +381,11 @@ describe("drainDueFollowups (self-reminders)", () => {
 
   it("scopes the send to the reminder's own account", async () => {
     h.followups = [row({ account_id: "acct-9" })];
+    // Window evidence in the reminder's own account keeps the text path.
+    h.contacts = [{ id: "contact-9", account_id: "acct-9", phone: "919876543210" }];
+    h.conversations = [
+      { id: "conv-9", contact_id: "contact-9", account_id: "acct-9" },
+    ];
     const db = fakeDb();
     const out = await drainDueFollowups(db as never, NOW);
     expect(out).toMatchObject({ sent: 1 });

@@ -1,12 +1,23 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { decrypt } from "@/lib/whatsapp/encryption";
-import { sendTextMessage } from "@/lib/whatsapp/meta-api";
+import { sendTemplateMessage, sendTextMessage } from "@/lib/whatsapp/meta-api";
+import { buildSendComponents } from "@/lib/whatsapp/template-send-builder";
+import type { MessageTemplate } from "@/types";
 import { SendMessageError } from "@/lib/whatsapp/send-message";
 
 // Re-exported so scheduler callers import the sender and its error
 // type from one module.
 export { SendMessageError };
+
+/**
+ * Fail-closed reason stored when the 24-hour window is closed and
+ * the account has no usable fallback template. Worded for the
+ * Reminders UI/API surface (no silent text downgrade — Meta would
+ * reject free-form text outside the window).
+ */
+export const NO_FALLBACK_TEMPLATE_MESSAGE =
+  "24-hour window is closed and no approved fallback template is configured.";
 
 // ============================================================
 // Self-reminder send: deliver a reminder TO ITS CREATOR's stored
@@ -14,12 +25,15 @@ export { SendMessageError };
 // FROM the account's connected WhatsApp Business number.
 //
 // This is deliberately NOT `sendMessageToConversation`: a personal
-// reminder must never open/touch a customer conversation, persist
-// a customer `messages` row, pause flow runs, mutate conversation
-// previews, auto-correct contact phones, or consult the 24-hour
-// customer-service window. The ONLY database reads here are the
-// account-scoped `whatsapp_config` (sender credentials); the ONLY
-// write the caller performs is the reminder row's own status.
+// reminder must never open/touch a customer conversation, pause
+// flow runs, mutate conversation previews, auto-correct contact
+// phones, or consult the 24-hour customer-service window. The ONLY
+// database reads here are the account-scoped `whatsapp_config`
+// (sender credentials) plus the fallback-template lookup; the ONLY
+// write the caller performs is the reminder row's own status. (The
+// scheduler separately persists the sent reminder onto the
+// RECIPIENT's own Inbox thread via persistReminderOutboundMessage —
+// never a customer thread.)
 //
 // `db` may be the service-role client (cron worker). Every query
 // is filtered by `accountId`, so tenancy holds regardless.
@@ -47,27 +61,24 @@ export interface ReminderSendResult {
    * on older responses; diagnostics compare it against `to`.
    */
   recipientWaId?: string;
+  /** Which path delivered this reminder (for logging). */
+  via?: "text" | "template";
+  /** Fallback template name when via is `template`. */
+  templateName?: string;
+  /** Fallback template language when via is `template`. */
+  templateLanguage?: string;
 }
 
-export async function sendReminderToAgent(
+interface SenderCredentials {
+  phoneNumberId: string;
+  accessToken: string;
+}
+
+/** Resolve + decrypt the account's connected sender credentials. */
+async function loadSenderCredentials(
   db: SupabaseClient,
   accountId: string,
-  params: ReminderSendParams,
-): Promise<ReminderSendResult> {
-  const { to, text } = params;
-
-  if (!to) {
-    throw new SendMessageError(
-      "bad_request",
-      "Reminder has no recipient phone number.",
-      400,
-    );
-  }
-  if (!text) {
-    throw new SendMessageError("bad_request", "Reminder text is required.", 400);
-  }
-
-  // Sender: the account's connected WhatsApp Business number.
+): Promise<SenderCredentials> {
   const { data: config, error: configError } = await db
     .from("whatsapp_config")
     .select("phone_number_id, access_token")
@@ -104,20 +115,189 @@ export async function sendReminderToAgent(
       400,
     );
   }
+  return { phoneNumberId: row.phone_number_id, accessToken };
+}
+
+export async function sendReminderToAgent(
+  db: SupabaseClient,
+  accountId: string,
+  params: ReminderSendParams,
+): Promise<ReminderSendResult> {
+  const { to, text } = params;
+
+  if (!to) {
+    throw new SendMessageError(
+      "bad_request",
+      "Reminder has no recipient phone number.",
+      400,
+    );
+  }
+  if (!text) {
+    throw new SendMessageError("bad_request", "Reminder text is required.", 400);
+  }
+
+  // Sender: the account's connected WhatsApp Business number.
+  const { phoneNumberId, accessToken } = await loadSenderCredentials(
+    db,
+    accountId,
+  );
 
   try {
     const result = await sendTextMessage({
-      phoneNumberId: row.phone_number_id,
+      phoneNumberId,
       accessToken,
       to,
       text,
     });
     return {
       whatsappMessageId: result.messageId,
-      phoneNumberId: row.phone_number_id,
+      phoneNumberId,
+      via: "text",
       ...(result.contacts?.[0]?.waId
         ? { recipientWaId: result.contacts[0].waId }
         : {}),
+    };
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Unknown Meta API error";
+    throw new SendMessageError("meta_error", `Meta API error: ${message}`, 502);
+  }
+}
+
+/**
+ * Template fallback for closed-window sends: delivers the reminder
+ * through the account's configured APPROVED template with the
+ * reminder text as `{{1}}`. Same recipient, same sender, same
+ * bookkeeping contract as the text path — no customer
+ * conversation, no contact lookup. (Inbox persistence happens in
+ * the scheduler with `templateName` set, so the thread shows the
+ * reminder content with template metadata.)
+ *
+ * Fail-closed contract (never silently downgraded to text, which
+ * Meta would reject outside the window; never silently swapped to
+ * another template — only the exact configured name/language):
+ *   - no configured template → `no_fallback_template`
+ *   - template row missing → `template_missing`
+ *   - not APPROVED → `template_unapproved`
+ *   - body without exactly one `{{1}}`, or extra send-time
+ *     requirements the reminder cannot satisfy (media/text header
+ *     variables, URL-button variables) → `template_invalid`
+ */
+export async function sendReminderViaTemplate(
+  db: SupabaseClient,
+  accountId: string,
+  params: ReminderSendParams,
+): Promise<ReminderSendResult> {
+  const { to, text } = params;
+
+  if (!to) {
+    throw new SendMessageError(
+      "bad_request",
+      "Reminder has no recipient phone number.",
+      400,
+    );
+  }
+  if (!text) {
+    throw new SendMessageError("bad_request", "Reminder text is required.", 400);
+  }
+
+  const { data: account, error: accountErr } = await db
+    .from("accounts")
+    .select("reminder_template_name, reminder_template_language")
+    .eq("id", accountId)
+    .maybeSingle();
+  if (accountErr || !account) {
+    throw new SendMessageError(
+      "no_fallback_template",
+      NO_FALLBACK_TEMPLATE_MESSAGE,
+      400,
+    );
+  }
+  const setting = account as {
+    reminder_template_name?: string | null;
+    reminder_template_language?: string | null;
+  };
+  // Exact configured values — no guessing, no second source, no
+  // silent substitution. Language defaults to en_US only when the
+  // setting itself carries none.
+  const templateName = setting.reminder_template_name?.trim() || null;
+  const language = setting.reminder_template_language?.trim() || "en_US";
+  if (!templateName) {
+    throw new SendMessageError(
+      "no_fallback_template",
+      NO_FALLBACK_TEMPLATE_MESSAGE,
+      400,
+    );
+  }
+
+  const { data: template, error: templateErr } = await db
+    .from("message_templates")
+    .select("*")
+    .eq("account_id", accountId)
+    .eq("name", templateName)
+    .eq("language", language)
+    .maybeSingle();
+  const row = (template ?? null) as MessageTemplate | null;
+  if (templateErr || !row) {
+    throw new SendMessageError(
+      "template_missing",
+      `The configured reminder template "${templateName}" (${language}) was not found in this account.`,
+      400,
+    );
+  }
+  if (row.status !== "APPROVED") {
+    throw new SendMessageError(
+      "template_unapproved",
+      `The configured reminder template "${templateName}" (${language}) is not APPROVED by Meta (status: ${row.status ?? "unknown"}).`,
+      400,
+    );
+  }
+  const bodyVars = (row.body_text ?? "").match(/\{\{(\d+)\}\}/g) ?? [];
+  if (bodyVars.length !== 1 || !bodyVars[0]?.includes("{{1}}")) {
+    throw new SendMessageError(
+      "template_invalid",
+      `The configured reminder template "${templateName}" (${language}) must contain exactly one {{1}} body variable.`,
+      400,
+    );
+  }
+
+  const { phoneNumberId, accessToken } = await loadSenderCredentials(
+    db,
+    accountId,
+  );
+
+  // Pre-flight the exact Meta components BEFORE touching the
+  // network: a template needing more than the single body value
+  // (media/text header variable, URL-button variable) can never be
+  // satisfied by a reminder send. Surfacing it here keeps the
+  // failure classified as `template_invalid` with the precise
+  // reason instead of a misleading Meta error after the fact.
+  try {
+    buildSendComponents(row, { body: [text] });
+  } catch (err) {
+    throw new SendMessageError(
+      "template_invalid",
+      `The configured reminder template "${templateName}" (${language}) cannot be sent as a reminder: ${err instanceof Error ? err.message : "unsupported template shape"}`,
+      400,
+    );
+  }
+
+  try {
+    const result = await sendTemplateMessage({
+      phoneNumberId,
+      accessToken,
+      to,
+      templateName,
+      language,
+      template: row,
+      messageParams: { body: [text] },
+    });
+    return {
+      whatsappMessageId: result.messageId,
+      phoneNumberId,
+      via: "template",
+      templateName,
+      templateLanguage: language,
     };
   } catch (err) {
     const message =

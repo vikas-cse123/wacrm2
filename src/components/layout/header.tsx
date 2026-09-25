@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
 import { LogOut, Menu, Settings as SettingsIcon, User } from "lucide-react";
 import {
@@ -18,26 +17,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ModeToggle } from "@/components/layout/mode-toggle";
 
-const pageTitles: Record<string, string> = {
-  "/dashboard": "Dashboard",
-  "/inbox": "Inbox",
-  "/notifications": "Notifications",
-  "/contacts": "Contacts",
-  "/pipelines": "Pipelines",
-  "/broadcasts": "Broadcasts",
-  "/automations": "Automations",
-  "/settings": "Settings",
-  "/workspace": "Workspace",
-};
-
-function getPageTitle(pathname: string): string {
-  if (pageTitles[pathname]) return pageTitles[pathname];
-  const match = Object.entries(pageTitles).find(([path]) =>
-    pathname.startsWith(path),
-  );
-  return match ? match[1] : "Dashboard";
-}
-
 interface HeaderProps {
   /** Wired to the shell's drawer state. Used only on mobile — the
    *  hamburger button is hidden on lg+. */
@@ -45,17 +24,13 @@ interface HeaderProps {
 }
 
 export function Header({ onOpenSidebar }: HeaderProps) {
-  const pathname = usePathname();
   const { profile, accountRole, signOut } = useAuth();
   // UI-only: Settings link is owner-only, matching the sidebar gating.
   const isOwner = accountRole === "owner";
-  const title = getPageTitle(pathname);
-  // The dashboard page renders its own main "Dashboard" heading above
-  // the content, so the header title is hidden there to avoid a
-  // duplicate. Same for /broadcasts: the page renders its own
-  // "Bulk Messages" heading, so the stale "Broadcasts" header title
-  // is hidden there too. Every other page keeps its header title.
-  const showTitle = pathname !== "/dashboard" && pathname !== "/broadcasts";
+  // No page-name title is rendered in the header on any page: the
+  // dashboard page renders its own main "Dashboard" heading above
+  // the content (unchanged), and every other page leaves this area
+  // empty by design.
   const initial =
     profile?.full_name?.charAt(0)?.toUpperCase() ??
     profile?.email?.charAt(0)?.toUpperCase() ??
@@ -73,11 +48,6 @@ export function Header({ onOpenSidebar }: HeaderProps) {
         >
           <Menu className="h-5 w-5" />
         </button>
-        {showTitle ? (
-          <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
-            {title}
-          </h1>
-        ) : null}
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2">

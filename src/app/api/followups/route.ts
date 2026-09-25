@@ -8,9 +8,7 @@ import {
 } from "@/lib/auth/account";
 import {
   isFollowupStatus,
-  AGENT_NUMBER_COUNTRY_CODE_MESSAGE,
   normalizeAgentWhatsappNumber,
-  normalizeRecipientPhone,
   validateFollowupInput,
   type Followup,
 } from "@/lib/followups/types";
@@ -42,21 +40,6 @@ function toFollowup(row: Record<string, unknown>): Followup {
   };
 }
 
-async function loadContact(
-  supabase: SupabaseClient,
-  accountId: string,
-  contactId: string,
-) {
-  const { data, error } = await supabase
-    .from("contacts")
-    .select("id, account_id, phone, name")
-    .eq("id", contactId)
-    .eq("account_id", accountId)
-    .maybeSingle();
-  if (error) throw error;
-  return data as { id: string; account_id: string; phone: string; name: string | null } | null;
-}
-
 /**
  * Load the creating agent's stored WhatsApp number
  * (`profiles.whatsapp_number`) and normalize it to the canonical
@@ -77,24 +60,6 @@ async function loadAgentRecipientPhone(
   if (error || !data) return null;
   return normalizeAgentWhatsappNumber(
     (data as { whatsapp_number?: unknown }).whatsapp_number,
-  );
-}
-
-/** True when the stored value is dialable but lacks a country code. */
-async function storedNumberMissingCountryCode(
-  supabase: SupabaseClient,
-  userId: string,
-): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("whatsapp_number")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error || !data) return false;
-  const raw = (data as { whatsapp_number?: unknown }).whatsapp_number;
-  return (
-    normalizeRecipientPhone(raw) !== null &&
-    normalizeAgentWhatsappNumber(raw) === null
   );
 }
 
@@ -159,9 +124,10 @@ export async function GET(request: Request) {
  * The reminder is delivered TO ITS CREATOR's stored WhatsApp
  * number (`profiles.whatsapp_number`), snapshotted into
  * `recipient_phone` at creation. Creation FAILS CLOSED when the
- * agent has no valid stored number — the customer phone is never
- * substituted. `contact_id` is optional context only; no customer
- * conversation is created or attached (no empty threads).
+ * agent has no valid stored number — no other number may be
+ * substituted. Creation carries NO customer field: any
+ * `contact_id` in the body is ignored and the row stores NULL.
+ * No customer conversation is created or attached.
  */
 export async function POST(request: Request) {
   try {
@@ -175,8 +141,10 @@ export async function POST(request: Request) {
     }
     let input;
     try {
+      // No customer field on creation: contact_id is always stored
+      // as NULL regardless of what the body carries.
       input = validateFollowupInput({
-        contact_id: body.contact_id,
+        contact_id: null,
         scheduled_for: body.scheduled_for,
         message_text: body.message_text,
         template_name: body.template_name,
@@ -187,12 +155,6 @@ export async function POST(request: Request) {
         { error: err instanceof Error ? err.message : "Invalid input." },
         { status: 400 },
       );
-    }
-    const contact = input.contact_id
-      ? await loadContact(supabase, accountId, input.contact_id)
-      : null;
-    if (input.contact_id && !contact) {
-      return NextResponse.json({ error: "Contact not found." }, { status: 404 });
     }
 
     // Resolve the creator's stored WhatsApp number and snapshot it.
@@ -205,15 +167,10 @@ export async function POST(request: Request) {
       userId,
     );
     if (!recipient_phone) {
-      const needsCountryCode = await storedNumberMissingCountryCode(
-        supabase,
-        userId,
-      );
       return NextResponse.json(
         {
-          error: needsCountryCode
-            ? `${AGENT_NUMBER_COUNTRY_CODE_MESSAGE} Update it in Settings → Your profile before creating a reminder.`
-            : "Add your WhatsApp number in Settings → Your profile before creating a reminder.",
+          error:
+            "Add your WhatsApp number in Settings → Reminder WhatsApp Number before creating a reminder.",
         },
         { status: 400 },
       );
@@ -224,7 +181,7 @@ export async function POST(request: Request) {
       .insert({
         account_id: accountId,
         recipient_phone,
-        contact_id: contact?.id ?? null,
+        contact_id: null,
         // No thread for a self-reminder: delivery goes straight to
         // the agent's number, never into a customer conversation.
         conversation_id: null,

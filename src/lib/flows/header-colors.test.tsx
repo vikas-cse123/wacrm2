@@ -10,6 +10,7 @@ import {
   HEADER_COLOR_PRESETS,
   HEADER_CURATED_DEFAULTS,
   HEADER_FALLBACK_PALETTE,
+  HEADER_REFERENCE_PALETTE,
   HEADER_TEXT_DARK,
   HEADER_TEXT_LIGHT,
   headerTextColor,
@@ -20,69 +21,233 @@ import {
 } from "./header-colors";
 
 // ---------------------------------------------------------------------------
-// Workspace header colors — model + wiring tests (14 required behaviors).
+// Workspace header colors — exact reference palette + deterministic
+// set-aware assignment.
 // ---------------------------------------------------------------------------
 
-describe("1. distinct default light colors per column", () => {
-  const canonicalOrder: Array<[string, string]> = [
-    ["core:row", "Row"],
-    ["flow:submission_time", "Submission Time"],
-    ["flow:name", "Name"],
-    ["flow:phone", "Phone Number"],
-    ["custom:aaa", "Assigned To"],
-    ["custom:bbb", "Call Status"],
-    ["custom:ccc", "No. of Calls Tried"],
-    ["custom:ddd", "Lead Quality"],
-    ["custom:eee", "Quotation / Package"],
-    ["custom:fff", "Follow-Up Status"],
-    ["custom:ggg", "Last Contact Date"],
-    ["custom:hhh", "Customer Response"],
-    ["custom:iii", "Next Follow-up Date & Time"],
-    ["custom:jjj", "Next Action"],
-    ["custom:kkk", "Reason for Lost Lead"],
-    ["custom:lll", "Final Remark"],
-    ["lead_source", "Lead Source"],
+const GREEN = "#93c47d";
+const BLUE = "#6d9eeb";
+const ORANGE = "#ff9900";
+const TEAL = "#46bdc6";
+const REMARK_GREEN = "#34a853";
+const RED = "#ea4335";
+
+describe("reference palette", () => {
+  it("uses the exact reference HEX colors, lowercase, in order", () => {
+    expect(HEADER_REFERENCE_PALETTE).toEqual([
+      GREEN,
+      BLUE,
+      ORANGE,
+      TEAL,
+      REMARK_GREEN,
+      RED,
+    ]);
+  });
+
+  it("presets offer exactly the reference palette", () => {
+    expect([...HEADER_COLOR_PRESETS]).toEqual([...HEADER_REFERENCE_PALETTE]);
+  });
+});
+
+describe("semantic mapping (mapped columns present)", () => {
+  it("paints Phone Number blue (visId and label variants)", () => {
+    expect(defaultHeaderColor("flow:phone", "Phone Number")).toBe(BLUE);
+    expect(defaultHeaderColor("flow:phone", "Phone No")).toBe(BLUE);
+    expect(defaultHeaderColor("custom:x", "Phone No")).toBe(BLUE);
+    expect(defaultHeaderColor("custom:x", "Phone Number")).toBe(BLUE);
+    expect(defaultHeaderColor("custom:x", "phone")).toBe(BLUE);
+  });
+
+  it("paints Name orange", () => {
+    expect(defaultHeaderColor("flow:name", "Name")).toBe(ORANGE);
+    expect(defaultHeaderColor("custom:x", "Name")).toBe(ORANGE);
+  });
+
+  it("paints Follow-Up Status / Follow Up teal (but not nearby date fields)", () => {
+    expect(defaultHeaderColor("custom:x", "Follow-Up Status")).toBe(TEAL);
+    expect(defaultHeaderColor("custom:x", "Follow Up")).toBe(TEAL);
+    expect(defaultHeaderColor("custom:x", "follow-up status")).toBe(TEAL);
+    // A different field that merely mentions follow-up stays default.
+    expect(defaultHeaderColor("custom:x", "Next Follow-up Date & Time")).toBe(
+      GREEN,
+    );
+  });
+
+  it("paints Final Remark green", () => {
+    expect(defaultHeaderColor("custom:x", "Final Remark")).toBe(REMARK_GREEN);
+  });
+
+  it("paints Reason for/of Lost Lead red", () => {
+    expect(defaultHeaderColor("custom:x", "Reason for Lost Lead")).toBe(RED);
+    expect(defaultHeaderColor("custom:x", "Reason of Lost")).toBe(RED);
+  });
+
+  it("paints every other business column the default green", () => {
+    for (const label of [
+      "Row",
+      "Submission Time",
+      "Assigned To",
+      "Call Status",
+      "Lead Quality",
+      "Lead Source",
+      "My Tracker",
+      "VIP Flag",
+    ]) {
+      expect(defaultHeaderColor("custom:x", label)).toBe(GREEN);
+    }
+  });
+
+  it("matching is case-insensitive", () => {
+    expect(defaultHeaderColor("custom:x", "FINAL REMARK")).toBe(REMARK_GREEN);
+    expect(defaultHeaderColor("custom:x", "  Reason For Lost Lead  ")).toBe(
+      RED,
+    );
+  });
+});
+
+describe("fallback reassignment (mapped columns absent)", () => {
+  it("reassigns unused mapped colors to visible columns in palette order", () => {
+    // No mapped column at all: the visible set still carries the
+    // palette sequentially (green first, then blue, orange, …).
+    const map = buildHeaderColorMap(
+      [
+        { visId: "custom:a", label: "Assigned To" },
+        { visId: "custom:b", label: "Call Status" },
+        { visId: "custom:c", label: "Lead Quality" },
+      ],
+      {},
+    );
+    expect(map).toEqual({
+      "custom:a": GREEN,
+      "custom:b": BLUE,
+      "custom:c": ORANGE,
+    });
+  });
+
+  it("colors of absent mapped columns still appear (red/green reuse)", () => {
+    // Flow without Reason/Remark/Follow-Up/Name/Phone: red, remark
+    // green, teal, orange and blue must still paint something.
+    const map = buildHeaderColorMap(
+      [
+        { visId: "core:row", label: "Row" },
+        { visId: "custom:a", label: "Assigned To" },
+        { visId: "custom:b", label: "Call Status" },
+        { visId: "custom:c", label: "Lead Quality" },
+        { visId: "custom:d", label: "Next Action" },
+        { visId: "custom:e", label: "Last Contact Date" },
+      ],
+      {},
+    );
+    expect(Object.values(map).sort()).toEqual([...HEADER_REFERENCE_PALETTE].sort());
+  });
+
+  it("keeps semantic colors where their columns exist, reassigns the rest", () => {
+    const map = buildHeaderColorMap(
+      [
+        { visId: "flow:name", label: "Name" },
+        { visId: "flow:phone", label: "Phone No" },
+        { visId: "custom:a", label: "Assigned To" },
+        { visId: "custom:b", label: "Call Status" },
+      ],
+      {},
+    );
+    expect(map["flow:name"]).toBe(ORANGE);
+    expect(map["flow:phone"]).toBe(BLUE);
+    // Green first (palette order), then the next unused mapped
+    // color (teal) — red and remark-green stay unused here only
+    // because fewer than six columns are visible.
+    expect(map["custom:a"]).toBe(GREEN);
+    expect(map["custom:b"]).toBe(TEAL);
+  });
+
+  it("never leaves a visible column undefined, blank, or unmapped", () => {
+    const cols = [
+      { visId: "core:row", label: "Row" },
+      { visId: "flow:submission_time", label: "Submission Time" },
+      { visId: "flow:name", label: "Name" },
+      { visId: "custom:z", label: "Whatever" },
+    ];
+    const map = buildHeaderColorMap(cols, {});
+    expect(Object.keys(map).sort()).toEqual(
+      cols.map((c) => c.visId).sort(),
+    );
+    for (const hex of Object.values(map)) {
+      expect(hex).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it("fewer than six visible columns use palette colors only", () => {
+    const map = buildHeaderColorMap(
+      [
+        { visId: "custom:a", label: "Alpha" },
+        { visId: "custom:b", label: "Beta" },
+      ],
+      {},
+    );
+    for (const hex of Object.values(map)) {
+      expect(HEADER_REFERENCE_PALETTE).toContain(hex);
+    }
+  });
+});
+
+describe("determinism and stability", () => {
+  const cols = [
+    { visId: "flow:name", label: "Name" },
+    { visId: "flow:phone", label: "Phone Number" },
+    { visId: "custom:a", label: "Assigned To" },
+    { visId: "custom:k", label: "Reason for Lost Lead" },
+    { visId: "custom:l", label: "Final Remark" },
   ];
 
-  it("every canonical column resolves a valid light pastel", () => {
-    for (const [visId, label] of canonicalOrder) {
-      const hex = defaultHeaderColor(visId, label);
-      expect(hex).toMatch(/^#[0-9a-f]{6}$/);
-      // Light: dark slate text must win the contrast pick.
-      expect(headerTextColor(hex)).toBe(HEADER_TEXT_DARK);
-    }
-  });
-
-  it("no two adjacent columns share a color", () => {
-    const colors = canonicalOrder.map(([v, l]) => defaultHeaderColor(v, l));
-    for (let i = 1; i < colors.length; i++) {
-      expect(colors[i]).not.toBe(colors[i - 1]);
-    }
-  });
-
-  it("matches the spec's example intent (blue/green/yellow/purple…)", () => {
-    expect(defaultHeaderColor("custom:x", "Assigned To")).toBe("#dbeafe");
-    expect(defaultHeaderColor("custom:x", "Call Status")).toBe("#dcfce7");
-    expect(defaultHeaderColor("custom:x", "Lead Quality")).toBe("#f3e8ff");
-    expect(defaultHeaderColor("lead_source", "Lead Source")).not.toBe(
-      defaultHeaderColor("custom:x", "Final Remark"),
+  it("same visible set always yields the same map", () => {
+    expect(buildHeaderColorMap(cols, {})).toEqual(
+      buildHeaderColorMap(cols, {}),
+    );
+    expect(defaultHeaderColor("flow:TravelDate", "TravelDate")).toBe(
+      defaultHeaderColor("flow:TravelDate", "TravelDate"),
     );
   });
 
-  it("dynamic columns get stable hash-ring colors (no hardcoding)", () => {
-    const a = defaultHeaderColor("flow:TravelDate", "TravelDate");
-    const b = defaultHeaderColor("flow:TravelDate", "TravelDate");
-    expect(a).toBe(b);
-    expect(HEADER_FALLBACK_PALETTE).toContain(a);
-    expect(defaultHeaderColor("custom:some-uuid", "My Tracker")).toBe(
-      defaultHeaderColor("custom:some-uuid", "My Tracker"),
+  it("appending a column never changes earlier columns' colors", () => {
+    const before = buildHeaderColorMap(cols, {});
+    const after = buildHeaderColorMap(
+      [...cols, { visId: "custom:newbie", label: "VIP Flag" }],
+      {},
     );
+    for (const col of cols) {
+      expect(after[col.visId]).toBe(before[col.visId]);
+    }
+  });
+
+  it("hiding a mapped column moves its color to a visible one, deterministically", () => {
+    const cols = [
+      { visId: "flow:name", label: "Name" },
+      { visId: "flow:phone", label: "Phone Number" },
+      { visId: "custom:a", label: "Assigned To" },
+      { visId: "custom:b", label: "Call Status" },
+      { visId: "custom:l", label: "Final Remark" },
+      { visId: "custom:j", label: "Next Action" },
+    ];
+    const withLost = buildHeaderColorMap(
+      [...cols, { visId: "custom:k", label: "Reason for Lost Lead" }],
+      {},
+    );
+    expect(withLost["custom:k"]).toBe(RED);
+    // Six visible columns, no Reason column: red is reassigned
+    // (not dropped) — same result every run.
+    const withoutLost = buildHeaderColorMap(cols, {});
+    expect(Object.values(withoutLost)).toContain(RED);
+    expect(withoutLost).toEqual(buildHeaderColorMap(cols, {}));
+    // Semantics survive the hide.
+    expect(withoutLost["flow:name"]).toBe(ORANGE);
+    expect(withoutLost["flow:phone"]).toBe(BLUE);
+    expect(withoutLost["custom:l"]).toBe(REMARK_GREEN);
   });
 });
 
 describe("normalizeHeaderColor", () => {
   it("accepts #rgb and #rrggbb in any case", () => {
-    expect(normalizeHeaderColor("#DBEAFE")).toBe("#dbeafe");
+    expect(normalizeHeaderColor("#6D9EEB")).toBe("#6d9eeb");
     expect(normalizeHeaderColor("  #abc ")).toBe("#aabbcc");
   });
 
@@ -93,10 +258,21 @@ describe("normalizeHeaderColor", () => {
   });
 });
 
-describe("12. readable text on configured colors", () => {
-  it("uses dark slate on every preset and every default", () => {
-    for (const hex of HEADER_COLOR_PRESETS) {
+describe("readable text on reference colors", () => {
+  it("uses dark slate on light palette entries, white on red", () => {
+    for (const hex of [GREEN, BLUE, ORANGE, TEAL, REMARK_GREEN]) {
       expect(headerTextColor(hex)).toBe(HEADER_TEXT_DARK);
+      expect(isDarkHeaderColor(hex)).toBe(false);
+    }
+    expect(headerTextColor(RED)).toBe(HEADER_TEXT_LIGHT);
+    expect(isDarkHeaderColor(RED)).toBe(true);
+  });
+
+  it("uses dark slate on every preset", () => {
+    for (const hex of HEADER_COLOR_PRESETS) {
+      expect(headerTextColor(hex)).toBe(
+        hex === RED ? HEADER_TEXT_LIGHT : HEADER_TEXT_DARK,
+      );
     }
     expect(isDarkHeaderColor("#dbeafe")).toBe(false);
   });
@@ -114,7 +290,7 @@ describe("12. readable text on configured colors", () => {
   });
 });
 
-describe("3/5. customize one column without affecting others", () => {
+describe("customize one column without affecting others", () => {
   it("custom override wins; siblings keep defaults", () => {
     const customs = { "custom:aaa": "#123456" };
     expect(resolveHeaderColor("custom:aaa", "Assigned To", customs)).toBe("#123456");
@@ -145,7 +321,7 @@ describe("3/5. customize one column without affecting others", () => {
   });
 });
 
-describe("6/7. visibility never disturbs colors", () => {
+describe("visibility never disturbs colors", () => {
   it("hidden → shown keeps the override (keyed by stable id)", () => {
     const customs = { "custom:aaa": "#123456" };
     // Simulate hide + show: the customs map is never filtered.
@@ -162,17 +338,11 @@ describe("6/7. visibility never disturbs colors", () => {
   });
 });
 
-describe("9/11. sticky headers keep their configured colors", () => {
-  it("pinned columns resolve distinct pastels like everyone else", () => {
-    const pinned: Array<[string, string]> = [
-      ["core:row", "Row"],
-      ["flow:submission_time", "Submission Time"],
-      ["flow:name", "Name"],
-      ["flow:phone", "Phone Number"],
-    ];
-    const colors = pinned.map(([v, l]) => resolveHeaderColor(v, l, {}));
-    expect(new Set(colors).size).toBe(colors.length);
-    for (const hex of colors) {
+describe("sticky headers keep their configured colors", () => {
+  it("pinned name/phone resolve their semantic colors with readable text", () => {
+    expect(resolveHeaderColor("flow:name", "Name", {})).toBe(ORANGE);
+    expect(resolveHeaderColor("flow:phone", "Phone Number", {})).toBe(BLUE);
+    for (const hex of [ORANGE, BLUE, GREEN]) {
       expect(headerTextColor(hex)).toBe(HEADER_TEXT_DARK);
     }
   });
@@ -183,7 +353,7 @@ describe("picker UI (Columns → color)", () => {
     return renderToStaticMarkup(
       <HeaderColorSwatches
         label="Assigned To"
-        defaultHex="#dbeafe"
+        defaultHex="#93c47d"
         custom={custom}
         takenColors={taken}
         onPick={() => {}}
@@ -204,18 +374,18 @@ describe("picker UI (Columns → color)", () => {
   });
 
   it("marks the active selection without locking anything", () => {
-    const html = render("#fbcfe8");
-    expect(html).toContain("#fbcfe8");
+    const html = render("#46bdc6");
+    expect(html).toContain("#46bdc6");
     expect(html).toContain("aria-pressed");
   });
 
   it("flags already-taken presets so duplicates are visibly blocked", () => {
-    const html = render(null, ["#fbcfe8"]);
+    const html = render(null, ["#46bdc6"]);
     expect(html).toContain("(already used)");
   });
 });
 
-describe("1/2. strict uniqueness — one color per visible column", () => {
+describe("uniqueness beyond the palette (overflow ring)", () => {
   const canonical: Array<{ visId: string; label: string }> = [
     { visId: "core:row", label: "Row" },
     { visId: "flow:submission_time", label: "Submission Time" },
@@ -240,7 +410,7 @@ describe("1/2. strict uniqueness — one color per visible column", () => {
     return Object.values(map);
   }
 
-  it("the whole pool is pairwise distinct (curated + generated)", () => {
+  it("the whole pool is pairwise distinct (reference + generated)", () => {
     expect(new Set(HEADER_COLOR_POOL).size).toBe(HEADER_COLOR_POOL.length);
     expect(new Set(HEADER_CURATED_DEFAULTS).size).toBe(
       HEADER_CURATED_DEFAULTS.length,
@@ -248,6 +418,15 @@ describe("1/2. strict uniqueness — one color per visible column", () => {
     for (const hex of HEADER_COLOR_POOL) {
       expect(hex).toMatch(/^#[0-9a-f]{6}$/);
     }
+  });
+
+  it("semantic columns keep their palette colors in a full workspace", () => {
+    const map = buildHeaderColorMap(canonical, {});
+    expect(map["flow:name"]).toBe(ORANGE);
+    expect(map["flow:phone"]).toBe(BLUE);
+    expect(map["custom:fff"]).toBe(TEAL);
+    expect(map["custom:lll"]).toBe(REMARK_GREEN);
+    expect(map["custom:kkk"]).toBe(RED);
   });
 
   it("every canonical column maps to a unique background", () => {
@@ -266,7 +445,7 @@ describe("1/2. strict uniqueness — one color per visible column", () => {
     expect(new Set(valuesOf(map)).size).toBe(canonical.length);
   });
 
-  it("3. a newly added column takes another unused color (nothing reused)", () => {
+  it("a newly added column takes another unused color (nothing reused)", () => {
     const before = buildHeaderColorMap(canonical, {});
     const extended = [
       ...canonical,
@@ -281,7 +460,7 @@ describe("1/2. strict uniqueness — one color per visible column", () => {
     }
   });
 
-  it("many dynamic columns stay unique (hash probe, not luck)", () => {
+  it("many dynamic columns stay unique (palette first, ring after)", () => {
     const cols = [
       ...canonical,
       ...Array.from({ length: 12 }, (_, i) => ({
@@ -303,11 +482,16 @@ describe("1/2. strict uniqueness — one color per visible column", () => {
     expect(new Set(valuesOf(map)).size).toBe(canonical.length);
   });
 
-  it("6. reset restores the column's unique fixed default", () => {
+  it("reset restores the set-determined color (deterministic, unique)", () => {
     const customized = buildHeaderColorMap(canonical, { "custom:aaa": "#123456" });
     expect(customized["custom:aaa"]).toBe("#123456");
     const reset = buildHeaderColorMap(canonical, {});
-    expect(reset["custom:aaa"]).toBe(defaultHeaderColor("custom:aaa", "Assigned To"));
+    // The single-column default is green, but inside this full set
+    // green is already taken (Row) so reassignment applies — reset
+    // must equal the fresh set resolution, whatever it is.
+    expect(reset["custom:aaa"]).toBe(
+      buildHeaderColorMap(canonical, {})["custom:aaa"],
+    );
     expect(new Set(valuesOf(reset)).size).toBe(canonical.length);
   });
 
@@ -318,7 +502,7 @@ describe("1/2. strict uniqueness — one color per visible column", () => {
   });
 });
 
-describe("2/10/13. taller headers, sticky intact, functionality intact", () => {
+describe("taller headers, sticky intact, functionality intact", () => {
   const root = process.cwd();
   const page = readFileSync(`${root}/src/app/(dashboard)/workspace/page.tsx`, "utf8");
 
@@ -363,7 +547,7 @@ describe("2/10/13. taller headers, sticky intact, functionality intact", () => {
   });
 });
 
-describe("14. Google Sheets is unaffected", () => {
+describe("Google Sheets is unaffected", () => {
   const root = process.cwd();
   it("sheets read paths reference none of the header-color work", () => {
     for (const rel of [

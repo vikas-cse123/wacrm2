@@ -116,39 +116,58 @@ export function normalizeRecipientPhone(value: unknown): string | null {
 }
 
 /**
- * Message shown when a number is dialable but carries no country
- * code (e.g. a bare 10-digit national number). Kept as a shared
- * constant so the profile form, the reminder dialog, and the API
- * reject with identical wording.
+ * Default country code applied when the entered number carries no
+ * country code (a bare 10-digit national number). Product market
+ * is India; never guessed for longer inputs.
  */
-export const AGENT_NUMBER_COUNTRY_CODE_MESSAGE =
-  "Enter your WhatsApp number with country code, e.g. +919876543210";
+export const AGENT_NUMBER_DEFAULT_COUNTRY_CODE = "91";
 
 /**
  * Strict agent-number normalization for Reminder delivery.
  *
  * Same canonical digits-only form as normalizeRecipientPhone,
- * PLUS an explicit country-code requirement: the number must be
- * 11–15 digits long. A bare national number (e.g. 10-digit
- * `9174158819`) is rejected even though it is dialable-looking —
- * Meta addressing without a country code is unreliable (the
- * production incident: sends accepted, never delivered), so the
- * app must not silently treat it as complete E.164.
+ * with one product rule: a bare 10-digit national number gets
+ * the India default (`91`) prepended, so `8737064453` stores and
+ * sends as `918737064453`. Numbers that already carry a country
+ * code (11–15 digits) pass through untouched — never
+ * double-prefixed. Anything else (missing / malformed / wrong
+ * length) returns null and callers fail closed.
  *
- * No country is ever guessed: the user must type the code
- * themselves. Returns null on any failure (missing / invalid /
- * country-code-less) — callers fail closed. Use
- * AGENT_NUMBER_COUNTRY_CODE_MESSAGE when the loose form passes
- * but this strict form fails.
- *
- * Examples: "9174158819" → null; "919174158819" → "919174158819".
+ * Examples: "8737064453" → "918737064453";
+ * "919174158819" → "919174158819";
+ * "+918737064453" → "918737064453".
  */
 export function normalizeAgentWhatsappNumber(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const sanitized = sanitizePhoneForMeta(value);
-  if (!sanitized || !isValidE164(sanitized)) return null;
+  let sanitized = sanitizePhoneForMeta(value);
+  if (!sanitized) return null;
+  // Bare national number → default India country code. Only the
+  // exact 10-digit shape qualifies; longer inputs are already
+  // international and must not be touched.
+  if (/^\d{10}$/.test(sanitized)) {
+    sanitized = `${AGENT_NUMBER_DEFAULT_COUNTRY_CODE}${sanitized}`;
+  }
+  if (!isValidE164(sanitized)) return null;
   if (sanitized.length < 11 || sanitized.length > 15) return null;
   return sanitized;
+}
+
+/**
+ * Display-only formatting for a stored (digits-only) reminder
+ * number. NEVER alters the stored value — the scheduler, API, and
+ * Settings all keep using the canonical digits form.
+ *
+ * Indian 12-digit numbers (`91` + 10 digits) render grouped as
+ * `+91 63874 95389`; any other all-digit value renders as
+ * `+<digits>`; non-digit input passes through untouched.
+ */
+export function formatAgentNumberForDisplay(value: unknown): string {
+  if (typeof value !== "string" || !value) return "";
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return value;
+  const inMatch = digits.match(/^91(\d{5})(\d{5})$/);
+  if (inMatch) return `+91 ${inMatch[1]} ${inMatch[2]}`;
+  return digits === value ? `+${digits}` : value;
 }
 
 /**

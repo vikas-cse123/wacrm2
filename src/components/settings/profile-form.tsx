@@ -6,7 +6,6 @@ import { Loader2, Upload, Trash2, Mail, CircleAlert } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
-import { normalizeAgentWhatsappNumber, normalizeRecipientPhone, AGENT_NUMBER_COUNTRY_CODE_MESSAGE } from '@/lib/followups/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,13 +37,6 @@ export function ProfileForm() {
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
-  // The agent's own WhatsApp number — the delivery target for
-  // personal Reminders. Loaded/saved separately from useAuth so a
-  // pre-migration schema (no column yet) degrades to "unsupported"
-  // instead of breaking the profile load.
-  const [whatsappNumber, setWhatsappNumber] = useState('');
-  const [savedWhatsappNumber, setSavedWhatsappNumber] = useState('');
-  const [whatsappSupported, setWhatsappSupported] = useState(false);
   const [pendingAvatar, setPendingAvatar] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
@@ -57,31 +49,6 @@ export function ProfileForm() {
     setFullName(profile.full_name ?? '');
     setEmail(profile.email ?? '');
   }, [profile]);
-
-  // Load the agent's own WhatsApp number (separate query so older
-  // schemas without the column leave the form fully working).
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    supabase
-      .from('profiles')
-      .select('whatsapp_number')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (cancelled || error || !data) return;
-        if (!Object.prototype.hasOwnProperty.call(data, 'whatsapp_number')) return;
-        setWhatsappSupported(true);
-        const current = (data as { whatsapp_number?: unknown }).whatsapp_number;
-        const asText = typeof current === 'string' ? current : '';
-        setWhatsappNumber(asText);
-        setSavedWhatsappNumber(asText);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
 
   // Cleanup object URLs to avoid leaks.
   useEffect(() => {
@@ -143,25 +110,7 @@ export function ProfileForm() {
       return;
     }
 
-    // WhatsApp number: empty = not set (allowed — reminders just
-    // fail closed until one is saved). Non-empty must normalize to
-    // a FULL E.164 number with an explicit country code; a bare
-    // national number is rejected, never silently accepted and
     // never inferred from anything else.
-    const trimmedNumber = whatsappNumber.trim();
-    let normalizedNumber: string | null = null;
-    if (whatsappSupported && trimmedNumber) {
-      normalizedNumber = normalizeAgentWhatsappNumber(trimmedNumber);
-      if (!normalizedNumber) {
-        toast.error(
-          normalizeRecipientPhone(trimmedNumber)
-            ? AGENT_NUMBER_COUNTRY_CODE_MESSAGE
-            : 'Enter a valid WhatsApp number, e.g. +919876543210',
-        );
-        return;
-      }
-    }
-
     setSaving(true);
     try {
       let nextAvatarUrl: string | null = profile.avatar_url ?? null;
@@ -189,16 +138,14 @@ export function ProfileForm() {
         nextAvatarUrl = null;
       }
 
-      // Persist name + avatar (+ WhatsApp number when supported)
-      // to profiles. Own row only — RLS forbids touching teammates.
+      // Persist name + avatar to profiles. Own row only — RLS
+      // forbids touching teammates. (The reminder WhatsApp number
+      // lives in Settings → WhatsApp now, not here.)
       const { error: updateError } = await supabase
         .from('profiles')
         .update({
           full_name: trimmedName,
           avatar_url: nextAvatarUrl,
-          ...(whatsappSupported
-            ? { whatsapp_number: normalizedNumber }
-            : {}),
         })
         .eq('user_id', user.id);
       if (updateError) {
@@ -231,11 +178,6 @@ export function ProfileForm() {
       setPreviewUrl(null);
       setRemoveAvatar(false);
       await refreshProfile();
-      if (whatsappSupported) {
-        const saved = normalizedNumber ?? '';
-        setWhatsappNumber(saved);
-        setSavedWhatsappNumber(saved);
-      }
 
       toast.success(
         emailSent
@@ -254,7 +196,6 @@ export function ProfileForm() {
     !!profile &&
     (fullName.trim() !== (profile.full_name ?? '') ||
       email.trim().toLowerCase() !== (profile.email ?? '').toLowerCase() ||
-      (whatsappSupported && whatsappNumber.trim() !== savedWhatsappNumber.trim()) ||
       pendingAvatar !== null ||
       removeAvatar);
 
@@ -361,29 +302,6 @@ export function ProfileForm() {
               </p>
             )}
           </div>
-
-          {/* WhatsApp number — the agent's own number, used as the
-              delivery target for personal Reminders. Self-service
-              only; teammates cannot edit each other's rows. */}
-          {whatsappSupported && (
-            <div className="space-y-2">
-              <Label htmlFor="profile-whatsapp" className="text-foreground">
-                WhatsApp number
-              </Label>
-              <Input
-                id="profile-whatsapp"
-                type="tel"
-                value={whatsappNumber}
-                onChange={(e) => setWhatsappNumber(e.target.value)}
-                placeholder="+91XXXXXXXXXX"
-                disabled={saving}
-                autoComplete="tel"
-              />
-              <p className="text-xs text-muted-foreground">
-                This number receives your WhatsApp reminders.
-              </p>
-            </div>
-          )}
 
           {/* Read-only block */}
           <div className="rounded-lg border border-border bg-muted p-4">

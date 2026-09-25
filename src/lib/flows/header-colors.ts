@@ -1,35 +1,40 @@
 // ============================================================
 // Workspace header colors — pure model (no React, no I/O).
 //
-// STRICT RULE: every visible column gets its OWN header
-// background — never the same color twice. Uniqueness is
-// enforced set-aware by buildHeaderColorMap (one pass over the
-// visible columns): stored customs win first (first-wins in
-// visible order), then fixed preferred defaults, then a probe
-// over the shared pool. A duplicate custom can only arrive via
-// a raced write — the API rejects those with 409 and the picker
-// blocks them with an explicit message, so the resolver's
-// first-wins fallback is pure defense.
+// EXACT reference palette (never approximated):
+//   #93c47d  default / remaining business column (green)
+//   #6d9eeb  Phone Number (blue)
+//   #ff9900  Name (orange)
+//   #46bdc6  Follow-Up Status / Follow Up (teal)
+//   #34a853  Final Remark (green)
+//   #ea4335  Reason for Lost Lead (red)
 //
-// Default resolution per column (stable across hide/show and
-// reload — fixed identities never depend on the visible set):
-//   1. known visibility id  → curated pastel (core + lead source)
-//   2. known business name  → curated pastel (the 12 default
-//      Workspace columns, matched case-insensitively by label)
-//   3. otherwise            → deterministic hash pick from the
-//      fallback pastel ring (dynamic flow answers, new custom
-//      fields — no per-column hardcoding)
+// Resolution per visible set (deterministic, stable):
+//   1. stored custom overrides win first (first-wins in
+//      visible order — the API rejects duplicate customs with
+//      409 and the picker blocks them, so first-wins is pure
+//      defense);
+//   2. semantic palette matches (phone/name/follow-up/remark/
+//      lost) when the color is still free;
+//   3. UNUSED palette colors are reassigned, in palette order,
+//      to the remaining columns in visible order — so a mapped
+//      color never disappears just because its column is absent
+//      from this flow (e.g. no "Reason for Lost Lead" column:
+//      #ea4335 still paints another visible column);
+//   4. beyond six non-custom columns, a deterministic generated
+//      ring supplies overflow hues (columns outnumber palette
+//      slots; uniqueness is preserved, no randomness).
 //
-// All 17 curated defaults are pairwise distinct, and every
-// fallback entry is generated (golden-angle hues at fixed
-// pastel saturation/lightness) to collide with nothing —
-// verified by test, not by eyeballing.
+// Appending a column never changes an earlier column's color;
+// customs never move; the same (visId, label) always resolves
+// the same default.
 //
 // Text contrast (WCAG): the header text color is picked per
-// background by contrast ratio — dark slate on pastels, white
-// on dark custom picks — so readability never depends on the
-// user choosing "correctly". Color is decorative only; labels
-// and structure carry all information.
+// background by contrast ratio — dark slate on light
+// backgrounds, white on dark ones (e.g. #ea4335) — so
+// readability never depends on the background. Backgrounds are
+// flat fills only: no gradients, no heavy borders. Color is
+// decorative only; labels and structure carry all information.
 //
 // No member names, emails, UUIDs, or roles are hardcoded here.
 // ============================================================
@@ -39,36 +44,31 @@ export const HEADER_TEXT_DARK = "#1e293b";
 /** White header text for dark custom backgrounds. */
 export const HEADER_TEXT_LIGHT = "#ffffff";
 
-/** Curated defaults for stable visibility ids (core + lead source). */
-const KNOWN_VIS_ID_DEFAULTS: Readonly<Record<string, string>> = {
-  "core:row": "#f1f5f9",
-  "flow:submission_time": "#e0f2fe",
-  "flow:name": "#fef9c3",
-  "flow:phone": "#fce7f3",
-  lead_source: "#ccfbf1",
-};
-
-/** Curated defaults for the 12 default business columns (by lowercase label). */
-const KNOWN_NAME_DEFAULTS: Readonly<Record<string, string>> = {
-  "assigned to": "#dbeafe",
-  "call status": "#dcfce7",
-  "no. of calls tried": "#fde68a",
-  "lead quality": "#f3e8ff",
-  "quotation / package": "#ffedd5",
-  "follow-up status": "#fbcfe8",
-  "last contact date": "#cffafe",
-  "customer response": "#ede9fe",
-  "next follow-up date & time": "#fef3c7",
-  "next action": "#d1fae5",
-  "reason for lost lead": "#ffe4e6",
-  "final remark": "#ecfccb",
-};
-
-/** Every curated default, exported for the pairwise-uniqueness test. */
-export const HEADER_CURATED_DEFAULTS: readonly string[] = [
-  ...Object.values(KNOWN_VIS_ID_DEFAULTS),
-  ...Object.values(KNOWN_NAME_DEFAULTS),
+/**
+ * Exact reference palette, in sequential fallback order. Lowercase
+ * #rrggbb — the ONLY backgrounds the default assignment may use.
+ */
+export const HEADER_REFERENCE_PALETTE: readonly string[] = [
+  "#93c47d", // default / remaining business column
+  "#6d9eeb", // Phone Number
+  "#ff9900", // Name
+  "#46bdc6", // Follow-Up Status / Follow Up
+  "#34a853", // Final Remark
+  "#ea4335", // Reason for Lost Lead
 ];
+
+/** Default / remaining business column background. */
+export const HEADER_REFERENCE_DEFAULT = "#93c47d";
+/** Phone Number column background. */
+export const HEADER_REFERENCE_PHONE = "#6d9eeb";
+/** Name column background. */
+export const HEADER_REFERENCE_NAME = "#ff9900";
+/** Follow-Up Status / Follow Up column background. */
+export const HEADER_REFERENCE_FOLLOW_UP = "#46bdc6";
+/** Final Remark column background. */
+export const HEADER_REFERENCE_FINAL_REMARK = "#34a853";
+/** Reason for Lost Lead column background. */
+export const HEADER_REFERENCE_LOST_REASON = "#ea4335";
 
 /** hsl(degrees, %, %) → lowercase #rrggbb. */
 function hslToHex(h: number, s: number, l: number): string {
@@ -97,9 +97,9 @@ export const HEADER_FALLBACK_PALETTE: readonly string[] = Array.from(
   (_, i) => hslToHex(i * 137.5, 62, 87),
 );
 
-/** Full strict-uniqueness pool: curated first, fallback after. */
+/** Full pool: reference palette first, generated ring after. */
 export const HEADER_COLOR_POOL: readonly string[] = [
-  ...HEADER_CURATED_DEFAULTS,
+  ...HEADER_REFERENCE_PALETTE,
   ...HEADER_FALLBACK_PALETTE,
 ];
 
@@ -113,23 +113,17 @@ export function overflowHeaderColor(n: number): string {
 }
 
 /**
- * Preset swatches offered in the picker. Light/enterprise only —
- * arbitrary (incl. dark) colors remain available via the custom
- * native color input, with auto text contrast.
+ * Preset swatches offered in the picker: exactly the reference
+ * palette. Arbitrary (incl. dark) colors remain available via
+ * the custom native color input, with auto text contrast.
  */
 export const HEADER_COLOR_PRESETS: readonly string[] = [
-  "#dbeafe",
-  "#dcfce7",
-  "#fde68a",
-  "#f3e8ff",
-  "#ffedd5",
-  "#fbcfe8",
-  "#cffafe",
-  "#ede9fe",
-  "#fef3c7",
-  "#d1fae5",
-  "#ffe4e6",
-  "#ecfccb",
+  ...HEADER_REFERENCE_PALETTE,
+];
+
+/** Every reference color, exported for the pairwise-uniqueness test. */
+export const HEADER_CURATED_DEFAULTS: readonly string[] = [
+  ...HEADER_REFERENCE_PALETTE,
 ];
 
 /** djb2 — deterministic, no dependencies. */
@@ -141,27 +135,56 @@ function hashString(value: string): number {
   return h;
 }
 
-/** Fixed preferred default, or null for dynamic columns. */
-function preferredDefaultColor(visId: string, label: string): string | null {
-  const known = KNOWN_VIS_ID_DEFAULTS[visId];
-  if (known) return known;
-  const byName =
-    KNOWN_NAME_DEFAULTS[typeof label === "string" ? label.trim().toLowerCase() : ""];
-  return byName ?? null;
+/**
+ * Semantic reference color for a column, or null when the column
+ * carries no mapped meaning. Matching is case-insensitive on the
+ * trimmed label, plus the two stable flow field ids:
+ *   - Phone Number ("Phone No", "Phone Number", …) → blue
+ *   - Name → orange
+ *   - Follow-Up Status / Follow Up (exactly the status field —
+ *     NOT "Next Follow-up Date & Time") → teal
+ *   - Final Remark → green
+ *   - Reason for Lost Lead / Reason of Lost → red
+ */
+function semanticReferenceColor(visId: string, label: string): string | null {
+  if (visId === "flow:phone") return HEADER_REFERENCE_PHONE;
+  if (visId === "flow:name") return HEADER_REFERENCE_NAME;
+  const name = typeof label === "string" ? label.trim().toLowerCase() : "";
+  if (name.includes("phone")) return HEADER_REFERENCE_PHONE;
+  if (name === "name") return HEADER_REFERENCE_NAME;
+  if (
+    name === "follow up" ||
+    name.includes("follow-up status") ||
+    name.includes("follow up status")
+  ) {
+    return HEADER_REFERENCE_FOLLOW_UP;
+  }
+  if (name.includes("final remark")) return HEADER_REFERENCE_FINAL_REMARK;
+  if (
+    name.includes("reason for lost lead") ||
+    name.includes("reason of lost")
+  ) {
+    return HEADER_REFERENCE_LOST_REASON;
+  }
+  return null;
+}
+
+/** Fixed preferred default: semantic match, else the default green. */
+function preferredDefaultColor(visId: string, label: string): string {
+  return semanticReferenceColor(visId, label) ?? HEADER_REFERENCE_DEFAULT;
 }
 
 /**
  * Default header background for one column. Pure + stable:
- * same (visId, label) always yields the same color. NOTE: for
- * the strict no-duplicates guarantee across a visible set, use
- * buildHeaderColorMap — this single-column form cannot see its
- * neighbours (kept for previews/fallbacks).
+ * same (visId, label) always yields the same color — the
+ * semantic reference color when the column carries mapped
+ * meaning, else the default green. NOTE: set-wide palette
+ * reuse (unused mapped colors reassigned to visible columns)
+ * lives in buildHeaderColorMap — this single-column form cannot
+ * see its neighbours (kept for previews/fallbacks).
  */
 export function defaultHeaderColor(visId: string, label: string): string {
-  return (
-    preferredDefaultColor(visId, label) ??
-    HEADER_FALLBACK_PALETTE[hashString(visId) % HEADER_FALLBACK_PALETTE.length]
-  );
+  return preferredDefaultColor(visId, label);
 }
 
 export interface HeaderColumnRef {
@@ -170,18 +193,22 @@ export interface HeaderColumnRef {
 }
 
 /**
- * Effective header backgrounds for a visible column set — EVERY
- * value unique, guaranteed while the pool covers the set (41
- * slots) and probed overflow beyond that:
+ * Effective header backgrounds for a visible column set:
  *
  *   1. valid stored customs, first-wins in visible order
  *      (a duplicated custom — only possible via a raced write
  *      the API now rejects — falls back to a free default);
- *   2. fixed preferred defaults for known columns, when free;
- *   3. pool probe from a hash start, then overflow hues.
+ *   2. semantic reference colors for mapped columns, when free;
+ *   3. UNUSED reference palette colors, in palette order,
+ *      assigned to the remaining columns in visible order — a
+ *      mapped color never disappears just because its column is
+ *      absent from this flow;
+ *   4. beyond the six palette slots, the deterministic
+ *      generated ring, then overflow hues.
  *
- * Appending a column never changes an earlier fixed column's
- * color; customs never move.
+ * Deterministic: same visible set (+ customs) always yields the
+ * same map. Appending a column never changes an earlier fixed
+ * column's color; customs never move.
  */
 export function buildHeaderColorMap(
   columns: ReadonlyArray<HeaderColumnRef>,
@@ -213,10 +240,10 @@ export function buildHeaderColorMap(
     needy.push(i);
   });
 
-  // Pass 2 — fixed preferred defaults, when still free.
+  // Pass 2 — semantic reference colors, when still free.
   const stillNeedy: number[] = [];
   for (const i of needy) {
-    const pref = preferredDefaultColor(columns[i].visId, columns[i].label);
+    const pref = semanticReferenceColor(columns[i].visId, columns[i].label);
     if (pref !== null && !used.has(pref)) {
       take(columns[i].visId, pref);
     } else {
@@ -224,16 +251,25 @@ export function buildHeaderColorMap(
     }
   }
 
-  // Pass 3 — pool probe from a hash start, overflow beyond that.
+  // Pass 3 — unused palette colors in palette order, assigned in
+  // visible order; then the generated ring; then overflow hues.
   for (const i of stillNeedy) {
     const col = columns[i];
-    const start = hashString(col.visId) % HEADER_COLOR_POOL.length;
     let pick: string | null = null;
-    for (let k = 0; k < HEADER_COLOR_POOL.length; k++) {
-      const cand = HEADER_COLOR_POOL[(start + k) % HEADER_COLOR_POOL.length];
+    for (const cand of HEADER_REFERENCE_PALETTE) {
       if (!used.has(cand)) {
         pick = cand;
         break;
+      }
+    }
+    if (pick === null) {
+      const start = hashString(col.visId) % HEADER_COLOR_POOL.length;
+      for (let k = 0; k < HEADER_COLOR_POOL.length; k++) {
+        const cand = HEADER_COLOR_POOL[(start + k) % HEADER_COLOR_POOL.length];
+        if (!used.has(cand)) {
+          pick = cand;
+          break;
+        }
       }
     }
     let n = 0;
@@ -264,7 +300,7 @@ export function normalizeHeaderColor(value: unknown): string {
     return `#${r}${r}${g}${g}${b}${b}`;
   }
   if (/^#[0-9a-f]{6}$/.test(trimmed)) return trimmed;
-  throw new Error("Color must be a hex value like #dbeafe.");
+  throw new Error("Color must be a hex value like #6d9eeb.");
 }
 
 function hexToRgb(hex: string): [number, number, number] {

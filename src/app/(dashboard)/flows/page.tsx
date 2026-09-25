@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 
 import { useCan } from "@/hooks/use-can";
-import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
 import {
@@ -33,7 +32,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { CopyFlowDialog } from "@/components/flows/copy-flow-dialog";
 import { parseNewFlowInput } from "@/lib/flows/new-flow-input";
 import { cn } from "@/lib/utils";
 
@@ -88,13 +86,12 @@ const TEMPLATE_ICONS = {
 export default function FlowsPage() {
   const router = useRouter();
   const canCreate = useCan("send-messages");
-  const { account } = useAuth();
   const [flows, setFlows] = useState<FlowRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [copyFlow, setCopyFlow] = useState<FlowRow | null>(null);
+  const [copyingId, setCopyingId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
 
   useEffect(() => {
@@ -247,6 +244,31 @@ export default function FlowsPage() {
     }
   }
 
+  // Copy straight into the current account — no account picker, no
+  // confirmation. The duplicate endpoint resolves tenancy from the
+  // authenticated session, exactly like every other flows API call.
+  async function handleCopyFlow(flow: FlowRow) {
+    if (copyingId !== null) return;
+    setCopyingId(flow.id);
+    try {
+      const res = await fetch(`/api/flows/${flow.id}/duplicate`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(
+          typeof json.error === "string" ? json.error : `Copy failed: ${res.status}`,
+        );
+      }
+      toast.success("Flow copied successfully.");
+      await refreshFlows();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't copy flow.");
+    } finally {
+      setCopyingId(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -266,8 +288,7 @@ export default function FlowsPage() {
             </span> */}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Build branching, button-driven WhatsApp conversations. Useful for
-            menus, FAQs, and triage before a human steps in.
+           Automate lead conversations on WhatsApp from first response to qualification and handoff.
           </p>
         </div>
         <GatedButton
@@ -292,7 +313,8 @@ export default function FlowsPage() {
               key={flow.id}
               flow={flow}
               onEdit={() => router.push(`/flows/${flow.id}`)}
-              onCopy={() => setCopyFlow(flow)}
+              onCopy={() => void handleCopyFlow(flow)}
+              copying={copyingId === flow.id}
               onDelete={() => handleDelete(flow)}
             />
           ))}
@@ -376,18 +398,6 @@ export default function FlowsPage() {
         </DialogContent>
       </Dialog>
 
-      <CopyFlowDialog
-        open={copyFlow !== null}
-        onOpenChange={(open) => {
-          if (!open) setCopyFlow(null);
-        }}
-        flow={copyFlow}
-        accounts={
-          account ? [{ id: account.id, name: account.name }] : []
-        }
-        currentAccountId={account?.id ?? null}
-        onCopiedInCurrentAccount={() => void refreshFlows()}
-      />
     </div>
   );
 }
@@ -429,11 +439,13 @@ function FlowCard({
   flow,
   onEdit,
   onCopy,
+  copying,
   onDelete,
 }: {
   flow: FlowRow;
   onEdit: () => void;
   onCopy: () => void;
+  copying: boolean;
   onDelete: () => void;
 }) {
   const triggerSummary = describeTrigger(flow);
@@ -484,8 +496,13 @@ function FlowCard({
           variant="ghost"
           size="sm"
           onClick={onCopy}
+          disabled={copying}
         >
-          <Copy className="h-3.5 w-3.5" />
+          {copying ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
           Copy
         </Button>
         <Button

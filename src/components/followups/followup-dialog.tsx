@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Check, Loader2 } from "lucide-react";
@@ -20,25 +20,21 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import {
   FOLLOWUP_MESSAGE_MAX,
-  AGENT_NUMBER_COUNTRY_CODE_MESSAGE,
+  formatAgentNumberForDisplay,
   normalizeAgentWhatsappNumber,
-  normalizeRecipientPhone,
   type Followup,
 } from "@/lib/followups/types";
 
-interface ContactOption {
-  id: string;
-  name: string | null;
-  phone: string;
-}
-
 /**
  * Create / edit a reminder. The reminder is delivered TO THE
- * CREATOR's own stored WhatsApp number (`profiles.whatsapp_number`,
- * snapshotted at creation) FROM the already-connected WhatsApp
- * Business number, shown read-only. The customer is optional
- * context only and never the recipient — there is no "send to"
- * selector because the recipient is always the creator.
+ * CREATOR's current Reminder WhatsApp Number
+ * (`profiles.whatsapp_number`, re-read from the database on every
+ * open and snapshotted by the server at creation) FROM the
+ * already-connected WhatsApp Business number. The connected
+ * Business number is the SENDER only and is never used as the
+ * recipient display. There is no customer field: a reminder has
+ * no recipient selector because the recipient is always the
+ * creator's saved number.
  */
 
 function toLocalInputValue(iso: string): { date: string; time: string } {
@@ -52,9 +48,10 @@ function toLocalInputValue(iso: string): { date: string; time: string } {
 }
 
 /**
- * Create / edit a reminder. The contact picker is optional context
- * (personal reminders have no customer); the sender is the
- * already-connected WhatsApp Business number, shown read-only.
+ * Create / edit a reminder. No customer field: the sender is the
+ * already-connected WhatsApp Business number (shown read-only)
+ * and the recipient is always the creator's saved Reminder
+ * WhatsApp Number.
  */
 export function FollowupDialog({
   open,
@@ -67,12 +64,6 @@ export function FollowupDialog({
   editing: Followup | null;
   onSaved: () => void;
 }) {
-  const [contactQuery, setContactQuery] = useState("");
-  const [contactOptions, setContactOptions] = useState<ContactOption[]>([]);
-  const [contactSearching, setContactSearching] = useState(false);
-  const [contactOpen, setContactOpen] = useState(false);
-  const [contactId, setContactId] = useState<string | null>(null);
-  const [contactLabel, setContactLabel] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [message, setMessage] = useState("");
@@ -80,33 +71,30 @@ export function FollowupDialog({
   // Fetched separately (not via useAuth) so a pre-migration schema
   // degrades to the blocking state instead of breaking the dialog.
     const [agentNumber, setAgentNumber] = useState<string | null>(null);
-    const [agentNumberIssue, setAgentNumberIssue] = useState<"missing" | "country-code" | null>(null);
   const [agentNumberLoading, setAgentNumberLoading] = useState(true);
   const [senderLine, setSenderLine] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { user } = useAuth();
 
   useEffect(() => {
     if (!open) return;
     if (editing) {
-      setContactId(editing.contact_id);
-      setContactLabel("");
       const local = toLocalInputValue(editing.scheduled_for);
       setDate(local.date);
       setTime(local.time);
       setMessage(editing.message_text);
     } else {
-      setContactId(null);
-      setContactLabel("");
-      setContactQuery("");
       setDate("");
       setTime("");
       setMessage("");
     }
-    setContactOptions([]);
-    // Recipient check: the creator's own number. Missing/invalid =
-    // blocking state (the server also fails closed on save).
+    // Recipient: the creator's CURRENT Reminder WhatsApp Number
+    // (`profiles.whatsapp_number` — the same field Settings →
+    // Reminder WhatsApp Number reads and writes). Re-fetched on
+    // every open and reset first so a previously loaded value can
+    // never linger after the user saves a new number in Settings.
+    // Missing/invalid = blocking state (the server also fails
+    // closed on save).
     setAgentNumberLoading(true);
     setAgentNumber(null);
     const supabase = createClient();
@@ -122,27 +110,19 @@ export function FollowupDialog({
           ({ data, error }) => {
             if (error || !data) {
               setAgentNumber(null);
-              setAgentNumberIssue("missing");
             } else {
-              const raw = (data as { whatsapp_number?: unknown }).whatsapp_number;
-              const strict = normalizeAgentWhatsappNumber(raw);
-              setAgentNumber(strict);
-              // A stored number without a country code can no longer
-              // deliver reliably: block with the specific fix prompt.
-              // Never fall back to anything else.
-              setAgentNumberIssue(
-                strict !== null
-                  ? null
-                  : normalizeRecipientPhone(raw) !== null
-                    ? "country-code"
-                    : "missing",
+              // Strict normalization applies the +91 default for
+              // bare 10-digit numbers; null blocks submission.
+              setAgentNumber(
+                normalizeAgentWhatsappNumber(
+                  (data as { whatsapp_number?: unknown }).whatsapp_number,
+                ),
               );
             }
             setAgentNumberLoading(false);
           },
           () => {
             setAgentNumber(null);
-            setAgentNumberIssue("missing");
             setAgentNumberLoading(false);
           },
         );
@@ -168,49 +148,12 @@ export function FollowupDialog({
       .catch(() => setSenderLine(null));
   }, [open, editing, user?.id]);
 
-  useEffect(() => {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    const q = contactQuery.trim();
-    if (q.length < 2) {
-      setContactOptions([]);
-      setContactSearching(false);
-      return;
-    }
-    setContactSearching(true);
-    searchTimer.current = setTimeout(async () => {
-      try {
-        const supabase = createClient();
-        const like = `%${q}%`;
-        const { data } = await supabase
-          .from("contacts")
-          .select("id, name, phone")
-          .or(`name.ilike.${like},phone.ilike.${like}`)
-          .order("name")
-          .limit(10);
-        setContactOptions((data ?? []) as ContactOption[]);
-      } catch {
-        setContactOptions([]);
-      } finally {
-        setContactSearching(false);
-      }
-    }, 300);
-    return () => {
-      if (searchTimer.current) clearTimeout(searchTimer.current);
-    };
-  }, [contactQuery]);
-
-  const pickContact = useCallback((c: ContactOption) => {
-    setContactId(c.id);
-    setContactLabel(`${c.name || c.phone} · ${c.phone}`);
-    setContactOpen(false);
-  }, []);
-
   const scheduledISO = date && time ? new Date(`${date}T${time}`) : null;
   const scheduledValid =
     scheduledISO !== null &&
     !Number.isNaN(scheduledISO.getTime()) &&
     scheduledISO.getTime() > Date.now();
-  // Customer is optional; the recipient is always the creator, so a
+  // The recipient is always the creator's saved number, so a
   // missing agent number blocks submission (fail closed).
   const canSubmit =
     !saving &&
@@ -225,7 +168,8 @@ export function FollowupDialog({
     setSaving(true);
     try {
       const payload = {
-        contact_id: contactId,
+        // No customer field: creation never attaches a contact.
+        contact_id: null,
         scheduled_for: scheduledISO.toISOString(),
         message_text: message.trim(),
         // New reminders are text-only. Preserve any template stored
@@ -264,99 +208,18 @@ export function FollowupDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4">
-          {!agentNumberLoading && agentNumberIssue !== null && (
+          {!agentNumberLoading && agentNumber === null && (
             <p
               role="alert"
               className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
             >
-              {agentNumberIssue === "country-code" ? (
-                <>{AGENT_NUMBER_COUNTRY_CODE_MESSAGE} Update it in{" "}
-                <Link href="/settings?tab=profile" className="font-medium underline">
-                  Settings → Your profile
-                </Link>
-                .</>
-              ) : (
-                <>Add your WhatsApp number in{" "}
-                <Link href="/settings?tab=profile" className="font-medium underline">
-                  Settings → Your profile
-                </Link>{" "}
-                before creating a reminder.</>
-              )}
+              Add your WhatsApp number in{" "}
+              <Link href="/settings?tab=reminder-number" className="font-medium underline">
+                Settings → Reminder WhatsApp Number
+              </Link>{" "}
+              before creating a reminder.
             </p>
           )}
-          <div className="grid gap-2">
-            <Label>
-              Customer <span className="font-normal text-muted-foreground">(optional)</span>
-            </Label>
-            {contactId ? (
-              <div className="flex items-center justify-between rounded-lg border border-border bg-muted px-3 py-2 text-sm">
-                <span className="truncate text-foreground">{contactLabel || "Selected contact"}</span>
-                <span className="flex shrink-0 gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setContactId(null);
-                      setContactLabel("");
-                    }}
-                  >
-                    Remove
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setContactId(null);
-                      setContactLabel("");
-                      setContactOpen(true);
-                    }}
-                  >
-                    Change
-                  </Button>
-                </span>
-              </div>
-            ) : (
-              <div className="relative">
-                <Input
-                  value={contactQuery}
-                  onChange={(e) => {
-                    setContactQuery(e.target.value);
-                    setContactOpen(true);
-                  }}
-                  onFocus={() => setContactOpen(true)}
-                  placeholder="Search by name or phone…"
-                  autoComplete="off"
-                  aria-label="Search contacts"
-                />
-                {contactOpen && (contactOptions.length > 0 || contactSearching) && (
-                  <div className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-border bg-popover shadow-md">
-                    {contactSearching && contactOptions.length === 0 ? (
-                      <p className="px-3 py-2 text-sm text-muted-foreground">Searching…</p>
-                    ) : (
-                      contactOptions.map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => pickContact(c)}
-                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
-                        >
-                          <span className="truncate text-foreground">
-                            {c.name || c.phone}
-                          </span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {c.phone}
-                          </span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label htmlFor="fu-date">Date</Label>
@@ -379,9 +242,9 @@ export function FollowupDialog({
               />
             </div>
           </div>
-          <p className="-mt-2 text-xs text-muted-foreground">
+          {/* <p className="-mt-2 text-xs text-muted-foreground">
             Uses your device timezone.
-          </p>
+          </p> */}
 
           <div className="grid gap-2">
             <div className="flex items-baseline justify-between">
@@ -399,12 +262,23 @@ export function FollowupDialog({
             />
           </div>
 
-          <div className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm">
-            <span className="text-muted-foreground">Send from · </span>
-            <span className="font-medium text-foreground">
-              {senderLine ?? "WhatsApp Business (connect in Settings)"}
-            </span>
-            <span className="text-muted-foreground"> to your WhatsApp number</span>
+          <div className="space-y-0.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm">
+            <div>
+              <span className="text-muted-foreground">Send from · </span>
+              <span className="font-medium text-foreground">
+                {senderLine ?? "WhatsApp Business (connect in Settings)"}
+              </span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Send to · </span>
+              <span className="font-medium text-foreground">
+                {agentNumberLoading
+                  ? "Loading…"
+                  : agentNumber
+                    ? formatAgentNumberForDisplay(agentNumber)
+                    : "Set your number in Settings → Reminder WhatsApp Number"}
+              </span>
+            </div>
           </div>
 
           <DialogFooter>

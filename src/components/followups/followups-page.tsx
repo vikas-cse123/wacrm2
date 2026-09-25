@@ -136,8 +136,7 @@ export function FollowupsPage() {
             WhatsApp Reminders
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Personal reminders delivered to your WhatsApp number from your
-            connected WhatsApp number.
+            Personal reminders delivered to your WhatsApp number
           </p>
         </div>
         {canSendMessages && (
@@ -204,22 +203,9 @@ export function FollowupsPage() {
                 : `No ${tab} reminders`}
             </p>
             <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-              Add an optional customer for context, choose a date and time,
-              write the message — WACRM delivers it to your WhatsApp number.
+              Choose a date and time, write the message — WACRM delivers it
+              to your WhatsApp number.
             </p>
-            {canSendMessages && tab === "scheduled" && (
-              <Button
-                type="button"
-                className="mt-4"
-                onClick={() => {
-                  setEditing(null);
-                  setDialogOpen(true);
-                }}
-              >
-                <Plus className="h-4 w-4" />
-                New Reminder
-              </Button>
-            )}
           </Card>
         ) : (
           <div className="grid gap-3">
@@ -248,15 +234,15 @@ export function FollowupsPage() {
                   {f.status === "sent" && f.sent_at && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       Sent {formatWhen(f.sent_at)}
-                      {/* Secondary delivery receipts only — the Sent
-                          badge itself still means Meta acceptance.
-                          NULL receipts imply nothing (no callback
-                          yet, or a pre-reconciliation row). */}
+                      {/* Delivery state is explicit: the Sent badge
+                          itself means Meta acceptance only. NULL
+                          receipts imply nothing yet (no callback) —
+                          never render those as confirmed delivery. */}
                       {f.read_at
                         ? ` · Read ${formatWhen(f.read_at)}`
                         : f.delivered_at
                           ? ` · Delivered ${formatWhen(f.delivered_at)}`
-                          : ""}
+                          : " · accepted by Meta, delivery not yet confirmed"}
                     </p>
                   )}
                 </div>

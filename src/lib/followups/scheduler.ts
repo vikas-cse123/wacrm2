@@ -3,7 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   SendMessageError,
   sendReminderToAgent,
+  sendReminderViaTemplate,
 } from '@/lib/followups/reminder-send';
+import { normalizeAgentWhatsappNumber } from '@/lib/followups/types';
+import { persistReminderOutboundMessage } from '@/lib/whatsapp/send-message';
 
 // ============================================================
 // Reminder scheduler: claim due rows and deliver each reminder TO
@@ -12,16 +15,30 @@ import {
 // Business number. Mirrors the automations-cron claim pattern
 // (status flip = lock, affected-row check = ownership).
 //
+// Send selection per attempt: when the agent's number messaged
+// the business within the last 24 hours, the reminder goes as
+// free text; otherwise it goes through the account's configured
+// APPROVED fallback template (`{{1}}` = reminder text). Either
+// way the destination is ALWAYS the row's `recipient_phone`
+// snapshot — nothing may override it.
+//
 // A reminder is personal, not a customer message, so this path
-// deliberately avoids everything customer-related:
-//   - no contact / conversation lookup or creation,
-//   - no customer `messages` row, no preview mutation,
-//   - no flow-run pausing, no contact phone auto-correct,
-//   - no 24-hour customer-service window, no template fallback.
+// still avoids everything customer-related:
+//   - no customer contact / conversation lookup or creation (the
+//     Inbox thread below resolves from the RECIPIENT phone only),
+//   - no flow-run pausing, no contact phone auto-correct.
 // The destination is ALWAYS the row's `recipient_phone` snapshot;
 // nothing may override it (not latest messages, assignment, or
 // profile state — a later profile-number change does not alter
 // already-created reminders).
+//
+// Inbox visibility: after a successful Meta send, the reminder is
+// persisted as a normal outbound `messages` row on the recipient's
+// own thread (created via the standard contact/conversation
+// helpers), so the Inbox shows it like any business-sent message
+// and the status webhook advances it sent → delivered → read on
+// the same row. Persistence is best-effort and idempotent on the
+// wamid — it never changes the reminder's own sent/failed outcome.
 //
 // Idempotency: a row is only processed after an atomic
 // scheduled→processing flip affecting exactly that row; already-sent
@@ -31,6 +48,8 @@ import {
 
 export const FOLLOWUP_BATCH_LIMIT = 25;
 export const FOLLOWUP_MAX_ATTEMPTS = 3;
+/** 24-hour customer-service window for free-text sends. */
+export const REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Crashed-worker reclaim horizon (updated_at older than this). */
 export const FOLLOWUP_STALE_MS = 10 * 60 * 1000;
 
@@ -84,9 +103,118 @@ async function markFollowup(
   }
 }
 
+function digitsOnly(phone: string | null | undefined): string {
+  return (phone ?? '').replace(/\D/g, '');
+}
+
+/**
+ * Re-point a still-scheduled row whose snapshot went stale: when
+ * the creator's CURRENT Reminder WhatsApp Number
+ * (`profiles.whatsapp_number`) is valid and differs from the
+ * stored snapshot, persist the current number on the row and
+ * return it for this send. Returns null when the snapshot stays
+ * authoritative (match, or no valid current number — the send
+ * then proceeds with the snapshot exactly as before). Never
+ * throws; never reads the Customer field. Only ever called for
+ * rows under an atomic claim — sent/failed/cancelled history is
+ * never rewritten.
+ */
+async function refreshStaleRecipient(
+  db: SupabaseClient,
+  row: FollowupRow,
+  current: FollowupRow,
+): Promise<string | null> {
+  try {
+    if (!row.created_by || !current.recipient_phone) return null;
+    const { data, error } = await db
+      .from('profiles')
+      .select('whatsapp_number')
+      .eq('user_id', row.created_by)
+      .maybeSingle();
+    if (error || !data) return null;
+    const live = normalizeAgentWhatsappNumber(
+      (data as { whatsapp_number?: unknown }).whatsapp_number,
+    );
+    if (!live || live === current.recipient_phone) return null;
+    await markFollowup(db, row.id, { recipient_phone: live });
+    console.log('[followups] reminder recipient refreshed', {
+      reminder_id: row.id,
+      from: maskPhoneForLog(current.recipient_phone),
+      to: maskPhoneForLog(live),
+    });
+    return live;
+  } catch (err) {
+    console.error('[followups] recipient refresh failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Is the 24-hour customer-service window open for this recipient?
+ * True when the agent's number sent an inbound WhatsApp message to
+ * the business within the last 24 hours (matched by trailing
+ * digits, so stored/contact formatting differences don't matter).
+ * The agent is usually not a contact row, so matching runs by
+ * phone, never by contact identity. Any DB failure resolves to
+ * closed — the template path always delivers, so failing toward
+ * it is the safe direction. Never throws.
+ */
+export async function isReminderWindowOpen(
+  db: SupabaseClient,
+  accountId: string,
+  recipientPhone: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  try {
+    const suffix = digitsOnly(recipientPhone).slice(-10);
+    if (suffix.length < 10) return false;
+
+    const { data: contacts, error: contactsErr } = await db
+      .from('contacts')
+      .select('id, phone')
+      .eq('account_id', accountId);
+    if (contactsErr || !contacts) return false;
+    const contactIds = (
+      (contacts ?? []) as Array<{ id: string; phone?: string | null }>
+    )
+      .filter((c) => digitsOnly(c.phone).endsWith(suffix))
+      .map((c) => c.id);
+    if (contactIds.length === 0) return false;
+
+    const { data: conversations, error: convErr } = await db
+      .from('conversations')
+      .select('id')
+      .eq('account_id', accountId)
+      .in('contact_id', contactIds);
+    if (convErr || !conversations) return false;
+    const conversationIds = (
+      (conversations ?? []) as Array<{ id: string }>
+    ).map((c) => c.id);
+    if (conversationIds.length === 0) return false;
+
+    const { data: latest, error: msgErr } = await db
+      .from('messages')
+      .select('created_at')
+      .in('conversation_id', conversationIds)
+      .eq('sender_type', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (msgErr || !latest) return false;
+    const at = Date.parse(
+      (latest as { created_at: string }).created_at,
+    );
+    if (!Number.isFinite(at)) return false;
+    return now.getTime() - at < REMINDER_WINDOW_MS;
+  } catch {
+    return false;
+  }
+}
+
 async function processOne(
   db: SupabaseClient,
   row: FollowupRow,
+  now: Date = new Date(),
 ): Promise<'sent' | 'failed' | 'skipped'> {
   // Re-read under the claim: skip anything no longer scheduled
   // (cancelled concurrently) or already finished.
@@ -126,26 +254,81 @@ async function processOne(
     return 'failed';
   }
 
+  // Stale-snapshot refresh (scheduled rows only — history is never
+  // rewritten): when the creator changed their Reminder WhatsApp
+  // Number after scheduling, the stored snapshot points at the old
+  // handset. Re-point this row to the CURRENT configured number
+  // before sending and log it. The Customer field is never
+  // consulted — destination is always the creator's own number.
+  const refreshed = await refreshStaleRecipient(db, row, current);
+  if (refreshed !== null) {
+    current.recipient_phone = refreshed;
+  }
+
+  // Routing decision, hoisted for the failure log: which mode
+  // was attempted and what the window said when it was attempted.
+  let windowOpen = false;
+  let sendMode: "text" | "template" = "text";
+
   try {
-    const result = await sendReminderToAgent(db, current.account_id, {
-      to: current.recipient_phone,
-      text: current.message_text,
-    });
+    // Window routing per attempt — decided here, never probed by
+    // sending: open window → free text (cheapest, exact message);
+    // closed window → the account's APPROVED fallback template with
+    // the reminder as {{1}}. A closed window NEVER attempts text
+    // first (Meta would reject it); template misconfiguration fails
+    // loudly with the reason stored.
+    windowOpen = await isReminderWindowOpen(
+      db,
+      current.account_id,
+      current.recipient_phone,
+      now,
+    );
+    sendMode = windowOpen ? "text" : "template";
+    const result = windowOpen
+      ? await sendReminderToAgent(db, current.account_id, {
+          to: current.recipient_phone,
+          text: current.message_text,
+        })
+      : await sendReminderViaTemplate(db, current.account_id, {
+          to: current.recipient_phone,
+          text: current.message_text,
+        });
     await markFollowup(db, row.id, {
       status: 'sent',
       sent_at: new Date().toISOString(),
       whatsapp_message_id: result.whatsappMessageId,
       failure_reason: null,
     });
+    // Inbox persistence (best-effort, never throws): thread the
+    // sent reminder onto the RECIPIENT's own conversation so it
+    // appears in the Inbox. The wamid dedupes retries; a failure
+    // here must not flip the reminder back to failed.
+    await persistReminderOutboundMessage(db, {
+      accountId: current.account_id,
+      recipientPhone: current.recipient_phone,
+      auditUserId: row.created_by as string,
+      contentText: current.message_text,
+      whatsappMessageId: result.whatsappMessageId,
+      templateName:
+        result.via === 'template' ? (result.templateName ?? null) : null,
+    });
     // Delivery diagnostics only (never tokens, never full numbers):
     // one line per accepted send so a future non-delivery is
-    // traceable from logs alone — Meta acceptance, addressing, and
-    // the wamid that later status webhooks correlate on.
+    // traceable from logs alone — Meta acceptance, addressing, the
+    // wamid that later status webhooks correlate on, and which path
+    // delivered it.
     console.log('[followups] reminder sent', {
       reminder_id: row.id,
       to: maskPhoneForLog(current.recipient_phone),
+      window_open: windowOpen,
+      send_mode: sendMode,
       phone_number_id: result.phoneNumberId,
       whatsapp_message_id: result.whatsappMessageId,
+      via: result.via ?? 'text',
+      ...(result.templateName ? { template_name: result.templateName } : {}),
+      ...(result.templateLanguage
+        ? { template_language: result.templateLanguage }
+        : {}),
       ...(result.recipientWaId ? { recipient_wa_id: result.recipientWaId } : {}),
     });
     return 'sent';
@@ -159,6 +342,9 @@ async function processOne(
     console.error('[followups] reminder send failed', {
       reminder_id: row.id,
       to: maskPhoneForLog(current.recipient_phone),
+      window_open: windowOpen,
+      send_mode: sendMode,
+      error_code: err instanceof SendMessageError ? err.code : 'unknown',
       reason,
     });
     await markFollowup(db, row.id, {
@@ -238,7 +424,7 @@ export async function drainDueFollowups(
       if (claimErr || !claimed) continue;
       outcome.processed += 1;
       try {
-        const result = await processOne(db, toFollowup(claimed as Record<string, unknown>));
+        const result = await processOne(db, toFollowup(claimed as Record<string, unknown>), now);
         outcome[result] += 1;
       } catch (err) {
         console.error('[followups] row processing failed:', err);

@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
+import { Card, CardContent } from "@/components/ui/card";
+import { SettingsPanelHead } from "@/components/settings/settings-panel-head";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +34,6 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { QuickReply } from "@/components/inbox/quick-reply-picker";
-import { QuickReplyTypeIcon } from "@/components/inbox/quick-reply-picker";
 import {
   validateQuickReplyMedia,
   humanFileSize,
@@ -421,30 +422,22 @@ export default function QuickRepliesPage() {
   const isMediaType = form.message_type !== "text";
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 p-4 sm:p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <MessageSquareText className="h-6 w-6 text-primary" />
-          <div>
-            <h1 className="text-lg font-semibold text-foreground">
-              Quick Replies
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Save and reuse frequently sent messages
-            </p>
-          </div>
-        </div>
-        <GatedButton
-          canAct={canEdit}
-          gateReason="send messages"
-          onClick={handleCreate}
-          size="sm"
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          New Reply
-        </GatedButton>
-      </div>
+    <section className="animate-in fade-in-50 space-y-4 duration-200">
+      <SettingsPanelHead
+        title="Quick Replies"
+        description="Save and reuse frequently sent messages"
+        action={
+          <GatedButton
+            canAct={canEdit}
+            gateReason="send messages"
+            onClick={handleCreate}
+            size="sm"
+          >
+            <Plus className="mr-1 h-4 w-4" />
+            New Reply
+          </GatedButton>
+        }
+      />
 
       {/* Search + Filters */}
       <div className="space-y-3">
@@ -522,49 +515,32 @@ export default function QuickRepliesPage() {
           Loading…
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-          <MessageSquareText className="h-12 w-12 opacity-30" />
-          <p className="text-sm">
-            {replies.length === 0
-              ? "No quick replies yet. Create one to get started!"
-              : "No quick replies match your search"}
-          </p>
-        </div>
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <MessageSquareText className="h-8 w-8 text-muted-foreground opacity-40" />
+            <p className="mt-3 text-sm text-muted-foreground">
+              {replies.length === 0
+                ? "No quick replies yet. Create one to get started!"
+                : "No quick replies match your search"}
+            </p>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 xl:grid-cols-2">
           {filtered.map((reply) => (
-            <div
-              key={reply.id}
-              className="group rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/30"
-            >
-              <div className="flex items-start gap-3">
-                <span className="mt-1 shrink-0 text-muted-foreground">
-                  <QuickReplyTypeIcon type={reply.message_type || "text"} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">
+            <Card key={reply.id}>
+              <CardContent className="flex items-start justify-between gap-3 pt-4">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-medium text-foreground">
                       {reply.title}
-                    </span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-mono text-muted-foreground">
+                    </h3>
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
                       /{reply.shortcut}
                     </span>
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                       {typeTag(reply)}
                     </span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {reply.message_type === "text"
-                      ? reply.message
-                      : reply.media_caption || reply.media_file_name || reply.media_url || ""}
-                  </p>
-                  {reply.message_type !== "text" && reply.media_file_name && (
-                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                      <FileText className="h-3 w-3" />
-                      {reply.media_file_name} {reply.media_file_size ? `• ${humanFileSize(reply.media_file_size)}` : ""}
-                    </p>
-                  )}
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     {reply.visibility === "personal" ? (
                       <span className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                         <Lock className="h-2.5 w-2.5" />
@@ -582,10 +558,20 @@ export default function QuickRepliesPage() {
                       </span>
                     )}
                   </div>
+                  <p className="line-clamp-2 text-sm text-muted-foreground">
+                    {reply.message_type === "text"
+                      ? reply.message
+                      : reply.media_caption || reply.media_file_name || reply.media_url || ""}
+                  </p>
+                  {reply.message_type !== "text" && reply.media_file_name && (
+                    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <FileText className="h-3 w-3" />
+                      {reply.media_file_name} {reply.media_file_size ? `• ${humanFileSize(reply.media_file_size)}` : ""}
+                    </p>
+                  )}
                 </div>
 
-                {/* Actions */}
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="ml-2 flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     onClick={() => handleToggleFavorite(reply)}
@@ -605,27 +591,32 @@ export default function QuickRepliesPage() {
                   </button>
                   {canEditReply(reply) && (
                     <>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => handleEdit(reply)}
-                        className="rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground"
                         title="Edit"
+                        aria-label="Edit quick reply"
+                        className="h-8 px-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
                       >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
+                        <Pencil className="size-3.5" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         onClick={() => setDeleteTarget(reply)}
-                        className="rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-red-400"
                         title="Delete"
+                        aria-label="Delete quick reply"
+                        className="h-8 w-8 text-muted-foreground hover:bg-red-950/30 hover:text-red-400"
                       >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                        <Trash2 className="size-4" />
+                      </Button>
                     </>
                   )}
                 </div>
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}
@@ -912,6 +903,6 @@ export default function QuickRepliesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </section>
   );
 }
