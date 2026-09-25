@@ -149,9 +149,12 @@ describe("POST /api/followups", () => {
       recipient_phone: "919876543210",
     });
     const inserted = h.rows[0];
-    expect(inserted.contact_id).toBe("c-1");
+    // No customer field on creation: contact_id is always NULL,
+    // even when the body carries one.
+    expect(inserted.contact_id).toBeNull();
     // No customer thread is created or attached for delivery.
     expect(inserted.conversation_id).toBeNull();
+    expect(h.tablesRead).not.toContain("contacts");
     expect(h.tablesRead).not.toContain("messages");
   });
 
@@ -191,16 +194,16 @@ describe("POST /api/followups", () => {
     expect(h.rows).toHaveLength(0);
   });
 
-  it("fails closed on a country-code-less agent number (no guessing)", async () => {
-    // Legacy 10-digit profile: dialable-looking but not E.164 —
-    // rejected with the country-code message, never auto-prefixed,
-    // never substituted with the customer phone.
+  it("normalizes a country-code-less agent number with the India default", async () => {
+    // Bare 10-digit profile: accepted without warnings, stored and
+    // submitted as the +91-prefixed normalized value — never
+    // substituted with the customer phone.
     h.agentProfile = { whatsapp_number: "9876543210" };
     const res = await POST(post(valid));
-    expect(res.status).toBe(400);
-    const json = (await res.json()) as { error: string };
-    expect(json.error).toMatch(/country code/i);
-    expect(h.rows).toHaveLength(0);
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { followup: Record<string, unknown> };
+    expect(json.followup).toMatchObject({ recipient_phone: "919876543210" });
+    expect(h.rows[0].recipient_phone).toBe("919876543210");
   });
 
   it("rejects past times and viewers", async () => {
@@ -211,11 +214,13 @@ describe("POST /api/followups", () => {
     expect(forbidden.status).toBe(403);
   });
 
-  it("404s cross-account contacts", async () => {
+  it("ignores any contact_id in the body — including cross-account ones", async () => {
     h.contact = { id: "c-1", account_id: "acct-2", phone: "+91111", name: "X" };
-    // Scoped lookup sees nothing → 404, never another account's contact.
-    h.contact = null;
+    // No contact lookup happens at all: creation succeeds with a
+    // NULL contact, never another account's contact.
     const res = await POST(post(valid));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(201);
+    expect(h.rows[0].contact_id).toBeNull();
+    expect(h.tablesRead).not.toContain("contacts");
   });
 });

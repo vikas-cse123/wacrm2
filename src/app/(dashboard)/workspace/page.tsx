@@ -525,10 +525,11 @@ export default function WorkspacePage() {
     [payload, customFields, visibility.hiddenIds]
   );
 
-  // Effective header backgrounds for the VISIBLE set — every value
-  // unique by construction (customs first, then fixed defaults,
-  // then pool probe). Hidden columns keep their stored overrides
-  // in headerColors, so unhiding restores their tint; visibility
+  // Effective header backgrounds for the VISIBLE set — customs
+  // first, then semantic reference colors, then unused palette
+  // colors reassigned in visible order (a mapped color never
+  // disappears when its column is absent), overflow beyond that.
+  // Hidden columns keep their stored overrides in headerColors, so unhiding restores their tint; visibility
   // resets never touch this map.
   const headerMap = useMemo(
     () =>

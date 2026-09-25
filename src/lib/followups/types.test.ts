@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   FOLLOWUP_MESSAGE_MAX,
-  AGENT_NUMBER_COUNTRY_CODE_MESSAGE,
+  AGENT_NUMBER_DEFAULT_COUNTRY_CODE,
+  formatAgentNumberForDisplay,
   isFollowupStatus,
   normalizeAgentWhatsappNumber,
   normalizeRecipientPhone,
@@ -109,28 +110,42 @@ describe("normalizeRecipientPhone", () => {
   });
 });
 
-describe("strict agent WhatsApp numbers (country code required)", () => {
-  it("1. rejects country-code-less numbers, even dialable-looking ones", () => {
-    // The production incident shape: bare 10-digit national number.
-    expect(normalizeAgentWhatsappNumber("9174158819")).toBeNull();
-    expect(normalizeAgentWhatsappNumber("9876543210")).toBeNull();
-    expect(normalizeAgentWhatsappNumber("  98765 43210 ")).toBeNull();
+describe("strict agent WhatsApp numbers (India +91 default)", () => {
+  it("1/2. bare 10-digit numbers gain the India default, no warning", () => {
+    expect(normalizeAgentWhatsappNumber("8737064453")).toBe("918737064453");
+    expect(normalizeAgentWhatsappNumber("9876543210")).toBe("919876543210");
+    expect(normalizeAgentWhatsappNumber("  98765 43210 ")).toBe("919876543210");
+    expect(AGENT_NUMBER_DEFAULT_COUNTRY_CODE).toBe("91");
   });
 
-  it("2. accepts full normalized E.164 numbers with country code", () => {
+  it("3/4. already-international numbers pass through untouched", () => {
     expect(normalizeAgentWhatsappNumber("919174158819")).toBe("919174158819");
+    expect(normalizeAgentWhatsappNumber("919876544321")).toBe("919876544321");
+    expect(normalizeAgentWhatsappNumber("+918737064453")).toBe("918737064453");
     expect(normalizeAgentWhatsappNumber("+91 98765 43210")).toBe("919876543210");
     expect(normalizeAgentWhatsappNumber("+1 415 555 2671")).toBe("14155552671");
   });
 
-  it("rejects missing/invalid input like the loose form", () => {
-    for (const bad of [null, undefined, "", "   ", "not-a-number", "123", 919876543210]) {
+  it("6/9. malformed numbers still fail via existing validation", () => {
+    for (const bad of [null, undefined, "", "   ", "not-a-number", "123", "1234567890123456", 919876543210]) {
       expect(normalizeAgentWhatsappNumber(bad)).toBeNull();
     }
   });
+});
 
-  it("exposes one shared country-code message for every caller", () => {
-    expect(AGENT_NUMBER_COUNTRY_CODE_MESSAGE).toMatch(/country code/i);
-    expect(AGENT_NUMBER_COUNTRY_CODE_MESSAGE).toContain("+919876543210");
+describe("reminder number display formatting (stored value untouched)", () => {
+  it("groups stored Indian numbers as +91 XXXXX XXXXX", () => {
+    expect(formatAgentNumberForDisplay("916387495389")).toBe("+91 63874 95389");
+    expect(formatAgentNumberForDisplay("919876543210")).toBe("+91 98765 43210");
+  });
+
+  it("prefixes other digit strings with + without regrouping", () => {
+    expect(formatAgentNumberForDisplay("14155552671")).toBe("+14155552671");
+  });
+
+  it("passes non-digit input through and blanks empty input", () => {
+    expect(formatAgentNumberForDisplay("+91 63874 95389")).toBe("+91 63874 95389");
+    expect(formatAgentNumberForDisplay("")).toBe("");
+    expect(formatAgentNumberForDisplay(null)).toBe("");
   });
 });

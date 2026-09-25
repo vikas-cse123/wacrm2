@@ -31,6 +31,10 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { getOrCreateConversation } from '@/lib/conversations/get-or-create';
 import {
+  findOrCreateContact,
+  ContactError,
+} from '@/lib/api/v1/contacts';
+import {
   sanitizePhoneForMeta,
   isValidE164,
   phoneVariants,
@@ -596,6 +600,166 @@ export async function persistBroadcastOutboundMessage(
   } catch (err) {
     console.error(
       '[broadcast-message] unexpected persistence failure:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+export interface ReminderOutboundMessageParams {
+  accountId: string;
+  /**
+   * The reminder row's `recipient_phone` snapshot — the creator's
+   * saved Reminder WhatsApp Number. The Inbox thread is resolved
+   * from this phone ONLY; the reminder's optional customer
+   * (`contact_id`) is never consulted here.
+   */
+  recipientPhone: string;
+  /** Reminder creator (`whatsapp_followups.created_by`) for audit columns. */
+  auditUserId: string;
+  /** Exact reminder text that was sent (the `{{1}}` value on templates). */
+  contentText: string;
+  /** Meta `wamid` from the confirmed send — the webhook correlation key. */
+  whatsappMessageId: string;
+  /**
+   * Fallback template name when the closed-window path delivered
+   * this reminder; null for free-text sends. Stored on the row so
+   * the Inbox renders it with the existing template conventions.
+   */
+  templateName?: string | null;
+}
+
+/**
+ * Persist an already-sent self-reminder as a normal outbound
+ * `messages` row so the Inbox shows it like any other WhatsApp
+ * message from the business number (same columns, same renderer:
+ * `sender_type: 'agent'` + `content_type: 'text' | 'template'`).
+ *
+ * Thread resolution reuses the exact webhook/API conventions:
+ * find-or-create the contact for the RECIPIENT phone (never the
+ * optional customer), then the one-conversation-per-(account,
+ * contact) thread. The status webhook already mirrors onto
+ * `messages.message_id` through the forward-only guard, so once
+ * this row exists SENT → DELIVERED → READ advances on the SAME
+ * row with no further changes and no second status system.
+ *
+ * Best-effort by design: the Meta send already succeeded, so this
+ * NEVER throws — failures are logged and return null. Idempotent
+ * on (conversation_id, message_id): a retry carrying the same
+ * wamid returns the existing row instead of duplicating. No
+ * Flow-run pausing (unlike manual sends): a self-reminder is not
+ * an agent reply to a customer.
+ */
+export async function persistReminderOutboundMessage(
+  db: SupabaseClient,
+  params: ReminderOutboundMessageParams
+): Promise<{ messageId: string } | null> {
+  const {
+    accountId,
+    recipientPhone,
+    auditUserId,
+    contentText,
+    whatsappMessageId,
+    templateName,
+  } = params;
+
+  try {
+    if (!recipientPhone || !whatsappMessageId) return null;
+
+    // Recipient thread ONLY — the optional customer contact is
+    // deliberately never resolved here.
+    let contactId: string;
+    try {
+      const found = await findOrCreateContact(db, accountId, auditUserId, {
+        phone: recipientPhone,
+        name: recipientPhone,
+      });
+      contactId = found.id;
+    } catch (err) {
+      if (err instanceof ContactError) {
+        console.error(
+          '[reminder-message] could not resolve recipient contact:',
+          err.message
+        );
+        return null;
+      }
+      throw err;
+    }
+
+    const resolved = await getOrCreateConversation(
+      db,
+      accountId,
+      contactId,
+      auditUserId
+    );
+    if (!resolved) {
+      console.error(
+        '[reminder-message] could not resolve conversation for contact:',
+        contactId
+      );
+      return null;
+    }
+    const conversationId = resolved.conversation.id as string;
+
+    // Idempotency: a retried send carrying the same Meta message
+    // id must not duplicate the Inbox row. message_id repeats
+    // across numbers by design (migration 009), so scope the check
+    // to this conversation.
+    const { data: existing } = await db
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('message_id', whatsappMessageId)
+      .maybeSingle();
+    if (existing) {
+      return { messageId: (existing as { id: string }).id };
+    }
+
+    const isTemplate = !!templateName;
+    const text = contentText || (isTemplate ? `[${templateName}]` : '[reminder]');
+    const { data: messageRecord, error: msgError } = await db
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        content_type: isTemplate ? 'template' : 'text',
+        content_text: text,
+        template_name: templateName || null,
+        message_id: whatsappMessageId,
+        status: 'sent',
+      })
+      .select('id')
+      .single();
+
+    if (msgError || !messageRecord) {
+      console.error(
+        '[reminder-message] error inserting outbound message:',
+        msgError
+      );
+      return null;
+    }
+
+    // Keep the conversation preview/ordering consistent with manual
+    // sends (best-effort; the row above is the source of truth).
+    const { error: convError } = await db
+      .from('conversations')
+      .update({
+        last_message_text: text,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+    if (convError) {
+      console.error(
+        '[reminder-message] error touching conversation:',
+        convError
+      );
+    }
+
+    return { messageId: (messageRecord as { id: string }).id };
+  } catch (err) {
+    console.error(
+      '[reminder-message] unexpected persistence failure:',
       err instanceof Error ? err.message : err
     );
     return null;

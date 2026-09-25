@@ -54,7 +54,10 @@ export function ValidationPanel() {
         {errors.length} error{errors.length === 1 ? "" : "s"},{" "}
         {warnings.length} warning{warnings.length === 1 ? "" : "s"}
       </div>
-      <div className="flex flex-col gap-1">
+      {/* Fixed-height scroll region: the summary header stays put
+          while long issue lists scroll inside the panel (max-h-60 =
+          240px, in the 220–260px band). The canvas never shifts. */}
+      <div className="flex max-h-60 flex-col gap-1 overflow-y-auto pr-1">
         {issues.map((i, ix) => (
           <IssueLine key={ix} issue={i} onJump={requestFlash} />
         ))}

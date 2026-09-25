@@ -8,6 +8,7 @@ import {
   Phone,
   PlugZap,
   Shield,
+  Smartphone,
   Store,
   Tags,
   User,
@@ -34,6 +35,7 @@ export const SETTINGS_SECTIONS = [
   'notifications',
   'travel-crm',
   'whatsapp',
+  'reminder-number',
   'fields',
   'deals',
   'members',
@@ -74,6 +76,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   notifications: { id: 'notifications', label: 'Notifications', icon: Bell, group: 'account' },
   'travel-crm': { id: 'travel-crm', label: 'Travel Agency CRM', icon: ArrowLeftRight, group: 'integrations' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
+  'reminder-number': { id: 'reminder-number', label: 'Reminder WhatsApp Number', icon: Smartphone, group: 'workspace' },
   'business-profile': { id: 'business-profile', label: 'Business Profile', icon: Store, group: 'account' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   // Navigation-only: hidden from the left rail but still reachable
