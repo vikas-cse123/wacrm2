@@ -8,7 +8,8 @@ import {
   hasNewerConversationActivity,
   normalizeConversation,
 } from "@/lib/inbox/conversations";
-import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
+import type { Conversation, Message, Contact } from "@/types";
+import { isForwardMessageStatus } from "@/lib/whatsapp/message-status";
 import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
@@ -326,9 +327,16 @@ export default function InboxPage() {
       }
 
       if (event.eventType === "UPDATE") {
-        // Update message status
+        // Update message status — forward-only: a late or duplicate
+        // realtime event (e.g. `delivered` arriving after `read`)
+        // must never regress a Seen bubble back to Unseen. Other
+        // fields still merge unconditionally.
         setMessages((prev) =>
-          prev.map((m) => (m.id === newMsg.id ? { ...m, ...newMsg } : m))
+          prev.map((m) => {
+            if (m.id !== newMsg.id) return m;
+            if (!isForwardMessageStatus(m.status, newMsg.status)) return m;
+            return { ...m, ...newMsg };
+          })
         );
       }
     },
@@ -585,18 +593,6 @@ export default function InboxPage() {
     []
   );
 
-  const handleStatusChange = useCallback(
-    (conversationId: string, status: ConversationStatus) => {
-      setConversations((prev) =>
-        prev.map((c) => (c.id === conversationId ? { ...c, status } : c))
-      );
-      if (activeConversation?.id === conversationId) {
-        setActiveConversation((prev) => (prev ? { ...prev, status } : prev));
-      }
-    },
-    [activeConversation]
-  );
-
   const handleAssignChange = useCallback(
     (conversationId: string, assignedAgentId: string | null) => {
       setConversations((prev) =>
@@ -688,7 +684,6 @@ export default function InboxPage() {
             onMessagesLoaded={handleMessagesLoaded}
             onNewMessage={handleNewMessage}
             onUpdateMessage={handleUpdateMessage}
-            onStatusChange={handleStatusChange}
             onAssignChange={handleAssignChange}
             onBack={handleCloseConversation}
             resyncToken={resyncToken}

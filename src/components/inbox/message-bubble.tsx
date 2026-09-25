@@ -26,7 +26,13 @@ interface MessageBubbleProps {
   onToggleReaction?: (emoji: string) => void;
 }
 
-function displayMessageStatus(status: Message["status"]) {
+/**
+ * Seen/Unseen product semantics (locked): only Meta `read` renders
+ * Seen; `sent` and `delivered` both render Unseen. Forward-only
+ * status ordering is enforced upstream (webhook mirror + realtime
+ * merge) — this mapping never changes it.
+ */
+export function displayMessageStatus(status: Message["status"]) {
   if (status === "read") return "Seen";
   if (status === "failed") return "Failed";
   if (status === "sending") return "Sending";

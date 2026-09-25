@@ -32,7 +32,6 @@ import {
 import type {
   AccountMember,
   Conversation,
-  ConversationStatus,
   Tag,
 } from "@/types";
 import { Search, ChevronDown, Users, X, Pin, Loader2, Workflow } from "lucide-react";
@@ -73,25 +72,16 @@ interface ConversationListProps {
   resyncToken?: number;
 }
 
-const STATUS_COLORS: Record<ConversationStatus, string> = {
-  open: "bg-primary",
-  pending: "bg-amber-500",
-  closed: "bg-muted-foreground",
-};
-
-type InboxFilter = ConversationStatus | "all" | "unread";
+type InboxFilter = "all" | "unread";
 
 const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
   { label: "All", value: "all" },
   { label: "Unread", value: "unread" },
-  { label: "Open", value: "open" },
-  { label: "Pending", value: "pending" },
-  { label: "Closed", value: "closed" },
 ];
 
 const DATE_FILTER_OPTIONS: { label: string; value: ConversationDateFilter }[] =
   [
-    { label: "All Chats", value: "all" },
+    { label: "All dates", value: "all" },
     { label: "Today", value: "today" },
     { label: "Yesterday", value: "yesterday" },
     { label: "Custom...", value: "custom" },
@@ -433,8 +423,6 @@ export function ConversationList({
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
-      result = result.filter((c) => c.status === filter);
     }
 
     // Contact-based filters (tags via OR logic, exact company match,
@@ -815,8 +803,22 @@ export function ConversationList({
             value={search}
             onChange={handleSearchChange}
             placeholder="Search conversations..."
-            className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 pl-9 text-sm"
+            className={cn(
+              "border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 pl-9 text-sm",
+              search !== "" && "pr-9"
+            )}
           />
+          {search !== "" && !searchLoading && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              aria-label="Clear search"
+              title="Clear search"
+              className="text-muted-foreground absolute top-1/2 right-3 -translate-y-1/2 rounded transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
           {searchLoading && (
             <span
               aria-label="Searching..."
@@ -872,11 +874,14 @@ export function ConversationList({
                 }
               >
                 <span className="truncate">
-                  {activeDateFilter?.label ?? "All Chats"}
+                  Date
                 </span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
               </PopoverTrigger>
               <PopoverContent align="start" className="w-64 gap-2 p-2">
+                <p className="text-muted-foreground px-2 pt-1 text-xs font-medium">
+                  Date
+                </p>
                 <div className="grid gap-1">
                   {DATE_FILTER_OPTIONS.map((opt) => (
                     <button
@@ -1445,13 +1450,6 @@ function ConversationItem({
                 {conversation.unread_count}
               </span>
             )}
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                STATUS_COLORS[conversation.status]
-              )}
-              title={conversation.status}
-            />
 
             {/* Pin toggle — WhatsApp-style: a filled pin sits in the
                 bottom-right of pinned chats; for unpinned chats it stays

@@ -248,6 +248,15 @@ export function FollowupsPage() {
                   {f.status === "sent" && f.sent_at && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       Sent {formatWhen(f.sent_at)}
+                      {/* Secondary delivery receipts only — the Sent
+                          badge itself still means Meta acceptance.
+                          NULL receipts imply nothing (no callback
+                          yet, or a pre-reconciliation row). */}
+                      {f.read_at
+                        ? ` · Read ${formatWhen(f.read_at)}`
+                        : f.delivered_at
+                          ? ` · Delivered ${formatWhen(f.delivered_at)}`
+                          : ""}
                     </p>
                   )}
                 </div>

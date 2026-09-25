@@ -14,6 +14,13 @@ const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
 
 export interface MetaSendResult {
   messageId: string
+  /**
+   * Meta's `contacts` echo (`[{ input, wa_id }]`) when the API
+   * returns it — the normalized WhatsApp id Meta actually
+   * addressed. Absent on older responses; callers needing it
+   * (reminder delivery diagnostics) must tolerate undefined.
+   */
+  contacts?: Array<{ input: string; waId: string }>
 }
 
 export interface MetaPhoneInfo {
@@ -277,7 +284,21 @@ export async function sendTextMessage(
     await throwMetaError(response, `Meta API error: ${response.status}`)
   }
   const data = await response.json()
-  return { messageId: data.messages[0].id }
+  const result: MetaSendResult = { messageId: data.messages[0].id }
+  // Preserve Meta's normalization echo when present (reminder
+  // delivery diagnostics compare it against the requested `to`).
+  // Omitted entirely when absent so exact-shape assertions keep
+  // passing and no caller is forced to handle it.
+  const contacts = Array.isArray(data.contacts)
+    ? (data.contacts as Array<{ input?: unknown; wa_id?: unknown }>)
+        .filter(
+          (c): c is { input: string; wa_id: string } =>
+            typeof c?.input === "string" && typeof c?.wa_id === "string",
+        )
+        .map((c) => ({ input: c.input, waId: c.wa_id }))
+    : []
+  if (contacts.length > 0) result.contacts = contacts
+  return result
 }
 
 export type MediaKind = 'image' | 'video' | 'document' | 'audio' | 'sticker'

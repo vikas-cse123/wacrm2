@@ -80,7 +80,7 @@ export default function ForgotPasswordPage() {
         <CardHeader className="items-center text-center">
    <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center">
   <Image
-    src="/whatsappmax-logo.png"
+    src="/logo.png"
     alt="Interscale Marketing"
     width={48}
     height={48}

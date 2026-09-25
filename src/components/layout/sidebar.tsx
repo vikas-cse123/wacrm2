@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useState, Fragment } from "react";
+import { useEffect, useState, Fragment, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import { getTravelCrmUrl } from "@/lib/travel-crm";
 import { useAuth } from "@/hooks/use-auth";
@@ -13,6 +13,8 @@ import {
   Bell,
   Bot,
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
   FileText,
   LayoutDashboard,
   MessageSquare,
@@ -32,6 +34,11 @@ import {
   Zap,
   UserX,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface NavItem {
   href: string;
@@ -89,9 +96,39 @@ interface SidebarProps {
   /** Controlled on mobile by the Header's hamburger button. Ignored on lg+. */
   open?: boolean;
   onClose?: () => void;
+  /**
+   * Desktop icon rail. Affects lg+ presentation classes ONLY — the
+   * mobile drawer always renders full-width regardless.
+   */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export function Sidebar({ open = false, onClose }: SidebarProps) {
+/**
+ * Keyboard-accessible name tooltip for collapsed-rail icons.
+ * Rendered only when collapsed (expanded rows already show their
+ * labels); the wrapped link/anchor stays natively focusable, so
+ * tooltips appear on keyboard focus as well as hover.
+ */
+function NavTip({
+  label,
+  collapsed,
+  children,
+}: {
+  label: string;
+  collapsed?: boolean;
+  children: ReactElement;
+}) {
+  if (!collapsed) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+export function Sidebar({ open = false, onClose, collapsed = false, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { profileLoading, account, accountRole, canEditSettings } = useAuth();
@@ -175,25 +212,35 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         className={cn(
           // Mobile: fixed drawer that slides in from the left.
           "fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-col border-r border-border bg-card",
-          "transition-transform duration-200 ease-out will-change-transform",
+          "transition-[transform,width] duration-200 ease-out will-change-transform",
           open ? "translate-x-0" : "-translate-x-full",
-          // Desktop: static, always visible — reset all the mobile framing.
-          "lg:static lg:z-0 lg:w-60 lg:translate-x-0 lg:transition-none",
+          // Desktop: static in the flex row (content expands
+          // automatically); width animates full <-> rail. Relative
+          // so the hover-edge collapse control anchors to it.
+          "lg:static lg:relative lg:z-0 lg:translate-x-0",
+          collapsed ? "lg:w-16" : "lg:w-60",
         )}
         aria-label="Primary"
       >
-        {/* Logo row. On mobile we put a close button here; on desktop the
-            close button is hidden since the sidebar is always-visible. */}
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
-          <Link href="/dashboard" className="flex items-center gap-2">
+        {/* Logo row: brand lockup; brand text hides on the collapsed
+            rail (desktop). The mobile close button is untouched. No
+            collapse button lives here — see the hover-edge control
+            at the end of the aside. */}
+        <div
+          className={cn(
+            "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4",
+            collapsed && "lg:justify-center",
+          )}
+        >
+          <Link href="/dashboard" className="flex items-center gap-2" aria-label="Dashboard">
   <Image
-    src="/whatsappmax-logo.png"
+    src="/logo.png"
     alt="Interscale Marketing"
     width={32}
     height={32}
     className="h-8 w-8 rounded-lg"
   />
-  <span className="text-sm font-semibold text-foreground">
+  <span className={cn("text-sm font-semibold text-foreground", collapsed && "lg:hidden")}>
   <p className="text-[15.6px] leading-tight">WhatsApp Max</p>
   <p className="text-[9.8px] leading-tight text-muted-foreground">By Interscale Marketing</p>
 </span>
@@ -231,9 +278,10 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                   {/* Collapsible group header for the two sheets
                       entries — a button, never a navigation link.
                       Rendered inline at the first sheets item so
-                      owner-gating and ordering stay untouched. */}
+                      owner-gating and ordering stay untouched.
+                      Hidden on the collapsed rail (icons remain). */}
                   {item.href === "/data-export" && (
-                    <li>
+                    <li className={cn(collapsed && "lg:hidden")}>
                       <button
                         type="button"
                         onClick={() => setSheetsCollapsed((v) => !v)}
@@ -249,24 +297,32 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                       </button>
                     </li>
                   )}
-                  {((item.href === "/data-export" || item.href === "/all-sheets") && !sheetsOpen) ? null : (
+                  {((item.href === "/data-export" || item.href === "/all-sheets") && !sheetsOpen && !collapsed) ? null : (
                   <li>
+                  <NavTip label={item.label} collapsed={collapsed}>
                   <Link
                     href={item.href}
+                    aria-current={isActive ? "page" : undefined}
                     className={cn(
                       // Taller on mobile so fingers can hit the row reliably (≥44px).
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
                       isActive
                         ? "bg-primary/10 text-primary"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      // Collapsed rail: centered icon only; labels and
+                      // extras hide on lg, the drawer is unaffected.
+                      collapsed && "lg:justify-center lg:gap-0 lg:px-0",
                     )}
                   >
-                    <item.icon className="h-4 w-4" />
-                    <span className="flex-1">{item.label}</span>
+                    <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className={cn("flex-1", collapsed && "lg:hidden")}>{item.label}</span>
                     {item.beta && (
                       <span
                         aria-label="Beta feature"
-                        className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300"
+                        className={cn(
+                          "rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300",
+                          collapsed && "lg:hidden"
+                        )}
                       >
                         Beta
                       </span>
@@ -274,7 +330,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     {showUnreadDot && (
                       <span
                         aria-label={`${totalUnread} unread conversation${totalUnread === 1 ? "" : "s"}`}
-                        className="relative flex h-2 w-2"
+                        className={cn("relative flex h-2 w-2", collapsed && "lg:hidden")}
                       >
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
                         <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
@@ -283,12 +339,16 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     {showNotificationBadge && (
                       <span
                         aria-label={`${unreadNotifications} unread notification${unreadNotifications === 1 ? "" : "s"}`}
-                        className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
+                        className={cn(
+                          "flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground",
+                          collapsed && "lg:hidden"
+                        )}
                       >
                         {unreadNotifications > 9 ? "9+" : unreadNotifications}
                       </span>
                     )}
                   </Link>
+                  </NavTip>
                 </li>
                   )}
                 </Fragment>
@@ -305,18 +365,22 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               <ul className="flex flex-col gap-1">
                 {canEditSettings && (
                   <li key="/settings?tab=members">
+                    <NavTip label="Team Members" collapsed={collapsed}>
                     <Link
                       href="/settings?tab=members"
+                      aria-current={isTeamMembersActive ? "page" : undefined}
                       className={cn(
                         "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
                         isTeamMembersActive
                           ? "bg-primary/10 text-primary"
                           : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                        collapsed && "lg:justify-center lg:gap-0 lg:px-0",
                       )}
                     >
-                      <UsersRound className="h-4 w-4" />
-                      Team Members
+                      <UsersRound className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span className={cn(collapsed && "lg:hidden")}>Team Members</span>
                     </Link>
+                    </NavTip>
                   </li>
                 )}
                 {bottomNavItems.map((item) => {
@@ -324,18 +388,22 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     pathname.startsWith(item.href) && !isTeamMembersActive;
                   return (
                     <li key={item.href}>
+                      <NavTip label={item.label} collapsed={collapsed}>
                       <Link
                         href={item.href}
+                        aria-current={isActive ? "page" : undefined}
                         className={cn(
                           "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
                           isActive
                             ? "bg-primary/10 text-primary"
                             : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                          collapsed && "lg:justify-center lg:gap-0 lg:px-0",
                         )}
                       >
-                        <item.icon className="h-4 w-4" />
-                        {item.label}
+                        <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className={cn(collapsed && "lg:hidden")}>{item.label}</span>
                       </Link>
+                      </NavTip>
                     </li>
                   );
                 })}
@@ -347,14 +415,18 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             menu remains the profile home. Hidden entirely when no URL
             is configured. Opens in a new tab; never a router link. */}
         {travelCrmUrl ? (
-          <div className="shrink-0 border-t border-border p-3">
+          <div className={cn("shrink-0 border-t border-border p-3", collapsed && "lg:flex lg:justify-center lg:p-2")}>
+            <NavTip label="Travel Agency CRM" collapsed={collapsed}>
             <a
               href={travelCrmUrl}
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Open Travel Agency CRM in a new tab"
               title="Open Travel Agency CRM in a new tab"
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-indigo-500 ring-1 ring-inset ring-indigo-500/20 transition-colors duration-150 hover:bg-indigo-500/10"
+              className={cn(
+                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-indigo-500 ring-1 ring-inset ring-indigo-500/20 transition-colors duration-150 hover:bg-indigo-500/10",
+                collapsed && "lg:gap-0 lg:px-2",
+              )}
             >
               <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white">
                 <Image
@@ -365,16 +437,47 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                   className="h-6 w-6 object-contain"
                 />
               </span>
-              <span className="min-w-0 flex-1 truncate leading-tight">
+              <span className={cn("min-w-0 flex-1 truncate leading-tight", collapsed && "lg:hidden")}>
                 Travel Agency CRM
               </span>
               <ExternalLink
-                className="h-3.5 w-3.5 shrink-0 opacity-70"
+                className={cn("h-3.5 w-3.5 shrink-0 opacity-70", collapsed && "lg:hidden")}
                 aria-hidden="true"
               />
             </a>
+            </NavTip>
           </div>
         ) : null}
+        {/* Hover-edge collapse control (desktop only): an invisible
+            ~16px hover zone straddling the sidebar's right boundary
+            reveals a small circular chevron centered on the edge.
+            Nothing permanent is shown — the rail stays clean. The
+            button is always in the DOM (keyboard-focusable; focus
+            reveals it), and hover intent never affects mobile, where
+            the drawer pattern rules. */}
+        {onToggleCollapse && (
+          <div className="group/edge absolute inset-y-0 -right-2 hidden w-4 touch-none select-none lg:block">
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!collapsed}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className={cn(
+                "absolute top-1/2 left-1/2 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center",
+                "rounded-full border border-border bg-card text-muted-foreground shadow-sm",
+                "opacity-0 transition-all duration-150 hover:text-foreground",
+                "group-hover/edge:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              )}
+            >
+              {collapsed ? (
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );

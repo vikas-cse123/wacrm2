@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "@/types";
-import { documentDisplayName, interactiveRenderKind } from "./message-bubble";
+import {
+  displayMessageStatus,
+  documentDisplayName,
+  interactiveRenderKind,
+} from "./message-bubble";
 
 function msg(overrides: Partial<Message>): Message {
   return {
@@ -106,5 +110,21 @@ describe("documentDisplayName", () => {
     expect(
       documentDisplayName({ media_file_name: "  ", content_text: "  " }),
     ).toBe("Document");
+  });
+});
+
+describe("displayMessageStatus (Seen/Unseen semantics, locked)", () => {
+  it("only Meta read renders Seen", () => {
+    expect(displayMessageStatus("read")).toBe("Seen");
+  });
+
+  it("sent and delivered both render Unseen", () => {
+    expect(displayMessageStatus("sent")).toBe("Unseen");
+    expect(displayMessageStatus("delivered")).toBe("Unseen");
+  });
+
+  it("failed and sending keep their own labels", () => {
+    expect(displayMessageStatus("failed")).toBe("Failed");
+    expect(displayMessageStatus("sending")).toBe("Sending");
   });
 });
