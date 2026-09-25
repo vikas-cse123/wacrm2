@@ -191,6 +191,18 @@ describe("POST /api/followups", () => {
     expect(h.rows).toHaveLength(0);
   });
 
+  it("fails closed on a country-code-less agent number (no guessing)", async () => {
+    // Legacy 10-digit profile: dialable-looking but not E.164 —
+    // rejected with the country-code message, never auto-prefixed,
+    // never substituted with the customer phone.
+    h.agentProfile = { whatsapp_number: "9876543210" };
+    const res = await POST(post(valid));
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/country code/i);
+    expect(h.rows).toHaveLength(0);
+  });
+
   it("rejects past times and viewers", async () => {
     const past = await POST(post({ ...valid, scheduled_for: "2000-01-01T00:00:00Z" }));
     expect(past.status).toBe(400);

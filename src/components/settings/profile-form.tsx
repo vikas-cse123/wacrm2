@@ -6,7 +6,7 @@ import { Loader2, Upload, Trash2, Mail, CircleAlert } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
-import { normalizeRecipientPhone } from '@/lib/followups/types';
+import { normalizeAgentWhatsappNumber, normalizeRecipientPhone, AGENT_NUMBER_COUNTRY_CODE_MESSAGE } from '@/lib/followups/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -145,13 +145,19 @@ export function ProfileForm() {
 
     // WhatsApp number: empty = not set (allowed — reminders just
     // fail closed until one is saved). Non-empty must normalize to
-    // a valid Meta-dialable number; never infer from anything else.
+    // a FULL E.164 number with an explicit country code; a bare
+    // national number is rejected, never silently accepted and
+    // never inferred from anything else.
     const trimmedNumber = whatsappNumber.trim();
     let normalizedNumber: string | null = null;
     if (whatsappSupported && trimmedNumber) {
-      normalizedNumber = normalizeRecipientPhone(trimmedNumber);
+      normalizedNumber = normalizeAgentWhatsappNumber(trimmedNumber);
       if (!normalizedNumber) {
-        toast.error('Enter a valid WhatsApp number, e.g. +919876543210');
+        toast.error(
+          normalizeRecipientPhone(trimmedNumber)
+            ? AGENT_NUMBER_COUNTRY_CODE_MESSAGE
+            : 'Enter a valid WhatsApp number, e.g. +919876543210',
+        );
         return;
       }
     }

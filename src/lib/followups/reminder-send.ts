@@ -39,6 +39,14 @@ export interface ReminderSendParams {
 export interface ReminderSendResult {
   /** Meta's `wamid` for the delivered message. */
   whatsappMessageId: string;
+  /** Sender phone_number_id used (the account's connected number). */
+  phoneNumberId: string;
+  /**
+   * Meta's `contacts[].wa_id` normalization echo when the API
+   * returns it — the WhatsApp id Meta actually addressed. Absent
+   * on older responses; diagnostics compare it against `to`.
+   */
+  recipientWaId?: string;
 }
 
 export async function sendReminderToAgent(
@@ -104,7 +112,13 @@ export async function sendReminderToAgent(
       to,
       text,
     });
-    return { whatsappMessageId: result.messageId };
+    return {
+      whatsappMessageId: result.messageId,
+      phoneNumberId: row.phone_number_id,
+      ...(result.contacts?.[0]?.waId
+        ? { recipientWaId: result.contacts[0].waId }
+        : {}),
+    };
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Unknown Meta API error";

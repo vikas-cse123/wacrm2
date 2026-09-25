@@ -6,6 +6,7 @@ import { SendMessageError } from "@/lib/whatsapp/send-message";
 const h = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>,
   failMeta: false,
+  metaContacts: null as null | Array<{ input: string; waId: string }>,
   config: {
     phone_number_id: "pn-business-1",
     access_token: "enc-token",
@@ -23,7 +24,10 @@ vi.mock("@/lib/whatsapp/meta-api", () => ({
   sendTextMessage: async (args: Record<string, unknown>) => {
     h.calls.push(args);
     if (h.failMeta) throw new Error("Meta rejected the send");
-    return { messageId: "wamid-abc" };
+    return {
+      messageId: "wamid-abc",
+      ...(h.metaContacts ? { contacts: h.metaContacts } : {}),
+    };
   },
 }));
 
@@ -43,6 +47,7 @@ function fakeDb() {
 beforeEach(() => {
   h.calls = [];
   h.failMeta = false;
+  h.metaContacts = null;
   h.tablesRead = [];
   h.config = { phone_number_id: "pn-business-1", access_token: "enc-token" };
 });
@@ -53,7 +58,11 @@ describe("sendReminderToAgent", () => {
       to: "919876543210",
       text: "Call Rahul about Singapore package",
     });
-    expect(res).toMatchObject({ whatsappMessageId: "wamid-abc" });
+    // 5/12. wamid stored; sender stays the connected business number.
+    expect(res).toMatchObject({
+      whatsappMessageId: "wamid-abc",
+      phoneNumberId: "pn-business-1",
+    });
     expect(h.calls).toHaveLength(1);
     expect(h.calls[0]).toMatchObject({
       // Sender = connected business number (URL path identity).
@@ -107,5 +116,27 @@ describe("sendReminderToAgent", () => {
       }),
     ).rejects.toMatchObject({ code: "bad_request" });
     expect(h.calls).toHaveLength(0);
+  });
+
+  it("surfaces Meta's wa_id normalization echo when present", async () => {
+    // Mock returns the mapped meta-api shape (mapping itself is
+    // covered in meta-api.test.ts).
+    h.metaContacts = [{ input: "919876543210", waId: "919876543210" }];
+    const res = await sendReminderToAgent(fakeDb() as never, "acct-1", {
+      to: "919876543210",
+      text: "Hi",
+    });
+    expect(res).toMatchObject({
+      whatsappMessageId: "wamid-abc",
+      recipientWaId: "919876543210",
+    });
+  });
+
+  it("omits recipientWaId when Meta sends no contacts echo", async () => {
+    const res = await sendReminderToAgent(fakeDb() as never, "acct-1", {
+      to: "919876543210",
+      text: "Hi",
+    });
+    expect(res).not.toHaveProperty("recipientWaId");
   });
 });

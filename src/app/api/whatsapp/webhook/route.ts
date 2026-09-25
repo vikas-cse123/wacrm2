@@ -7,6 +7,8 @@ import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { getOrCreateConversation } from '@/lib/conversations/get-or-create'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
+import { isForwardMessageStatus } from '@/lib/whatsapp/message-status'
+import { reconcileReminderDelivery } from '@/lib/followups/delivery'
 import { resolveAssignment } from '@/lib/assignment/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { cleanupCompletedIncompleteRows } from '@/lib/flows/incomplete-sheet-cleanup'
@@ -142,6 +144,12 @@ interface WhatsAppWebhookEntry {
         status: string
         timestamp: string
         recipient_id: string
+        errors?: Array<{
+          code?: number
+          title?: string
+          message?: string
+          href?: string
+        }>
       }>
     }
     field: string
@@ -501,19 +509,45 @@ async function handleStatusUpdate(status: {
   status: string
   timestamp: string
   recipient_id: string
+  errors?: Array<{
+    code?: number
+    title?: string
+    message?: string
+    href?: string
+  }>
 }) {
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
   //    already match the CHECK constraint on messages.status. No
   //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
   //    repeat across numbers), so this updates 0..N rows and must not
   //    assume a single row.
-  const { error: msgErr } = await supabaseAdmin()
+  //    Forward-only: Meta redelivers and reorders status webhooks, so
+  //    a late/duplicate `delivered` (or `sent`) arriving after `read`
+  //    must never flip a Seen row back to Unseen. Rows already at or
+  //    past the incoming status are left untouched.
+  const { data: statusRows, error: statusFetchErr } = await supabaseAdmin()
     .from('messages')
-    .update({ status: status.status })
+    .select('id, status')
     .eq('message_id', status.id)
 
-  if (msgErr) {
-    console.error('Error updating message status:', msgErr)
+  if (statusFetchErr) {
+    console.error('Error fetching messages for status update:', statusFetchErr)
+  } else {
+    const forwardIds = (
+      (statusRows ?? []) as Array<{ id: string; status: string }>
+    )
+      .filter((row) => isForwardMessageStatus(row.status, status.status))
+      .map((row) => row.id)
+    if (forwardIds.length > 0) {
+      const { error: msgErr } = await supabaseAdmin()
+        .from('messages')
+        .update({ status: status.status })
+        .in('id', forwardIds)
+
+      if (msgErr) {
+        console.error('Error updating message status:', msgErr)
+      }
+    }
   }
 
   // Webhook fan-out for this status change happens at the END of this
@@ -553,6 +587,24 @@ async function handleStatusUpdate(status: {
     if (recUpdateErr) {
       console.error('Error updating broadcast recipient status:', recUpdateErr)
     }
+  }
+
+  // 2b) Mirror onto whatsapp_followups via the reminder's own
+  //     whatsapp_message_id. Reminders deliberately have no
+  //     `messages` row, so steps (1) and (2) can never reach them —
+  //     without this, a row would sit on `sent` forever even after
+  //     Meta reported failure. `sent` is a no-op (acceptance was
+  //     recorded at send time); `delivered`/`read` fill receipt
+  //     timestamps; `failed` flips the row with Meta error detail.
+  //     Never throws — reconciliation must not break webhook intake.
+  try {
+    await reconcileReminderDelivery(supabaseAdmin(), status.id, {
+      status: status.status,
+      timestamp: status.timestamp,
+      errors: status.errors ?? null,
+    })
+  } catch (err) {
+    console.error('Error reconciling reminder delivery:', err)
   }
 
   // 3) Webhook fan-out for messages we store (inbox / API sends).

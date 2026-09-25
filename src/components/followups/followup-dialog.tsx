@@ -20,6 +20,8 @@ import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import {
   FOLLOWUP_MESSAGE_MAX,
+  AGENT_NUMBER_COUNTRY_CODE_MESSAGE,
+  normalizeAgentWhatsappNumber,
   normalizeRecipientPhone,
   type Followup,
 } from "@/lib/followups/types";
@@ -77,7 +79,8 @@ export function FollowupDialog({
   // The creator's own WhatsApp number — the reminder recipient.
   // Fetched separately (not via useAuth) so a pre-migration schema
   // degrades to the blocking state instead of breaking the dialog.
-  const [agentNumber, setAgentNumber] = useState<string | null>(null);
+    const [agentNumber, setAgentNumber] = useState<string | null>(null);
+    const [agentNumberIssue, setAgentNumberIssue] = useState<"missing" | "country-code" | null>(null);
   const [agentNumberLoading, setAgentNumberLoading] = useState(true);
   const [senderLine, setSenderLine] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -119,17 +122,27 @@ export function FollowupDialog({
           ({ data, error }) => {
             if (error || !data) {
               setAgentNumber(null);
+              setAgentNumberIssue("missing");
             } else {
-              setAgentNumber(
-                normalizeRecipientPhone(
-                  (data as { whatsapp_number?: unknown }).whatsapp_number,
-                ),
+              const raw = (data as { whatsapp_number?: unknown }).whatsapp_number;
+              const strict = normalizeAgentWhatsappNumber(raw);
+              setAgentNumber(strict);
+              // A stored number without a country code can no longer
+              // deliver reliably: block with the specific fix prompt.
+              // Never fall back to anything else.
+              setAgentNumberIssue(
+                strict !== null
+                  ? null
+                  : normalizeRecipientPhone(raw) !== null
+                    ? "country-code"
+                    : "missing",
               );
             }
             setAgentNumberLoading(false);
           },
           () => {
             setAgentNumber(null);
+            setAgentNumberIssue("missing");
             setAgentNumberLoading(false);
           },
         );
@@ -251,16 +264,24 @@ export function FollowupDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4">
-          {!agentNumberLoading && agentNumber === null && (
+          {!agentNumberLoading && agentNumberIssue !== null && (
             <p
               role="alert"
               className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
             >
-              Add your WhatsApp number in{" "}
-              <Link href="/settings?tab=profile" className="font-medium underline">
-                Settings → Your profile
-              </Link>{" "}
-              before creating a reminder.
+              {agentNumberIssue === "country-code" ? (
+                <>{AGENT_NUMBER_COUNTRY_CODE_MESSAGE} Update it in{" "}
+                <Link href="/settings?tab=profile" className="font-medium underline">
+                  Settings → Your profile
+                </Link>
+                .</>
+              ) : (
+                <>Add your WhatsApp number in{" "}
+                <Link href="/settings?tab=profile" className="font-medium underline">
+                  Settings → Your profile
+                </Link>{" "}
+                before creating a reminder.</>
+              )}
             </p>
           )}
           <div className="grid gap-2">

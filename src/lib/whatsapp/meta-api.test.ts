@@ -3,6 +3,7 @@ import {
   INTERACTIVE_LIMITS,
   sendInteractiveButtons,
   sendInteractiveList,
+  sendTextMessage,
 } from "./meta-api";
 
 // All assertions in this file run BEFORE the network call. We stub fetch
@@ -265,5 +266,50 @@ describe("sendInteractiveList — validation", () => {
         },
       },
     });
+  });
+});
+
+describe("sendTextMessage contacts echo", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", neverFetch());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubSend(body: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })),
+    );
+  }
+
+  it("preserves Meta's wa_id normalization echo when present", async () => {
+    stubSend({
+      messages: [{ id: "wamid-1" }],
+      contacts: [{ input: "919876543210", wa_id: "919876543210" }],
+    });
+    const result = await sendTextMessage({
+      phoneNumberId: "test-phone",
+      accessToken: "test-token",
+      to: "919876543210",
+      text: "Hi",
+    });
+    expect(result).toEqual({
+      messageId: "wamid-1",
+      contacts: [{ input: "919876543210", waId: "919876543210" }],
+    });
+  });
+
+  it("omits contacts entirely when Meta sends none (exact-shape safe)", async () => {
+    stubSend({ messages: [{ id: "wamid-1" }] });
+    const result = await sendTextMessage({
+      phoneNumberId: "test-phone",
+      accessToken: "test-token",
+      to: "919876543210",
+      text: "Hi",
+    });
+    expect(result).toEqual({ messageId: "wamid-1" });
   });
 });

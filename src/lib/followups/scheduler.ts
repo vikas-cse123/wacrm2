@@ -137,6 +137,17 @@ async function processOne(
       whatsapp_message_id: result.whatsappMessageId,
       failure_reason: null,
     });
+    // Delivery diagnostics only (never tokens, never full numbers):
+    // one line per accepted send so a future non-delivery is
+    // traceable from logs alone — Meta acceptance, addressing, and
+    // the wamid that later status webhooks correlate on.
+    console.log('[followups] reminder sent', {
+      reminder_id: row.id,
+      to: maskPhoneForLog(current.recipient_phone),
+      phone_number_id: result.phoneNumberId,
+      whatsapp_message_id: result.whatsappMessageId,
+      ...(result.recipientWaId ? { recipient_wa_id: result.recipientWaId } : {}),
+    });
     return 'sent';
   } catch (err) {
     const reason =
@@ -145,6 +156,11 @@ async function processOne(
         : err instanceof Error
           ? err.message
           : 'Send failed.';
+    console.error('[followups] reminder send failed', {
+      reminder_id: row.id,
+      to: maskPhoneForLog(current.recipient_phone),
+      reason,
+    });
     await markFollowup(db, row.id, {
       status: 'failed',
       failed_at: new Date().toISOString(),
@@ -152,6 +168,17 @@ async function processOne(
     });
     return 'failed';
   }
+}
+
+/**
+ * Mask a phone number for logs: first two + last two digits only
+ * (`9174******19`). Secrets and full numbers must never hit logs.
+ */
+function maskPhoneForLog(phone: string | null): string {
+  if (!phone) return '(none)';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length <= 4) return '****';
+  return `${digits.slice(0, 2)}******${digits.slice(-2)}`;
 }
 
 /**

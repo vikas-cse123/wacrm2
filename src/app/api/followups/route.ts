@@ -8,6 +8,8 @@ import {
 } from "@/lib/auth/account";
 import {
   isFollowupStatus,
+  AGENT_NUMBER_COUNTRY_CODE_MESSAGE,
+  normalizeAgentWhatsappNumber,
   normalizeRecipientPhone,
   validateFollowupInput,
   type Followup,
@@ -29,6 +31,8 @@ function toFollowup(row: Record<string, unknown>): Followup {
     whatsapp_message_id: (row.whatsapp_message_id as string | null) ?? null,
     message_id: (row.message_id as string | null) ?? null,
     sent_at: (row.sent_at as string | null) ?? null,
+    delivered_at: (row.delivered_at as string | null) ?? null,
+    read_at: (row.read_at as string | null) ?? null,
     cancelled_at: (row.cancelled_at as string | null) ?? null,
     failed_at: (row.failed_at as string | null) ?? null,
     failure_reason: (row.failure_reason as string | null) ?? null,
@@ -71,8 +75,26 @@ async function loadAgentRecipientPhone(
     .eq("user_id", userId)
     .maybeSingle();
   if (error || !data) return null;
-  return normalizeRecipientPhone(
+  return normalizeAgentWhatsappNumber(
     (data as { whatsapp_number?: unknown }).whatsapp_number,
+  );
+}
+
+/** True when the stored value is dialable but lacks a country code. */
+async function storedNumberMissingCountryCode(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("whatsapp_number")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !data) return false;
+  const raw = (data as { whatsapp_number?: unknown }).whatsapp_number;
+  return (
+    normalizeRecipientPhone(raw) !== null &&
+    normalizeAgentWhatsappNumber(raw) === null
   );
 }
 
@@ -183,10 +205,15 @@ export async function POST(request: Request) {
       userId,
     );
     if (!recipient_phone) {
+      const needsCountryCode = await storedNumberMissingCountryCode(
+        supabase,
+        userId,
+      );
       return NextResponse.json(
         {
-          error:
-            "Add your WhatsApp number in Settings → Your profile before creating a reminder.",
+          error: needsCountryCode
+            ? `${AGENT_NUMBER_COUNTRY_CODE_MESSAGE} Update it in Settings → Your profile before creating a reminder.`
+            : "Add your WhatsApp number in Settings → Your profile before creating a reminder.",
         },
         { status: 400 },
       );

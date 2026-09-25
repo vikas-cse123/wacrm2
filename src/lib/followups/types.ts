@@ -60,6 +60,14 @@ export interface Followup {
   whatsapp_message_id: string | null;
   message_id: string | null;
   sent_at: string | null;
+  /**
+   * Delivery receipts reconciled from Meta status webhooks keyed by
+   * `whatsapp_message_id` (migration 098). NULL = unknown (either
+   * no callback arrived yet, or the row predates reconciliation).
+   * A NULL receipt never implies failure — only `failed` does.
+   */
+  delivered_at: string | null;
+  read_at: string | null;
   cancelled_at: string | null;
   failed_at: string | null;
   failure_reason: string | null;
@@ -104,6 +112,42 @@ export function normalizeRecipientPhone(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const sanitized = sanitizePhoneForMeta(value);
   if (!sanitized || !isValidE164(sanitized)) return null;
+  return sanitized;
+}
+
+/**
+ * Message shown when a number is dialable but carries no country
+ * code (e.g. a bare 10-digit national number). Kept as a shared
+ * constant so the profile form, the reminder dialog, and the API
+ * reject with identical wording.
+ */
+export const AGENT_NUMBER_COUNTRY_CODE_MESSAGE =
+  "Enter your WhatsApp number with country code, e.g. +919876543210";
+
+/**
+ * Strict agent-number normalization for Reminder delivery.
+ *
+ * Same canonical digits-only form as normalizeRecipientPhone,
+ * PLUS an explicit country-code requirement: the number must be
+ * 11–15 digits long. A bare national number (e.g. 10-digit
+ * `9174158819`) is rejected even though it is dialable-looking —
+ * Meta addressing without a country code is unreliable (the
+ * production incident: sends accepted, never delivered), so the
+ * app must not silently treat it as complete E.164.
+ *
+ * No country is ever guessed: the user must type the code
+ * themselves. Returns null on any failure (missing / invalid /
+ * country-code-less) — callers fail closed. Use
+ * AGENT_NUMBER_COUNTRY_CODE_MESSAGE when the loose form passes
+ * but this strict form fails.
+ *
+ * Examples: "9174158819" → null; "919174158819" → "919174158819".
+ */
+export function normalizeAgentWhatsappNumber(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const sanitized = sanitizePhoneForMeta(value);
+  if (!sanitized || !isValidE164(sanitized)) return null;
+  if (sanitized.length < 11 || sanitized.length > 15) return null;
   return sanitized;
 }
 
