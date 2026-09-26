@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { WORKSPACE_DEFAULT_FIELDS } from "@/lib/flows/workspace-defaults";
+import {
+  LEAD_TYPE_OPTIONS,
+  WORKSPACE_DEFAULT_FIELDS,
+} from "@/lib/flows/workspace-defaults";
 import type { WorkspaceField } from "@/lib/flows/workspace-fields";
 import { CustomCell, editorInputType } from "./custom-cell";
 
@@ -58,13 +61,23 @@ function renderCell(f: WorkspaceField, stored: string | null) {
 }
 
 describe("field types (verify first, change nothing)", () => {
-  it("Quotation / Package and Calls Tried are selects; text fields are text", () => {
+  it("Stage, Lead Type, Lead Received and Calls Tried are selects; text fields are text", () => {
     const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
-    expect(byName.get("Quotation / Package")?.field_type).toBe("single_select");
+    expect(byName.get("Stage")?.field_type).toBe("single_select");
+    expect(byName.get("Lead Type")?.field_type).toBe("single_select");
+    expect(byName.get("Lead Received")?.field_type).toBe("single_select");
     expect(byName.get("No. of Calls Tried")?.field_type).toBe("single_select");
     for (const name of ["Customer Response", "Next Action", "Final Remark"]) {
       expect(byName.get(name)?.field_type).toBe("text");
     }
+  });
+
+  it("legacy stored values render as plain text (never destroyed)", () => {
+    const html = renderCell(
+      field({ name: "Lead Type", options: [...LEAD_TYPE_OPTIONS] }),
+      "Fake",
+    );
+    expect(html).toContain("Fake");
   });
 });
 
@@ -135,11 +148,110 @@ describe("6/7. selects open dropdowns and keep their chevron", () => {
 describe("8. empty selects show no empty chip", () => {
   it("blank trigger with no chip styling", () => {
     const html = renderCell(
-      field({ name: "Lead Quality", field_type: "single_select", options: ["Hot"] }),
+      field({ name: "Call Status", field_type: "single_select", options: ["Busy"] }),
       null,
     );
     expect(html).not.toContain("—");
     expect(html).not.toContain("background-color");
+  });
+
+  it("detected Lead Received default renders as a chip when passed as stored", () => {
+    // The page feeds the auto-detected platform default through the
+    // same `stored` prop; the cell cannot tell it from a saved pick.
+    const html = renderCell(
+      field({
+        name: "Lead Received",
+        field_type: "single_select",
+        options: ["Website", "Facebook Ads"],
+      }),
+      "Facebook Ads",
+    );
+    expect(html).toContain("Facebook Ads");
+    expect(html).toContain("background-color");
+  });
+
+  it("manual Lead Received pick wins over any default", () => {
+    const html = renderCell(
+      field({
+        name: "Lead Received",
+        field_type: "single_select",
+        options: ["Website", "Facebook Ads"],
+      }),
+      "Referral",
+    );
+    expect(html).toContain("Referral");
+    expect(html).not.toContain("Facebook Ads");
+  });
+});
+
+describe("Type/Stage business defaults (Fresh / New Lead, read-only)", () => {
+  const typeField = () =>
+    field({
+      name: "Lead Type",
+      field_type: "single_select",
+      options: ["Fresh", "Hot", "Warm", "Cold", "Prospect"],
+    });
+  const stageField = () =>
+    field({
+      name: "Stage",
+      field_type: "single_select",
+      options: ["New Lead", "Contacted", "Qualified"],
+    });
+
+  it("1+2. empty Type shows Fresh, empty Stage shows New Lead", () => {
+    const typeHtml = renderCell(typeField(), null);
+    expect(typeHtml).toContain("Fresh");
+    expect(typeHtml).toContain("background-color");
+    const stageHtml = renderCell(stageField(), null);
+    expect(stageHtml).toContain("New Lead");
+    expect(stageHtml).toContain("background-color");
+  });
+
+  it("3+4. saved Hot stays Hot, saved Qualified stays Qualified", () => {
+    const hotHtml = renderCell(typeField(), "Hot");
+    expect(hotHtml).toContain("Hot");
+    expect(hotHtml).not.toContain(">Fresh<");
+    const qualifiedHtml = renderCell(stageField(), "Qualified");
+    expect(qualifiedHtml).toContain("Qualified");
+    expect(qualifiedHtml).not.toContain("New Lead");
+  });
+
+  it("5+6. the full option list is unchanged (Clear + all options still offered)", () => {
+    expect(typeField().options).toEqual(["Fresh", "Hot", "Warm", "Cold", "Prospect"]);
+    expect(stageField().options).toEqual(["New Lead", "Contacted", "Qualified"]);
+    // Clear affordance still present in the cell source.
+    expect(cellSrc).toContain('value="__clear__"');
+  });
+
+  it("an explicit field default_value wins over the identity default", () => {
+    const html = renderCell(
+      field({
+        name: "Lead Type",
+        field_type: "single_select",
+        options: ["Fresh", "Hot"],
+        default_value: "Hot",
+      }),
+      null,
+    );
+    expect(html).toContain("Hot");
+    expect(html).not.toContain(">Fresh<");
+  });
+
+  it("9. rendering defaults writes nothing (read-only, no save call)", () => {
+    const onSaved = vi.fn();
+    renderToStaticMarkup(
+      <CustomCell
+        flowId="flow-1"
+        runId="run-1"
+        field={typeField()}
+        stored={null}
+        canEdit={true}
+        onSaved={onSaved}
+        members={[]}
+      />,
+    );
+    // SSR render performs no fetch/save — defaults never mass-update rows.
+    expect(onSaved).not.toHaveBeenCalled();
   });
 });
 

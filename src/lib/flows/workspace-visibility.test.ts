@@ -3,12 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlowTableColumn } from './flow-tables';
 import type { WorkspaceField } from './workspace-fields';
 import {
-  LEAD_SOURCE_VIS_ID,
   ROW_VIS_ID,
   applyVisibility,
   customFieldVisId,
   describeVisibilityMenu,
   filterVisibilityMenu,
+  flattenVisibilityMenu,
   flowColumnVisId,
   loadHiddenIds,
   saveHiddenIds,
@@ -71,32 +71,37 @@ afterEach(() => {
 });
 
 describe('describeVisibilityMenu', () => {
-  it('locks Row, Submission Time, Name, Phone Number', () => {
+  it('lists Row, Submission Time, Name, Phone Number — none locked', () => {
     const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
     expect(model.core).toEqual([
-      { id: ROW_VIS_ID, label: 'Row', locked: true },
-      {
-        id: flowColumnVisId('submission_time'),
-        label: 'Submission Time',
-        locked: true,
-      },
-      { id: flowColumnVisId('name'), label: 'Name', locked: true },
-      { id: flowColumnVisId('phone'), label: 'Phone Number', locked: true },
+      { id: ROW_VIS_ID, label: 'Row' },
     ]);
+    const ids = [...model.core, ...model.flow].map((i) => i.id);
+    for (const key of ['submission_time', 'name', 'phone']) {
+      expect(ids).toContain(flowColumnVisId(key));
+    }
+    // No item anywhere carries a lock.
+    for (const item of flattenVisibilityMenu(model)) {
+      expect(item).not.toHaveProperty('locked');
+    }
   });
 
   it('lists dynamic flow columns as hideable and never hardcodes them', () => {
     const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
     expect(model.flow).toEqual([
       {
+        id: flowColumnVisId('submission_time'),
+        label: 'Submission Time',
+      },
+      { id: flowColumnVisId('name'), label: 'Name' },
+      { id: flowColumnVisId('phone'), label: 'Phone Number' },
+      {
         id: flowColumnVisId('hotel_category'),
         label: 'Hotel Category',
-        locked: false,
       },
       {
         id: flowColumnVisId('travel_month'),
         label: 'Travel Month',
-        locked: false,
       },
     ]);
   });
@@ -110,27 +115,67 @@ describe('describeVisibilityMenu', () => {
   it('keys custom columns by stable field id (never by name)', () => {
     const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
     expect(model.custom).toEqual([
-      { id: 'custom:f-budget', label: 'Budget', locked: false },
-      { id: 'custom:f-status', label: 'Status', locked: false },
+      { id: 'custom:f-budget', label: 'Budget' },
+      { id: 'custom:f-status', label: 'Status' },
     ]);
   });
 
-  it('exposes Lead Source as hideable', () => {
+  it('exposes no lead pseudo-column (custom fields only)', () => {
     const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
-    expect(model.leadSource).toEqual({
-      id: LEAD_SOURCE_VIS_ID,
-      label: 'Lead Source',
-      locked: false,
-    });
+    expect(model).not.toHaveProperty('leadSource');
+  });
+});
+
+describe('flattenVisibilityMenu (one unified manager list)', () => {
+  it('lists every column once, row entry first, order preserved', () => {
+    const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
+    expect(flattenVisibilityMenu(model).map((i) => i.label)).toEqual([
+      'Row',
+      'Submission Time',
+      'Name',
+      'Phone Number',
+      'Hotel Category',
+      'Travel Month',
+      'Budget',
+      'Status',
+    ]);
+  });
+
+  it('marks nothing locked — every entry is hideable', () => {
+    const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
+    const items = flattenVisibilityMenu(model);
+    expect(items).toHaveLength(8);
+    for (const label of ['Row', 'Submission Time', 'Name', 'Phone Number']) {
+      expect(items.map((i) => i.label)).toContain(label);
+    }
+    for (const item of items) {
+      expect(item).not.toHaveProperty('locked');
+    }
+  });
+
+  it('omits a filtered-out Lead Source and nothing else', () => {
+    const model = filterVisibilityMenu(
+      describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS),
+      'lead xyz-no-match'
+    );
+    // 'lead xyz-no-match' matches nothing: the flattened list is empty
+    // but the call must not throw and must stay an array.
+    expect(flattenVisibilityMenu(model)).toEqual([]);
+    const filtered = filterVisibilityMenu(
+      describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS),
+      'hotel'
+    );
+    expect(flattenVisibilityMenu(filtered).map((i) => i.label)).toEqual([
+      'Hotel Category',
+    ]);
   });
 });
 
 describe('applyVisibility', () => {
-  it('hides flow, custom, and Lead Source columns', () => {
+  it('hides flow and custom columns', () => {
     const applied = applyVisibility(FLOW_COLUMNS, CUSTOM_FIELDS, [
       flowColumnVisId('hotel_category'),
       customFieldVisId('f-budget'),
-      LEAD_SOURCE_VIS_ID,
     ]);
     expect(applied.flowColumns.map((c) => c.key)).toEqual([
       'submission_time',
@@ -139,23 +184,30 @@ describe('applyVisibility', () => {
       'travel_month',
     ]);
     expect(applied.customFields.map((f) => f.id)).toEqual(['f-status']);
-    expect(applied.leadSourceVisible).toBe(false);
   });
 
-  it('keeps locked core columns visible even if hidden (defensive)', () => {
+  it('hides Row, Submission Time, Name, and Phone Number like any column', () => {
     const applied = applyVisibility(FLOW_COLUMNS, CUSTOM_FIELDS, [
+      ROW_VIS_ID,
       flowColumnVisId('submission_time'),
       flowColumnVisId('name'),
       flowColumnVisId('phone'),
-      ROW_VIS_ID,
     ]);
     expect(applied.flowColumns.map((c) => c.key)).toEqual([
-      'submission_time',
-      'name',
-      'phone',
       'hotel_category',
       'travel_month',
     ]);
+  });
+
+  it('hides each system column independently', () => {
+    for (const key of ['submission_time', 'name', 'phone'] as const) {
+      const applied = applyVisibility(FLOW_COLUMNS, CUSTOM_FIELDS, [
+        flowColumnVisId(key),
+      ]);
+      expect(applied.flowColumns.map((c) => c.key)).not.toContain(key);
+      // Everything else stays.
+      expect(applied.flowColumns).toHaveLength(4);
+    }
   });
 
   it('never reorders: a restored column returns to its original position', () => {
@@ -190,7 +242,6 @@ describe('applyVisibility', () => {
       'f-budget',
       'f-status',
     ]);
-    expect(applied.leadSourceVisible).toBe(true);
   });
 
   it('never deletes or mutates definitions: inputs come back intact', () => {
@@ -198,7 +249,6 @@ describe('applyVisibility', () => {
     applyVisibility(FLOW_COLUMNS, CUSTOM_FIELDS, [
       flowColumnVisId('hotel_category'),
       customFieldVisId('f-budget'),
-      LEAD_SOURCE_VIS_ID,
     ]);
     expect(JSON.stringify({ FLOW_COLUMNS, CUSTOM_FIELDS })).toBe(before);
     expect(FLOW_COLUMNS).toHaveLength(6);
@@ -206,8 +256,79 @@ describe('applyVisibility', () => {
   });
 });
 
-describe('toggleHiddenId', () => {
-  it('adds and removes ids with stable sorted output', () => {
+describe('custom columns render after flow columns', () => {
+  function flowKeys(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      key: `q${i}`,
+      label: `Question ${i}`,
+      system: false,
+    }));
+  }
+
+  /** Render order the table + manager compose: flow, then custom. */
+  function renderOrder(
+    flowColumns: Array<{ key: string; label: string; system: boolean }>,
+    hidden: string[] = []
+  ): string[] {
+    const applied = applyVisibility(flowColumns, CUSTOM_FIELDS, hidden);
+    return [
+      ...applied.flowColumns.map((c) => `flow:${c.key}`),
+      ...applied.customFields.map((f) => `custom:${f.id}`),
+    ];
+  }
+
+  it('1. custom entries close the list', () => {
+    const model = describeVisibilityMenu(FLOW_COLUMNS, CUSTOM_FIELDS);
+    const flat = flattenVisibilityMenu(model).map((i) => i.id);
+    expect(flat[flat.length - 1]).toBe(customFieldVisId('f-status'));
+  });
+
+  it('2. order holds across flows with different column counts', () => {
+    for (const n of [0, 1, 5]) {
+      const order = renderOrder(flowKeys(n));
+      const customs = CUSTOM_FIELDS.map((f) => customFieldVisId(f.id));
+      for (const c of customs) {
+        expect(order.slice(-customs.length)).toContain(c);
+      }
+      for (let i = 0; i < n; i++) {
+        expect(order.indexOf(`flow:q${i}`)).toBeLessThan(order.indexOf(customs[0]));
+      }
+    }
+  });
+
+  it('3. hiding/showing preserves flow-then-custom order', () => {
+    const cols = flowKeys(3);
+    // Hide a middle chunk: custom entries still close the list.
+    const order = renderOrder(cols, ['flow:q1', customFieldVisId('f-budget')]);
+    expect(order).toEqual([
+      'flow:q0',
+      'flow:q2',
+      'custom:f-status',
+    ]);
+  });
+
+  it('4. the manager list keeps custom entries last (incl. search)', () => {
+    const model = describeVisibilityMenu(flowKeys(3).map((c) => ({
+      key: c.key,
+      label: c.label,
+      system: c.system,
+    })), CUSTOM_FIELDS);
+    const flat = flattenVisibilityMenu(model).map((i) => i.id);
+    expect(flat[flat.length - 1]).toBe(customFieldVisId('f-status'));
+    // Search narrows but never reorders.
+    const filtered = filterVisibilityMenu(model, 'status');
+    const flatFiltered = flattenVisibilityMenu(filtered).map((i) => i.id);
+    expect(flatFiltered).toEqual([customFieldVisId('f-status')]);
+  });
+
+  it('5. reset/show-all (empty set) restore full order, custom final', () => {
+    const order = renderOrder(flowKeys(2), []);
+    expect(order[order.length - 1]).toBe(customFieldVisId('f-status'));
+    expect(order.slice(0, 2)).toEqual(['flow:q0', 'flow:q1']);
+  });
+});
+
+describe('toggleHiddenId', () => {  it('adds and removes ids with stable sorted output', () => {
     expect(toggleHiddenId([], 'custom:b')).toEqual(['custom:b']);
     expect(toggleHiddenId(['custom:b'], 'custom:a')).toEqual([
       'custom:a',
@@ -227,7 +348,6 @@ describe('filterVisibilityMenu (manager search only)', () => {
     expect(filtered.flow.map((i) => i.label)).toEqual(['Hotel Category']);
     expect(filtered.core).toEqual([]);
     expect(filtered.custom).toEqual([]);
-    expect(filtered.leadSource).toBeNull();
   });
 
   it('empty query returns the full model', () => {
@@ -239,38 +359,33 @@ describe('filterVisibilityMenu (manager search only)', () => {
     expect(filtered.core).toEqual([]);
     expect(filtered.flow).toEqual([]);
     expect(filtered.custom).toEqual([]);
-    expect(filtered.leadSource).toBeNull();
     // The source model (and therefore the table) is untouched.
-    expect(model.flow).toHaveLength(2);
+    expect(model.flow).toHaveLength(5);
   });
 
-  it('finds Lead Source by name', () => {
-    const filtered = filterVisibilityMenu(model, 'lead');
-    expect(filtered.leadSource).toEqual({
-      id: LEAD_SOURCE_VIS_ID,
-      label: 'Lead Source',
-      locked: false,
-    });
+  it('finds custom columns by name', () => {
+    const filtered = filterVisibilityMenu(model, 'budget');
+    expect(filtered.custom).toEqual([{ id: 'custom:f-budget', label: 'Budget' }]);
   });
 });
 
 describe('visibility persistence (localStorage, per account + flow)', () => {
   it('round-trips a hidden set and survives a reload', () => {
-    saveHiddenIds('acct-1', 'flow-1', ['custom:f-budget', LEAD_SOURCE_VIS_ID]);
+    saveHiddenIds('acct-1', 'flow-1', ['custom:f-budget', 'flow:phone']);
     expect(loadHiddenIds('acct-1', 'flow-1')).toEqual([
       'custom:f-budget',
-      LEAD_SOURCE_VIS_ID,
+      'flow:phone',
     ]);
   });
 
   it('scopes by flow: one flow never affects another', () => {
-    saveHiddenIds('acct-1', 'flow-a', [LEAD_SOURCE_VIS_ID]);
+    saveHiddenIds('acct-1', 'flow-a', ['flow:phone']);
     expect(loadHiddenIds('acct-1', 'flow-b')).toEqual([]);
-    expect(loadHiddenIds('acct-1', 'flow-a')).toEqual([LEAD_SOURCE_VIS_ID]);
+    expect(loadHiddenIds('acct-1', 'flow-a')).toEqual(['flow:phone']);
   });
 
   it('scopes by account', () => {
-    saveHiddenIds('acct-1', 'flow-1', [LEAD_SOURCE_VIS_ID]);
+    saveHiddenIds('acct-1', 'flow-1', ['flow:phone']);
     expect(loadHiddenIds('acct-2', 'flow-1')).toEqual([]);
   });
 
@@ -281,7 +396,7 @@ describe('visibility persistence (localStorage, per account + flow)', () => {
   });
 
   it('saving an empty set removes the key (default = all visible)', () => {
-    saveHiddenIds('acct-1', 'flow-1', [LEAD_SOURCE_VIS_ID]);
+    saveHiddenIds('acct-1', 'flow-1', ['flow:phone']);
     expect(backing.has('wacrm:ws-cols:v1:acct-1:flow-1')).toBe(true);
     saveHiddenIds('acct-1', 'flow-1', []);
     expect(backing.has('wacrm:ws-cols:v1:acct-1:flow-1')).toBe(false);
@@ -293,20 +408,41 @@ describe('visibility persistence (localStorage, per account + flow)', () => {
     expect(loadHiddenIds('acct-1', 'flow-1')).toEqual([]);
     backing.set(
       'wacrm:ws-cols:v1:acct-1:flow-1',
-      JSON.stringify({ hidden: [LEAD_SOURCE_VIS_ID] })
+      JSON.stringify({ hidden: ['flow:phone'] })
     );
     expect(loadHiddenIds('acct-1', 'flow-1')).toEqual([]);
     backing.set(
       'wacrm:ws-cols:v1:acct-1:flow-1',
-      JSON.stringify([LEAD_SOURCE_VIS_ID, 42, null])
+      JSON.stringify(['flow:phone', 42, null])
     );
-    expect(loadHiddenIds('acct-1', 'flow-1')).toEqual([LEAD_SOURCE_VIS_ID]);
+    expect(loadHiddenIds('acct-1', 'flow-1')).toEqual(['flow:phone']);
+  });
+
+  it('persists system-column hides and restores them via show-all/reset', () => {
+    saveHiddenIds('acct-1', 'flow-1', [
+      ROW_VIS_ID,
+      flowColumnVisId('name'),
+      flowColumnVisId('phone'),
+    ]);
+    const hidden = loadHiddenIds('acct-1', 'flow-1');
+    const applied = applyVisibility(FLOW_COLUMNS, CUSTOM_FIELDS, hidden);
+    expect(applied.flowColumns.map((c) => c.key)).not.toContain('name');
+    expect(applied.flowColumns.map((c) => c.key)).not.toContain('phone');
+    // Reset (empty set) restores everything — nothing is forced.
+    const reset = applyVisibility(FLOW_COLUMNS, CUSTOM_FIELDS, []);
+    expect(reset.flowColumns.map((c) => c.key)).toEqual([
+      'submission_time',
+      'name',
+      'phone',
+      'hotel_category',
+      'travel_month',
+    ]);
   });
 
   it('never throws when storage is unavailable (private mode)', () => {
     stubStorage(true);
     expect(() =>
-      saveHiddenIds('acct-1', 'flow-1', [LEAD_SOURCE_VIS_ID])
+      saveHiddenIds('acct-1', 'flow-1', ['flow:phone'])
     ).not.toThrow();
     vi.unstubAllGlobals();
     expect(loadHiddenIds('acct-1', 'flow-1')).toEqual([]);

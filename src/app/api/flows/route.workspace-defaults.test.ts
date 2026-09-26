@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Tests for default Workspace business columns on flow creation
 // (POST /api/flows — plain and template-clone paths).
 //
-// The route provisions the 12 defaults best-effort via the
+// The route provisions the 13 defaults best-effort via the
 // service-role client after the flow insert; creation itself never
 // fails because of provisioning.
 // ---------------------------------------------------------------------------
@@ -95,18 +95,18 @@ beforeEach(() => {
 });
 
 describe("POST /api/flows provisions Workspace defaults", () => {
-  it("creates all 12 default columns on plain flow creation", async () => {
+  it("creates all 13 default columns on plain flow creation", async () => {
     const res = await POST(post({ name: "Pilgrim Flow" }));
     expect(res.status).toBe(201);
     expect(h.fieldInserts).toHaveLength(1);
     const rows = h.fieldInserts[0];
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
     expect(rows.map((r) => r.name)).toEqual([
       "Assigned To",
       "Call Status",
       "No. of Calls Tried",
-      "Lead Quality",
-      "Quotation / Package",
+      "Lead Type",
+      "Stage",
       "Follow-Up Status",
       "Last Contact Date",
       "Customer Response",
@@ -114,9 +114,10 @@ describe("POST /api/flows provisions Workspace defaults", () => {
       "Next Action",
       "Reason for Lost Lead",
       "Final Remark",
+      "Lead Received",
     ]);
     expect(rows.map((r) => r.position)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     ]);
     for (const row of rows) {
       expect(row.account_id).toBe("acct-1");
@@ -124,11 +125,11 @@ describe("POST /api/flows provisions Workspace defaults", () => {
     }
   });
 
-  it("creates all 12 default columns on template-clone creation", async () => {
+  it("creates all 13 default columns on template-clone creation", async () => {
     const res = await POST(post({ template_slug: "lead_capture" }));
     expect(res.status).toBe(201);
     expect(h.fieldInserts).toHaveLength(1);
-    expect(h.fieldInserts[0]).toHaveLength(12);
+    expect(h.fieldInserts[0]).toHaveLength(13);
     for (const row of h.fieldInserts[0]) {
       expect(row.account_id).toBe("acct-1");
       expect(row.flow_id).toBe("flow-new-1");
@@ -140,6 +141,6 @@ describe("POST /api/flows provisions Workspace defaults", () => {
     const res = await POST(post({ name: "Another Flow" }));
     expect(res.status).toBe(201);
     expect(h.fieldInserts).toHaveLength(1);
-    expect(h.fieldInserts[0]).toHaveLength(11);
+    expect(h.fieldInserts[0]).toHaveLength(12);
   });
 });

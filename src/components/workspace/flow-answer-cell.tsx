@@ -1,0 +1,169 @@
+"use client";
+
+import { useState } from "react";
+
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TextCellPopover } from "./text-cell-popover";
+
+/**
+ * Editable flow-derived Workspace cell (one question column).
+ *
+ * Display rule: `override ?? original` — the Workspace value wins
+ * when an agent override exists (even an explicit empty one);
+ * otherwise the original flow answer shows. Originals are never
+ * mutated here; edits go to PUT flow-overrides and Restore goes
+ * to DELETE, with the parent refreshing afterwards.
+ *
+ * Editors by column kind (same primitives as business cells):
+ * buttons/list questions (column.options) reuse the select +
+ * Clear pattern; every other flow question reuses the long-text
+ * popover (exact-text editing preserves numbers/dates
+ * byte-for-byte — flow answers carry no static type metadata).
+ * System columns never render through this component.
+ */
+
+export interface FlowAnswerCellProps {
+  flowId: string;
+  runId: string;
+  columnKey: string;
+  /** Display label (header text). */
+  label: string;
+  /** Fixed choices for buttons/list questions; absent otherwise. */
+  options?: string[] | null;
+  /** Original flow answer (null when unanswered). Never mutated. */
+  original: string | null;
+  /**
+   * Agent override (undefined = none → show original; null =
+   * explicitly cleared → show blank + edited).
+   */
+  override: string | null | undefined;
+  canEdit: boolean;
+  /** Parent refresh after a successful save/restore. */
+  onChanged: () => void;
+}
+
+export function FlowAnswerCell({
+  flowId,
+  runId,
+  columnKey,
+  label,
+  options,
+  original,
+  override,
+  canEdit,
+  onChanged,
+}: FlowAnswerCellProps) {
+  const [saving, setSaving] = useState(false);
+  const display = override !== undefined ? override : original;
+  const edited = override !== undefined;
+
+  async function request(
+    method: "PUT" | "DELETE",
+    value?: string | null,
+  ): Promise<boolean> {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/flows/${flowId}/flow-overrides`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          method === "PUT"
+            ? { flow_run_id: runId, field_key: columnKey, value }
+            : { flow_run_id: runId, field_key: columnKey },
+        ),
+      });
+      if (!res.ok) return false;
+      onChanged();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Read-only (or empty): today's plain/reader surface. Flow
+  // answers have no write path here.
+  if (!canEdit) {
+    if ((display ?? "") === "") return <span></span>;
+    return (
+      <TextCellPopover
+        fieldLabel={label}
+        value={display ?? ""}
+        editable={false}
+        originalValue={original}
+      />
+    );
+  }
+
+  // Buttons/list questions: the existing dropdown pattern (Clear +
+  // the question's own options). Chevron-less cell trigger, like
+  // business selects, so rows stay visually quiet.
+  if (options && options.length > 0) {
+    return (
+      <span onClick={(e) => e.stopPropagation()}>
+        <Select
+          value={display ?? ""}
+          disabled={saving}
+          onValueChange={(v) => {
+            void request("PUT", v === "__clear__" ? null : v);
+          }}
+        >
+          <SelectTrigger
+            className="h-8 w-full min-w-28 border-transparent bg-transparent px-1 text-[13px] hover:border-border data-[state=open]:border-border [&_svg]:hidden"
+            aria-label={`${label} value`}
+          >
+            <SelectValue placeholder="">
+              {display == null || display === "" ? undefined : (
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span className="truncate">{display}</span>
+                  {edited && (
+                    <span
+                      aria-label="Edited"
+                      title={
+                        original
+                          ? `Edited — original: ${original}`
+                          : "Edited"
+                      }
+                      className="inline-block size-1.5 shrink-0 rounded-full bg-blue-500"
+                    />
+                  )}
+                </span>
+              )}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__clear__">
+              <span className="text-muted-foreground">Clear</span>
+            </SelectItem>
+            {options.map((o) => (
+              <SelectItem key={o} value={o}>
+                {o}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </span>
+    );
+  }
+
+  // Text answers (incl. numbers/dates, which flow answers store as
+  // exact text): the shared long-text popover with restore. Empty
+  // originals open the same empty editor for entry.
+  return (
+    <TextCellPopover
+      fieldLabel={label}
+      value={display ?? ""}
+      editable
+      onSave={(v) => request("PUT", v)}
+      originalValue={original}
+      onRestore={() => request("DELETE")}
+    />
+  );
+}

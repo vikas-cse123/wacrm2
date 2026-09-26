@@ -39,7 +39,7 @@ describe("1/2. columns resize with header/body synchronized", () => {
 
   it("the page feeds one width source to header and body cells", () => {
     expect(pageSrc).toContain("columnWidthStyle(");
-    expect(pageSrc).toContain("stickyLayouts[");
+    expect(pageSrc).not.toContain("stickyLayouts[");
     expect(pageSrc).toContain("headStyle(");
   });
 
@@ -103,10 +103,11 @@ describe("8/9. hidden columns keep widths; new columns start natural", () => {
   });
 });
 
-describe("10/11. sticky positions and scrolling survive resizing", () => {
-  it("sticky geometry reads the same width state", () => {
-    expect(pageSrc).toContain("resolveStickyLayouts(stickyVisIdFor, columnWidths)");
-    expect(pageSrc).toContain("stickyLayouts[STICKY_ROW_COLUMN_KEY]");
+describe("10/11. no sticky offsets; resizing survives on plain widths", () => {
+  it("width state feeds columnWidthStyle only", () => {
+    expect(pageSrc).toContain("columnWidthStyle(");
+    expect(pageSrc).not.toContain("resolveStickyLayouts");
+    expect(pageSrc).not.toContain("stickyLayouts[");
   });
 
   it("the scroll viewport and sticky header are untouched", () => {

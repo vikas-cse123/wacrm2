@@ -3,6 +3,7 @@ import {
   buildFlowTableColumns,
   classifyFlowRun,
   completedAtFor,
+  findFlowNameAnswerKey,
   flowColumnRenderKey,
   flowDisplayName,
   toFlowTableRow,
@@ -158,18 +159,21 @@ describe("flow table rows", () => {
       ["Name", "TravelDate"],
     );
     expect(row.answers).toEqual({ Name: null, TravelDate: "October" });
-    // Contact name backs the Name slot when the flow did not collect one.
+    // The system slot carries the canonical contact name.
     expect(row.name).toBe("Rahul");
   });
 
-  it("prefers the flow-collected name over the contact name", () => {
+  it("keeps the system name as the canonical contact name (never merged)", () => {
     const row = toFlowTableRow(
       rpcRow({ contact_name: "WA User", vars: { Name: "Akash" } }),
       null,
       "Name",
       ["Name"],
     );
-    expect(row.name).toBe("Akash");
+    // No inference, no merging: the flow answer stays in `answers`
+    // under its own question key; the system slot stays the contact.
+    expect(row.name).toBe("WA User");
+    expect(row.answers).toEqual({ Name: "Akash" });
   });
 });
 
@@ -244,6 +248,286 @@ describe("workspace column order invariant", () => {
   });
 });
 
+describe("WhatsApp Name vs flow Name distinction (display-only)", () => {
+  // A flow-derived "Name" column arises from a question whose header
+  // resolves to exactly "Name" (custom sheet_column_name here keeps
+  // the fixture deterministic regardless of prompt wording).
+  const nameQuestion = [{ key: "full_name", header: "Name" }];
+
+  it("1. flow without a Name question keeps the system column as Name", () => {
+    const { columns } = buildFlowTableColumns(
+      nodesFor([{ key: "TravelDate" }]),
+      "start",
+    );
+    const systemName = columns.find((c) => c.system && c.key === "name");
+    expect(systemName?.label).toBe("Name");
+  });
+
+  it("2. flow with a Name question shows WhatsApp Name + Name, never Name twice", () => {
+    const { columns } = buildFlowTableColumns(nodesFor(nameQuestion), "start");
+    const labels = columns.map((c) => c.label);
+    const systemName = columns.find((c) => c.system && c.key === "name");
+    const flowName = columns.find((c) => !c.system && c.key === "full_name");
+    expect(systemName?.label).toBe("WhatsApp Name");
+    expect(flowName?.label).toBe("Name");
+    expect(labels.filter((l) => l === "Name")).toHaveLength(1);
+  });
+
+  it("2b. matches case-insensitively (stored header casing never leaks a duplicate)", () => {
+    const { columns } = buildFlowTableColumns(
+      nodesFor([{ key: "full_name", header: "name" }]),
+      "start",
+    );
+    expect(columns.find((c) => c.system && c.key === "name")?.label).toBe(
+      "WhatsApp Name",
+    );
+  });
+
+  it("2c. a Name-like prompt with a different header does not rename", () => {
+    const { columns } = buildFlowTableColumns(
+      nodesFor([{ key: "Name" }, { key: "TravelDate" }]),
+      "start",
+    );
+    // var_key "Name" with prompt-derived header ("What is your
+    // Name?") is not a "Name"-labelled column — no duplicate.
+    expect(columns.find((c) => c.system && c.key === "name")?.label).toBe("Name");
+  });
+
+  it("3+4+5. WhatsApp Name holds the contact name, flow Name the answer, separately", () => {
+    const { nameKey, answerKeys } = buildFlowTableColumns(
+      nodesFor(nameQuestion),
+      "start",
+    );
+    const row = toFlowTableRow(
+      rpcRow({
+        contact_name: "Rahul Sharma",
+        vars: { full_name: "Rahul Kumar" },
+      }),
+      null,
+      nameKey,
+      answerKeys,
+    );
+    expect(row.name).toBe("Rahul Sharma");
+    expect(row.answers).toMatchObject({ full_name: "Rahul Kumar" });
+    expect(row.name).not.toBe(row.answers.full_name);
+  });
+
+  it("spec example: Nikita Joshi (flow) vs nikitajoshi464 (WhatsApp) vs phone", () => {
+    const { nameKey, answerKeys } = buildFlowTableColumns(
+      nodesFor(nameQuestion),
+      "start",
+    );
+    const row = toFlowTableRow(
+      rpcRow({
+        contact_name: "nikitajoshi464",
+        contact_phone: "918917378479",
+        vars: { full_name: "Nikita Joshi" },
+      }),
+      null,
+      nameKey,
+      answerKeys,
+    );
+    expect(row.name).toBe("nikitajoshi464");
+    expect(row.phone).toBe("918917378479");
+    expect(row.answers).toMatchObject({ full_name: "Nikita Joshi" });
+  });
+
+  it("6+7. derivation identities are unchanged (Sheets + Travel CRM safe)", () => {
+    const { columns, nameKey, answerKeys } = buildFlowTableColumns(
+      nodesFor(nameQuestion),
+      "start",
+    );
+    // Keys, flags, and derivation outputs are exactly as before —
+    // only the system display label and the flow column position changed.
+    expect(nameKey).toBe("full_name");
+    expect(answerKeys).toEqual(["full_name"]);
+    expect(columns.map((c) => c.key)).toEqual([
+      "submission_time",
+      "full_name",
+      "name",
+      "phone",
+      "status",
+    ]);
+    expect(columns.filter((c) => c.system).map((c) => c.key)).toEqual([
+      "submission_time",
+      "name",
+      "phone",
+      "status",
+    ]);
+  });
+
+  it("8. nothing is removed or merged: every column survives the rename", () => {
+    const plain = buildFlowTableColumns(nodesFor(nameQuestion), "start");
+    expect(plain.columns).toHaveLength(5);
+    // The flow question keeps its own identity and stays visible.
+    expect(
+      plain.columns.find((c) => !c.system && c.key === "full_name"),
+    ).toMatchObject({ label: "Name", system: false });
+  });
+
+  it("9. render keys and visibility identities are stable", () => {
+    const { columns } = buildFlowTableColumns(nodesFor(nameQuestion), "start");
+    const renderKeys = columns.map(flowColumnRenderKey);
+    expect(new Set(renderKeys).size).toBe(columns.length);
+    expect(renderKeys).toContain("sys:name");
+    expect(renderKeys).toContain("flow:full_name");
+  });
+
+  it("10. column order is unchanged with the rename in place", () => {
+    const { columns } = buildFlowTableColumns(nodesFor(nameQuestion), "start");
+    const order = columns.map((c) => c.key);
+    expect(order[0]).toBe("submission_time");
+    expect(order[1]).toBe("full_name");
+    expect(order[2]).toBe("name");
+    expect(order[3]).toBe("phone");
+    expect(order[order.length - 1]).toBe("status");
+    expect(columns.map((c) => c.label)).toEqual([
+      "Submission Time",
+      "Name",
+      "WhatsApp Name",
+      "Phone Number",
+      "Status",
+    ]);
+  });
+
+  it("2. without a flow Name field the system order and labels are untouched", () => {
+    const { columns, nameKey } = buildFlowTableColumns(
+      nodesFor([{ key: "TravelDate" }, { key: "Hotel" }]),
+      "start",
+    );
+    expect(nameKey).toBeNull();
+    expect(columns.map((c) => c.label)).toEqual([
+      "Submission Time",
+      "Name",
+      "Phone Number",
+      "What is your TravelDate?",
+      "What is your Hotel?",
+      "Status",
+    ]);
+  });
+});
+
+describe("flow Name column position (immediately after Phone Number)", () => {
+  // A "Name"-labelled question arriving via the general flow order
+  // (prompt text "Name": not a name-like key/header, so no name
+  // promotion) placed AFTER another question — the bad layout this
+  // fixes (Name buried among the other fields).
+  function restPathNameNodes(): FlowNodeLite[] {
+    return [
+      { node_key: "start", node_type: "start", config: { next_node_key: "q0" } },
+      {
+        node_key: "q0",
+        node_type: "collect_input",
+        config: {
+          prompt_text: "Travel date?",
+          var_key: "TravelDate",
+          next_node_key: "q1",
+        },
+      },
+      {
+        node_key: "q1",
+        node_type: "collect_input",
+        config: {
+          prompt_text: "Name",
+          var_key: "full_name",
+          next_node_key: "end",
+        },
+      },
+      { node_key: "end", node_type: "end", config: {} },
+    ];
+  }
+
+  it("1. flow Name appears immediately after Submission Time, not among other fields", () => {
+    const { columns } = buildFlowTableColumns(restPathNameNodes(), "start");
+    expect(columns.map((c) => c.label)).toEqual([
+      "Submission Time",
+      "Name",
+      "WhatsApp Name",
+      "Phone Number",
+      "Travel date?",
+      "Status",
+    ]);
+    expect(columns.map((c) => c.key)).toEqual([
+      "submission_time",
+      "full_name",
+      "name",
+      "phone",
+      "TravelDate",
+      "status",
+    ]);
+    // No duplicate "Name" system header exists.
+    expect(columns.filter((c) => c.label === "Name")).toHaveLength(1);
+  });
+
+  it("derivation identities are preserved: answerKeys keep flow order", () => {
+    const { answerKeys, nameKey } = buildFlowTableColumns(
+      restPathNameNodes(),
+      "start",
+    );
+    // Display columns moved; derivation (Sheets-adjacent) did not.
+    expect(nameKey).toBeNull();
+    expect(answerKeys).toEqual(["TravelDate", "full_name"]);
+  });
+
+  it("3. values stay independent after the move", () => {
+    const { nameKey, answerKeys } = buildFlowTableColumns(
+      restPathNameNodes(),
+      "start",
+    );
+    const row = toFlowTableRow(
+      rpcRow({
+        contact_name: "Rahul Sharma",
+        contact_phone: "919XXXXXXXXX",
+        vars: { TravelDate: "October", full_name: "Rahul Kumar" },
+      }),
+      null,
+      nameKey,
+      answerKeys,
+    );
+    expect(row.name).toBe("Rahul Sharma");
+    expect(row.answers).toMatchObject({
+      TravelDate: "October",
+      full_name: "Rahul Kumar",
+    });
+  });
+
+  it("4. render keys stay unique and key-derived (visibility/widths safe)", () => {
+    const { columns } = buildFlowTableColumns(restPathNameNodes(), "start");
+    const renderKeys = columns.map(flowColumnRenderKey);
+    expect(new Set(renderKeys).size).toBe(columns.length);
+    expect(renderKeys).toContain("sys:name");
+    expect(renderKeys).toContain("flow:full_name");
+  });
+});
+describe("findFlowNameAnswerKey (Travel CRM Name identity)", () => {
+  it("returns the key of the exact flow-derived Name column", () => {
+    const { columns } = buildFlowTableColumns(
+      nodesFor([{ key: "full_name", header: "Name" }]),
+      "start",
+    );
+    expect(findFlowNameAnswerKey(columns)).toBe("full_name");
+  });
+
+  it("returns null without a flow Name column (system/custom never match)", () => {
+    const { columns } = buildFlowTableColumns(
+      nodesFor([{ key: "TravelDate" }]),
+      "start",
+    );
+    // System "Name" alone is not a flow-derived Name column.
+    expect(findFlowNameAnswerKey(columns)).toBeNull();
+    expect(findFlowNameAnswerKey([])).toBeNull();
+  });
+
+  it("matches case-insensitively on the display label", () => {
+    expect(
+      findFlowNameAnswerKey([
+        { key: "submission_time", label: "Submission Time", system: true },
+        { key: "name", label: "Name", system: true },
+        { key: "full_name", label: "name", system: false },
+      ]),
+    ).toBe("full_name");
+  });
+});
 describe("flowDisplayName", () => {
   it("shows the flow name, never the UUID", () => {
     expect(flowDisplayName("Singapore Chat Automation")).toBe(

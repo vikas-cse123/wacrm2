@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,15 +8,10 @@ import {
   WORKSPACE_COLUMN_MAX_WIDTH,
   WORKSPACE_COLUMN_MIN_WIDTH,
 } from "./workspace-column-widths";
-import {
-  resolveStickyLayouts,
-  STICKY_COLUMN_OFFSETS,
-  STICKY_COLUMN_WIDTHS,
-  STICKY_ROW_COLUMN_KEY,
-} from "@/components/workspace/sticky-columns";
 
 // ---------------------------------------------------------------------------
-// Column widths — clamping, styles, sticky integration.
+// Column widths — clamping, styles. No sticky/pinned layout remains:
+// every column (including Row) sizes from its stored width only.
 // ---------------------------------------------------------------------------
 
 describe("min/max band", () => {
@@ -72,44 +68,24 @@ describe("columnWidthStyle", () => {
   });
 });
 
-describe("resolveStickyLayouts", () => {
-  const visIdFor = (key: string) =>
-    key === STICKY_ROW_COLUMN_KEY ? "core:row" : `flow:${key}`;
-
-  it("matches the static defaults when nothing is resized", () => {
-    const layouts = resolveStickyLayouts(visIdFor, {});
-    for (const key of Object.keys(STICKY_COLUMN_WIDTHS)) {
-      expect(layouts[key].width).toBe(STICKY_COLUMN_WIDTHS[key]);
-      expect(layouts[key].left).toBe(STICKY_COLUMN_OFFSETS[key]);
-    }
+describe("no sticky layouts remain", () => {
+  it("the sticky-column module is deleted", () => {
+    expect(
+      existsSync(
+        `${process.cwd()}/src/components/workspace/sticky-columns.ts`
+      )
+    ).toBe(false);
   });
 
-  it("a resized sticky column shifts later siblings with no gaps/overlaps", () => {
-    const layouts = resolveStickyLayouts(visIdFor, { "flow:name": 300 });
-    expect(layouts["name"].width).toBe(300);
-    expect(layouts["phone"].left).toBe(layouts["name"].left + 300);
-    // Contiguity: every left edge equals the previous right edge.
-    const order = ["__row", "submission_time", "name", "phone"];
-    const ids = ["core:row", "flow:submission_time", "flow:name", "flow:phone"];
-    const full = resolveStickyLayouts(
-      (k) => ids[order.indexOf(k)],
-      { "flow:submission_time": 200, "flow:phone": 120 },
-    );
-    let cursor = 0;
-    for (const key of order) {
-      expect(full[key].left).toBe(cursor);
-      cursor += full[key].width;
-    }
-    expect(full["submission_time"].width).toBe(200);
-    expect(full["phone"].width).toBe(120);
-  });
-
-  it("ignores unknown widths and unknown sticky keys", () => {
-    const layouts = resolveStickyLayouts(visIdFor, {
-      "custom:whatever": 400,
-      "flow:name": "junk",
+  it("resizing still flows through columnWidthStyle per column", () => {
+    // Row + every other column size independently; no offsets exist.
+    expect(columnWidthStyle("core:row", { "core:row": 120 })).toEqual({
+      width: 120,
+      minWidth: 120,
     });
-    expect(layouts["name"].width).toBe(STICKY_COLUMN_WIDTHS["name"]);
-    expect(layouts["unknown-key"]).toBeUndefined();
+    expect(columnWidthStyle("flow:name", { "flow:name": 300 })).toEqual({
+      width: 300,
+      minWidth: 300,
+    });
   });
 });

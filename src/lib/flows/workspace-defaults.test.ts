@@ -6,6 +6,7 @@ import {
   applyVisibility,
   customFieldVisId,
   describeVisibilityMenu,
+  flattenVisibilityMenu,
   toggleHiddenId,
 } from "./workspace-visibility";
 import type { WorkspaceField } from "./workspace-fields";
@@ -13,8 +14,17 @@ import {
   WORKSPACE_DEFAULT_FIELDS,
   CALLS_TRIED_OPTIONS,
   QUOTATION_OPTIONS,
+  LEAD_TYPE_OPTIONS,
+  STAGE_OPTIONS,
+  LEAD_RECEIVED_OPTIONS,
   ensureWorkspaceDefaultFields,
+  defaultBusinessValue,
+  isLeadReceivedField,
+  isLeadTypeField,
+  isStageField,
   isWorkspaceDefaultName,
+  orderBusinessColumns,
+  receivedDefaultLabel,
 } from "./workspace-defaults";
 import { validateWorkspaceValue } from "./workspace-fields";
 
@@ -25,11 +35,13 @@ import { validateWorkspaceValue } from "./workspace-fields";
 // ---------------------------------------------------------------------------
 
 interface FakeStore {
-  rows: Array<{ name: string; position: number }>;
+  rows: Array<{ id?: string; name: string; position: number; options?: string[] | null }>;
   tablesTouched: string[];
   eqFilters: Array<[string, unknown]>;
   inserts: Array<Record<string, unknown>[]>;
+  updates: Array<{ patch: Record<string, unknown>; id: string | null }>;
   insertError: { code?: string; message: string } | null;
+  updateError: { code?: string; message: string } | null;
   failRead: boolean;
 }
 
@@ -59,6 +71,17 @@ function fakeClient(store: FakeStore): SupabaseClient {
           }
           return { data: newRows, error: null };
         },
+        update: (patch: Record<string, unknown>) => ({
+          eq: async (col: string, val: unknown) => {
+            store.eqFilters.push([col, val]);
+            const id = col === "id" ? String(val) : null;
+            store.updates.push({ patch, id });
+            if (store.updateError) {
+              return { data: null, error: store.updateError };
+            }
+            return { data: null, error: null };
+          },
+        }),
       };
     },
   };
@@ -66,14 +89,16 @@ function fakeClient(store: FakeStore): SupabaseClient {
 }
 
 function newStore(
-  rows: Array<{ name: string; position: number }> = [],
+  rows: Array<{ id?: string; name: string; position: number; options?: string[] | null }> = [],
 ): FakeStore {
   return {
     rows,
     tablesTouched: [],
     eqFilters: [],
     inserts: [],
+    updates: [],
     insertError: null,
+    updateError: null,
     failRead: false,
   };
 }
@@ -104,13 +129,13 @@ function readMigration096(): string {
 }
 
 describe("default business column spec", () => {
-  it("defines exactly the 12 required columns in order", () => {
+  it("defines exactly the 13 required columns in order", () => {
     expect(WORKSPACE_DEFAULT_FIELDS.map((f) => f.name)).toEqual([
       "Assigned To",
       "Call Status",
       "No. of Calls Tried",
-      "Lead Quality",
-      "Quotation / Package",
+      "Lead Type",
+      "Stage",
       "Follow-Up Status",
       "Last Contact Date",
       "Customer Response",
@@ -118,6 +143,7 @@ describe("default business column spec", () => {
       "Next Action",
       "Reason for Lost Lead",
       "Final Remark",
+      "Lead Received",
     ]);
   });
 
@@ -126,8 +152,8 @@ describe("default business column spec", () => {
     expect(byName.get("Assigned To")?.field_type).toBe("single_select");
     expect(byName.get("Call Status")?.field_type).toBe("single_select");
     expect(byName.get("No. of Calls Tried")?.field_type).toBe("single_select");
-    expect(byName.get("Lead Quality")?.field_type).toBe("single_select");
-    expect(byName.get("Quotation / Package")?.field_type).toBe("single_select");
+    expect(byName.get("Lead Type")?.field_type).toBe("single_select");
+    expect(byName.get("Stage")?.field_type).toBe("single_select");
     expect(byName.get("Follow-Up Status")?.field_type).toBe("single_select");
     expect(byName.get("Last Contact Date")?.field_type).toBe("date");
     expect(byName.get("Customer Response")?.field_type).toBe("text");
@@ -139,6 +165,7 @@ describe("default business column spec", () => {
       "single_select",
     );
     expect(byName.get("Final Remark")?.field_type).toBe("text");
+    expect(byName.get("Lead Received")?.field_type).toBe("single_select");
   });
 
   it("carries the exact business options for select columns", () => {
@@ -163,15 +190,42 @@ describe("default business column spec", () => {
       "9",
       "10",
     ]);
-    expect(byName.get("Quotation / Package")?.options).toEqual([
-      "Sent",
-      "Not Yet",
-    ]);
-    expect(byName.get("Lead Quality")?.options).toEqual([
+    expect(byName.get("Lead Type")?.options).toEqual([
+      "Fresh",
       "Hot",
       "Warm",
       "Cold",
-      "Fake",
+      "Prospect",
+    ]);
+    expect(byName.get("Stage")?.options).toEqual([
+      "New Lead",
+      "Contacted",
+      "Qualified",
+      "Quotation Required",
+      "Quotation Sent",
+      "In Negotiation",
+      "Ready To Book",
+      "Booking Confirmed",
+      "Follow Up",
+      "Amendment",
+      "Lost",
+      "Cancelled",
+      "Invalid",
+      "On Hold",
+    ]);
+    expect(byName.get("Lead Received")?.options).toEqual([
+      "Website",
+      "Social Media",
+      "Facebook Ads",
+      "Instagram Ads",
+      "Google Ads",
+      "Whatsapp",
+      "Phone Call",
+      "Referral",
+      "Walk In",
+      "Repeat Customer",
+      "Partner",
+      "Other",
     ]);
     expect(byName.get("Follow-Up Status")?.options).toEqual([
       "Follow-up Pending",
@@ -220,13 +274,66 @@ describe("default business column spec", () => {
     });
   });
 
-  it("4/5. Quotation / Package is single-select with exactly Sent/Not Yet", () => {
-    expect([...QUOTATION_OPTIONS]).toEqual(["Sent", "Not Yet"]);
+  it("Lead Type is single-select with exactly the 5 options", () => {
+    expect([...LEAD_TYPE_OPTIONS]).toEqual([
+      "Fresh",
+      "Hot",
+      "Warm",
+      "Cold",
+      "Prospect",
+    ]);
     const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
-    expect(byName.get("Quotation / Package")).toMatchObject({
+    expect(byName.get("Lead Type")).toMatchObject({
       field_type: "single_select",
-      options: [...QUOTATION_OPTIONS],
+      options: [...LEAD_TYPE_OPTIONS],
     });
+  });
+
+  it("Stage is single-select with exactly the 14 options", () => {
+    expect([...STAGE_OPTIONS]).toEqual([
+      "New Lead",
+      "Contacted",
+      "Qualified",
+      "Quotation Required",
+      "Quotation Sent",
+      "In Negotiation",
+      "Ready To Book",
+      "Booking Confirmed",
+      "Follow Up",
+      "Amendment",
+      "Lost",
+      "Cancelled",
+      "Invalid",
+      "On Hold",
+    ]);
+    const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
+    expect(byName.get("Stage")).toMatchObject({
+      field_type: "single_select",
+      options: [...STAGE_OPTIONS],
+    });
+  });
+
+  it("Lead Received is single-select with exactly the 12 options", () => {
+    expect([...LEAD_RECEIVED_OPTIONS]).toEqual([
+      "Website",
+      "Social Media",
+      "Facebook Ads",
+      "Instagram Ads",
+      "Google Ads",
+      "Whatsapp",
+      "Phone Call",
+      "Referral",
+      "Walk In",
+      "Repeat Customer",
+      "Partner",
+      "Other",
+    ]);
+    const byName = new Map(WORKSPACE_DEFAULT_FIELDS.map((f) => [f.name, f]));
+    expect(byName.get("Lead Received")).toMatchObject({
+      field_type: "single_select",
+      options: [...LEAD_RECEIVED_OPTIONS],
+    });
+  });
   });
 
   it("3/6. arbitrary text cannot be entered in either dropdown", () => {
@@ -273,19 +380,27 @@ describe("default business column spec", () => {
     const store = newStore();
     await ensureWorkspaceDefaultFields(fakeClient(store), "acct-1", "flow-1");
     const rows = store.inserts[0];
-    // Still exactly 12 names — no duplicates added.
+    // Still exactly 13 names — no duplicates added.
     expect(rows.map((r) => r.name)).toEqual(
       WORKSPACE_DEFAULT_FIELDS.map((f) => f.name),
     );
-    expect(new Set(rows.map((r) => r.name)).size).toBe(12);
+    expect(new Set(rows.map((r) => r.name)).size).toBe(13);
     const byName = new Map(rows.map((r) => [r.name, r]));
     expect(byName.get("No. of Calls Tried")).toMatchObject({
       field_type: "single_select",
       options: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
     });
-    expect(byName.get("Quotation / Package")).toMatchObject({
+    expect(byName.get("Stage")).toMatchObject({
       field_type: "single_select",
-      options: ["Sent", "Not Yet"],
+      options: [...STAGE_OPTIONS],
+    });
+    expect(byName.get("Lead Type")).toMatchObject({
+      field_type: "single_select",
+      options: [...LEAD_TYPE_OPTIONS],
+    });
+    expect(byName.get("Lead Received")).toMatchObject({
+      field_type: "single_select",
+      options: [...LEAD_RECEIVED_OPTIONS],
     });
     // Completed and Incomplete are views over these SAME rows:
     // provisioning touches only workspace_fields, never per-view data.
@@ -329,36 +444,61 @@ describe("default business column spec", () => {
   it("recognizes default names deterministically (case-insensitive)", () => {
     expect(isWorkspaceDefaultName("Call Status")).toBe(true);
     expect(isWorkspaceDefaultName("  call status ")).toBe(true);
+    expect(isWorkspaceDefaultName("Lead Type")).toBe(true);
+    expect(isWorkspaceDefaultName("Stage")).toBe(true);
+    expect(isWorkspaceDefaultName("Lead Received")).toBe(true);
+    // Renamed-away legacy names are no longer defaults.
+    expect(isWorkspaceDefaultName("Lead Quality")).toBe(false);
+    expect(isWorkspaceDefaultName("Quotation / Package")).toBe(false);
     expect(isWorkspaceDefaultName("My Custom Column")).toBe(false);
     expect(isWorkspaceDefaultName(null)).toBe(false);
   });
-});
+
+  it("identifies the Lead Received field and its ad-platform default", () => {
+    expect(isLeadReceivedField({ name: "Lead Received" })).toBe(true);
+    expect(isLeadReceivedField({ name: "  lead received " })).toBe(true);
+    expect(isLeadReceivedField({ name: "Lead Type" })).toBe(false);
+    expect(receivedDefaultLabel("facebook")).toBe("Facebook Ads");
+    expect(receivedDefaultLabel("instagram")).toBe("Instagram Ads");
+    expect(receivedDefaultLabel(null)).toBeNull();
+    expect(receivedDefaultLabel("other")).toBeNull();
+    expect(receivedDefaultLabel(undefined)).toBeNull();
+  });
 
 describe("ensureWorkspaceDefaultFields", () => {
-  it("1. provisions all 12 defaults for a new flow (positions 0–11)", async () => {
+  it("1. provisions all 13 defaults for a new flow (positions 0–12)", async () => {
     const store = newStore();
     const res = await ensureWorkspaceDefaultFields(
       fakeClient(store),
       "acct-1",
       "flow-1",
     );
-    expect(res.created).toHaveLength(12);
+    expect(res.created).toHaveLength(13);
+    expect(res.renamed).toEqual([]);
     expect(store.inserts).toHaveLength(1);
     const rows = store.inserts[0];
     expect(rows.map((r) => r.name)).toEqual(
       WORKSPACE_DEFAULT_FIELDS.map((f) => f.name),
     );
     expect(rows.map((r) => r.position)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     ]);
     for (const row of rows) {
       expect(row.account_id).toBe("acct-1");
       expect(row.flow_id).toBe("flow-1");
-      expect(row.default_value).toBeNull();
+      // Type/Stage carry their display defaults on newly inserted
+      // rows only; every other default keeps default_value null.
+      const expected =
+        row.name === "Lead Type"
+          ? "Fresh"
+          : row.name === "Stage"
+            ? "New Lead"
+            : null;
+      expect(row.default_value).toBe(expected);
       expect(row.currency_code).toBeNull();
     }
     // No duplicate option payloads: single bulk insert.
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
   });
 
   it("10. is idempotent — a second call creates nothing", async () => {
@@ -386,29 +526,99 @@ describe("ensureWorkspaceDefaultFields", () => {
       "acct-1",
       "flow-1",
     );
-    expect(res.created).toHaveLength(12);
+    expect(res.created).toHaveLength(13);
     const rows = store.inserts[0];
     // Appended after the current max position — existing order kept.
     expect(rows[0].position).toBe(5);
-    expect(rows[11].position).toBe(16);
+    expect(rows[12].position).toBe(17);
   });
 
   it("10. never duplicates a user field sharing a default name", async () => {
     const store = newStore([
       { name: "Call Status", position: 0 },
-      { name: "  lead quality  ", position: 1 },
+      { name: "  Lead Type  ", position: 1 },
     ]);
     const res = await ensureWorkspaceDefaultFields(
       fakeClient(store),
       "acct-1",
       "flow-1",
     );
-    // Two suppressed, ten created — the user's own rows untouched
+    // Two suppressed, eleven created — the user's own rows untouched
     // (provisioning only inserts; it never updates or deletes).
-    expect(res.created).toHaveLength(10);
+    expect(res.created).toHaveLength(11);
     expect(res.created).not.toContain("Call Status");
-    expect(res.created).not.toContain("Lead Quality");
-    expect(store.inserts[0]).toHaveLength(10);
+    expect(res.created).not.toContain("Lead Type");
+    expect(store.inserts[0]).toHaveLength(11);
+    expect(store.updates).toHaveLength(0);
+  });
+
+  it("renames legacy Lead Quality in place, preserving id and values", async () => {
+    const store = newStore([
+      { id: "f-old", name: "Lead Quality", position: 3, options: ["Hot", "Warm", "Cold", "Fake"] },
+    ]);
+    const res = await ensureWorkspaceDefaultFields(
+      fakeClient(store),
+      "acct-1",
+      "flow-1",
+    );
+    // Renamed, not re-inserted: one update, and "Lead Type" is not
+    // among the inserts.
+    expect(res.renamed).toEqual(["Lead Type"]);
+    expect(store.updates).toHaveLength(1);
+    expect(store.updates[0]).toMatchObject({
+      id: "f-old",
+      patch: { name: "Lead Type", options: [...LEAD_TYPE_OPTIONS] },
+    });
+    expect(res.created).not.toContain("Lead Type");
+    // Stored values live in workspace_values (untouched here) and
+    // stay readable — even "Fake", outside the new options.
+  });
+
+  it("renames legacy Quotation / Package in place", async () => {
+    const store = newStore([
+      { id: "f-old", name: "Quotation / Package", position: 4, options: ["Sent", "Not Yet"] },
+    ]);
+    const res = await ensureWorkspaceDefaultFields(
+      fakeClient(store),
+      "acct-1",
+      "flow-1",
+    );
+    expect(res.renamed).toEqual(["Stage"]);
+    expect(store.updates).toHaveLength(1);
+    expect(store.updates[0]).toMatchObject({
+      id: "f-old",
+      patch: { name: "Stage", options: [...STAGE_OPTIONS] },
+    });
+    expect(res.created).not.toContain("Stage");
+  });
+
+  it("skips rename when the successor already exists (no merge, no loss)", async () => {
+    const store = newStore([
+      { id: "f-old", name: "Lead Quality", position: 3, options: ["Hot", "Warm", "Cold", "Fake"] },
+      { id: "f-new", name: "Lead Type", position: 9, options: [...LEAD_TYPE_OPTIONS] },
+    ]);
+    const res = await ensureWorkspaceDefaultFields(
+      fakeClient(store),
+      "acct-1",
+      "flow-1",
+    );
+    expect(res.renamed).toEqual([]);
+    expect(store.updates).toHaveLength(0);
+  });
+
+  it("skips rename for same-named fields with different options (user-owned)", async () => {
+    const store = newStore([
+      { id: "f-user", name: "Lead Quality", position: 3, options: ["A", "B"] },
+    ]);
+    const res = await ensureWorkspaceDefaultFields(
+      fakeClient(store),
+      "acct-1",
+      "flow-1",
+    );
+    // Not a legacy default row: left alone, successor inserted fresh.
+    expect(res.renamed).toEqual([]);
+    expect(store.updates).toHaveLength(0);
+    expect(res.created).toContain("Lead Type");
   });
 
   it("survives a concurrent-provisioner race (unique-index conflict)", async () => {
@@ -421,7 +631,7 @@ describe("ensureWorkspaceDefaultFields", () => {
     );
     // Attempted the insert; the conflict is swallowed, not surfaced.
     expect(store.inserts).toHaveLength(1);
-    expect(res.created).toHaveLength(12);
+    expect(res.created).toHaveLength(13);
   });
 
   it("surfaces real failures so callers can degrade gracefully", async () => {
@@ -451,19 +661,20 @@ describe("ensureWorkspaceDefaultFields", () => {
 });
 
 describe("default fields in the existing visibility mechanism", () => {
-  it("2/3/4. Completed and Incomplete share one config: all 12 visible initially", () => {
+  it("2/3/4. Completed and Incomplete share one config: all 13 visible initially", () => {
     const fields = defaultFields();
     const model = describeVisibilityMenu([], fields);
     // Searchable Columns manager lists every default, none locked.
-    expect(model.custom).toHaveLength(12);
-    expect(model.custom.every((c) => c.locked === false)).toBe(true);
+    expect(model.custom).toHaveLength(13);
+    expect(
+      model.custom.every((c) => !("locked" in c)),
+    ).toBe(true);
     // Default state (no hidden ids — same key for both views).
     const applied = applyVisibility([], fields, []);
-    expect(applied.customFields).toHaveLength(12);
-    expect(applied.leadSourceVisible).toBe(true);
+    expect(applied.customFields).toHaveLength(13);
   });
 
-  it("13. core fields stay locked; defaults never join them", () => {
+  it("13. no column is locked; system fields are hideable flow entries", () => {
     const model = describeVisibilityMenu(
       [
         { key: "submission_time", label: "Submission Time", system: true },
@@ -472,29 +683,38 @@ describe("default fields in the existing visibility mechanism", () => {
       ],
       defaultFields(),
     );
-    expect(model.core.map((c) => c.label)).toEqual([
-      "Row",
+    expect(model.core.map((c) => c.label)).toEqual(["Row"]);
+    expect(model.flow.map((c) => c.label)).toEqual([
       "Submission Time",
       "Name",
       "Phone Number",
     ]);
-    expect(model.core.every((c) => c.locked)).toBe(true);
+    const applied = applyVisibility(
+      [
+        { key: "submission_time", label: "Submission Time", system: true },
+        { key: "name", label: "Name", system: true },
+        { key: "phone", label: "Phone Number", system: true },
+      ],
+      defaultFields(),
+      ["core:row", "flow:name", "flow:phone", "flow:submission_time"],
+    );
+    expect(applied.flowColumns).toHaveLength(0);
     expect(
-      model.custom.some((c) => c.locked || model.core.some((k) => k.id === c.id)),
+      model.custom.some((c) => model.core.some((k) => k.id === c.id)),
     ).toBe(false);
   });
 
-  it("5/7. hides one, several, or all 12 — and restores each in place", () => {
+  it("5/7. hides one, several, or all 13 — and restores each in place", () => {
     const fields = defaultFields();
     const ids = fields.map((f) => customFieldVisId(f.id));
 
     let hidden = toggleHiddenId([], ids[0]);
-    expect(applyVisibility([], fields, hidden).customFields).toHaveLength(11);
+    expect(applyVisibility([], fields, hidden).customFields).toHaveLength(12);
 
     hidden = toggleHiddenId(hidden, ids[1]);
     hidden = toggleHiddenId(hidden, ids[2]);
     let applied = applyVisibility([], fields, hidden);
-    expect(applied.customFields).toHaveLength(9);
+    expect(applied.customFields).toHaveLength(10);
 
     hidden = [...ids];
     applied = applyVisibility([], fields, hidden);
@@ -526,20 +746,156 @@ describe("default fields in the existing visibility mechanism", () => {
     );
   });
 
-  it("14. Lead Source stays a separate, final column", () => {
+  it("14. no lead pseudo-column exists in the menu model", () => {
     const model = describeVisibilityMenu([], defaultFields());
-    expect(model.leadSource).toMatchObject({
-      id: "lead_source",
-      locked: false,
-    });
+    expect(model).not.toHaveProperty("leadSource");
     expect(
-      model.custom.some((c) => c.id === model.leadSource.id),
+      flattenVisibilityMenu(model).some((c) => c.label === "Lead Source"),
     ).toBe(false);
   });
 });
 
-describe("console hygiene", () => {
-  it("does not log during normal provisioning", async () => {
+describe("Group 3 display order (Assigned To, Received, Type, Stage first)", () => {
+  function extraField(name: string, position: number): WorkspaceField {
+    return {
+      id: `f-extra-${position}`,
+      account_id: "acct-1",
+      flow_id: "flow-1",
+      name,
+      field_type: "text",
+      position,
+      options: null,
+      default_value: null,
+      currency_code: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+  }
+
+  // Scrambled stored order with extra custom fields interleaved —
+  // the pinned four must still lead, everything else keeps its
+  // relative sequence.
+  function scrambled(): WorkspaceField[] {
+    const base = defaultFields();
+    const byName = new Map(base.map((f) => [f.name, f]));
+    const get = (name: string) => byName.get(name) as WorkspaceField;
+    return [
+      get("Final Remark"),
+      extraField("My Notes", 100),
+      get("Stage"),
+      get("Call Status"),
+      get("Lead Type"),
+      get("Assigned To"),
+      get("Follow-Up Status"),
+      get("Lead Received"),
+      get("No. of Calls Tried"),
+      extraField("Budget Code", 101),
+      get("Last Contact Date"),
+      get("Customer Response"),
+      get("Next Follow-up Date & Time"),
+      get("Next Action"),
+      get("Reason for Lost Lead"),
+    ];
+  }
+
+  it("2+3+4+5. Assigned To, Received, Type, Stage lead in exactly that order", () => {
+    const names = orderBusinessColumns(scrambled()).map((f) => f.name);
+    expect(names.slice(0, 4)).toEqual([
+      "Assigned To",
+      "Lead Received",
+      "Lead Type",
+      "Stage",
+    ]);
+  });
+
+  it("6. remaining business columns follow Stage in stored relative order", () => {
+    const names = orderBusinessColumns(scrambled()).map((f) => f.name);
+    expect(names).toEqual([
+      "Assigned To",
+      "Lead Received",
+      "Lead Type",
+      "Stage",
+      "Final Remark",
+      "My Notes",
+      "Call Status",
+      "Follow-Up Status",
+      "No. of Calls Tried",
+      "Budget Code",
+      "Last Contact Date",
+      "Customer Response",
+      "Next Follow-up Date & Time",
+      "Next Action",
+      "Reason for Lost Lead",
+    ]);
+  });
+
+  it("matches pinned columns by stored identity, never display labels", () => {
+    expect(isLeadTypeField({ name: "Lead Type" })).toBe(true);
+    expect(isLeadTypeField({ name: "  lead type " })).toBe(true);
+    expect(isLeadTypeField({ name: "Type" })).toBe(false);
+    expect(isStageField({ name: "Stage" })).toBe(true);
+    expect(isStageField({ name: "stage" })).toBe(true);
+    expect(isStageField({ name: "Stages" })).toBe(false);
+    // A display-labelled "Type"/"Received" decoy is not promoted.
+    const fields = [extraField("Type", 1), extraField("Received", 2)];
+    expect(orderBusinessColumns(fields).map((f) => f.name)).toEqual([
+      "Type",
+      "Received",
+    ]);
+  });
+
+  it("tolerates missing pinned columns and never mutates its input", () => {
+    const fields = [extraField("B", 2), extraField("A", 1)];
+    const snapshot = fields.map((f) => f.name);
+    expect(orderBusinessColumns(fields).map((f) => f.name)).toEqual(["B", "A"]);
+    expect(fields.map((f) => f.name)).toEqual(snapshot);
+    expect(orderBusinessColumns([])).toEqual([]);
+    // Stored spec order itself is untouched by the display rule.
+    expect(WORKSPACE_DEFAULT_FIELDS.map((f) => f.name)).toContain("Lead Type");
+    expect(WORKSPACE_DEFAULT_FIELDS.map((f) => f.name)).toContain("Lead Received");
+  });
+
+  it("10. works on visibility-filtered subsets (hidden columns simply absent)", () => {
+    const visible = scrambled().filter((f) => f.name !== "Assigned To");
+    const names = orderBusinessColumns(visible).map((f) => f.name);
+    expect(names.slice(0, 3)).toEqual(["Lead Received", "Lead Type", "Stage"]);
+    // Field identities survive ordering for widths/visibility/values.
+    const ordered = orderBusinessColumns(scrambled());
+    expect(ordered.map((f) => f.id)).toHaveLength(scrambled().length);
+    expect(new Set(ordered.map((f) => f.id)).size).toBe(scrambled().length);
+  });
+});
+
+describe("Type/Stage business defaults (Fresh / New Lead, read-only)", () => {
+  it("returns Fresh for Type and New Lead for Stage, null elsewhere", () => {
+    expect(defaultBusinessValue({ name: "Lead Type" })).toBe("Fresh");
+    expect(defaultBusinessValue({ name: "  lead type " })).toBe("Fresh");
+    expect(defaultBusinessValue({ name: "Stage" })).toBe("New Lead");
+    expect(defaultBusinessValue({ name: "STAGE" })).toBe("New Lead");
+    expect(defaultBusinessValue({ name: "Lead Received" })).toBeNull();
+    expect(defaultBusinessValue({ name: "Call Status" })).toBeNull();
+    expect(defaultBusinessValue({ name: "Type" })).toBeNull();
+  });
+
+  it("9. existing Type/Stage rows are never backfilled or rewritten", async () => {
+    const store = newStore();
+    store.rows = [
+      { id: "f-type", name: "Lead Type", position: 3, options: [...LEAD_TYPE_OPTIONS] },
+      { id: "f-stage", name: "Stage", position: 4, options: [...STAGE_OPTIONS] },
+    ];
+    const before = store.rows.map((r) => ({ ...r }));
+    const res = await ensureWorkspaceDefaultFields(fakeClient(store), "acct-1", "flow-1");
+    // The two pre-existing rows suppress their defaults; only the
+    // other 11 are inserted — and no UPDATE touches any row.
+    expect(res.created).toHaveLength(11);
+    expect(res.created).not.toContain("Lead Type");
+    expect(res.created).not.toContain("Stage");
+    expect(store.updates).toHaveLength(0);
+    expect(store.rows.slice(0, 2)).toEqual(before);
+  });
+});
+
+describe("console hygiene", () => {  it("does not log during normal provisioning", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await ensureWorkspaceDefaultFields(

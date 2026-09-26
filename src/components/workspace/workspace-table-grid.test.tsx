@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
+// next/font/google only resolves inside a Next.js build — stub the
+// loader so importing the page module works under vitest.
+vi.mock("next/font/google", () => ({
+  DM_Sans: () => ({ className: "font-dm-sans-stub" }),
+}));
+
 import { cellText } from "@/app/(dashboard)/workspace/page";
 import type { FlowTableColumn, FlowTableRow } from "@/lib/flows/flow-tables";
 import {
@@ -133,6 +139,56 @@ describe("1. empty table cells render blank (no dash)", () => {
   });
 });
 
+describe("Name vs WhatsApp Name value sources (column identity, not key text)", () => {
+  function waRow(): FlowTableRow {
+    return baseRow({
+      name: "nikitajoshi464",
+      phone: "918917378479",
+      answers: { full_name: "Nikita Joshi", name: "Nikita Joshi" },
+    });
+  }
+
+  it("flow Name cell shows the flow answer, never the contact name", () => {
+    expect(
+      cellText(waRow(), { key: "full_name", label: "Name", system: false }),
+    ).toBe("Nikita Joshi");
+  });
+
+  it("WhatsApp Name cell shows the contact name, never the flow answer", () => {
+    expect(
+      cellText(waRow(), { key: "name", label: "WhatsApp Name", system: true }),
+    ).toBe("nikitajoshi464");
+  });
+
+  it("a colliding var_key 'name' still resolves by identity", () => {
+    const row = waRow();
+    expect(
+      cellText(row, { key: "name", label: "WhatsApp Name", system: true }),
+    ).toBe("nikitajoshi464");
+    expect(
+      cellText(row, { key: "name", label: "Name", system: false }),
+    ).toBe("Nikita Joshi");
+  });
+
+  it("Phone Number cell keeps the WhatsApp contact phone", () => {
+    expect(
+      cellText(
+        baseRow({ phone: "+971501234567" }),
+        { key: "phone", label: "Phone Number", system: true },
+      ),
+    ).toBe("+971501234567");
+  });
+
+  it("Indian Phone Number cell hides +91 (display-only)", () => {
+    expect(
+      cellText(
+        baseRow({ phone: "919890431234" }),
+        { key: "phone", label: "Phone Number", system: true },
+      ),
+    ).toBe("9890431234");
+  });
+});
+
 describe("2. underlying empty/null values are unchanged", () => {
   it("the data layer still means null (blank is paint-only)", () => {
     expect(displayWorkspaceValue({ default_value: null }, null)).toBeNull();
@@ -147,7 +203,7 @@ describe("3/4/5. vertical + horizontal grid lines", () => {
     // "… border-r border-border" on body cells) but never the
     // last-column exemption itself.
     const verticals = pageSrc.match(/border-r border/g) ?? [];
-    expect(verticals.length).toBeGreaterThanOrEqual(8);
+    expect(verticals.length).toBeGreaterThanOrEqual(6);
     expect(pageSrc).toContain("last:border-r-0");
   });
 
@@ -176,11 +232,11 @@ describe("6/7/8/9. alignment, sticky borders, scroll, header intact", () => {
     expect(pageSrc).not.toContain("key={c.key}");
   });
 
-  it("sticky geometry still feeds header and body identically", () => {
-    expect(pageSrc).toContain("resolveStickyLayouts(");
-    expect(pageSrc).toContain("stickyLayouts[");
+  it("header and body size from one width source, nothing pinned", () => {
+    expect(pageSrc).not.toContain("resolveStickyLayouts(");
+    expect(pageSrc).not.toContain("stickyLayouts[");
     expect(pageSrc).toContain("headStyle(");
-    expect(pageSrc).toContain("STICKY_Z.corner");
+    expect(pageSrc).not.toContain("STICKY_Z.corner");
   });
 
   it("the single scroll viewport and sticky header are untouched", () => {

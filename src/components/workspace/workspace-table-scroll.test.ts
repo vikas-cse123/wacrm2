@@ -1,29 +1,19 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { cn } from "@/lib/utils";
 import { buildFlowTableColumns } from "@/lib/flows/flow-tables";
-import {
-  isStickyColumnKey,
-  STICKY_COLUMN_OFFSETS,
-  STICKY_COLUMN_ORDER,
-  STICKY_COLUMN_WIDTHS,
-  STICKY_FLOW_COLUMN_KEYS,
-  STICKY_ROW_COLUMN_KEY,
-  STICKY_TOTAL_WIDTH,
-  STICKY_Z,
-  stickyColumnStyle,
-} from "./sticky-columns";
 
 // ---------------------------------------------------------------------------
 // Workspace enterprise horizontal scroll — structural verification.
 //
 // Real pixel scrolling can't run in a node test env, so these tests
 // lock the MECHANICS that produce the required behavior: a single
-// scroll viewport (one native scrollbar pair), key-based pinned
-// columns with shared header/body geometry, a stuck opaque
-// header, and untouched data plumbing (order, pagination,
-// visibility, filters, Sheets).
+// scroll viewport (one native scrollbar pair), ZERO pinned/frozen
+// columns (every column scrolls horizontally as one unified
+// grid), a stuck opaque header for vertical scrolling, and
+// untouched data plumbing (order, pagination, visibility,
+// filters, Sheets).
 // ---------------------------------------------------------------------------
 
 const root = process.cwd();
@@ -31,72 +21,45 @@ const page = readFileSync(`${root}/src/app/(dashboard)/workspace/page.tsx`, "utf
 const globals = readFileSync(`${root}/src/app/globals.css`, "utf8");
 const tablePrimitive = readFileSync(`${root}/src/components/ui/table.tsx`, "utf8");
 
-describe("5. sticky left columns remain visible", () => {
-  it("pins exactly No. + Submission Time + Name + Phone Number", () => {
-    expect(STICKY_FLOW_COLUMN_KEYS).toEqual(["submission_time", "name", "phone"]);
-    expect(STICKY_ROW_COLUMN_KEY).toBe("__row");
-    expect(STICKY_COLUMN_ORDER).toEqual([
-      "__row",
-      "submission_time",
-      "name",
-      "phone",
-    ]);
-    for (const key of STICKY_COLUMN_ORDER) {
-      expect(isStickyColumnKey(key)).toBe(true);
+describe("5. no pinned/frozen columns — everything scrolls", () => {
+  it("the sticky-column module is gone", () => {
+    expect(
+      existsSync(`${root}/src/components/workspace/sticky-columns.ts`)
+    ).toBe(false);
+  });
+
+  it("the page carries no sticky/pinned machinery", () => {
+    for (const token of [
+      "stickyLayouts",
+      "resolveStickyLayouts",
+      "stickyColumnStyle",
+      "isStickyColumnKey",
+      "visibleStickyKeys",
+      "STICKY_Z",
+      "STICKY_ROW_COLUMN_KEY",
+      "STICKY_COLUMN_ORDER",
+      "STICKY_FLOW_COLUMN_KEYS",
+    ]) {
+      expect(page).not.toContain(token);
     }
   });
 
-  it("offsets are cumulative (derived, never hand-synced)", () => {
-    expect(STICKY_COLUMN_OFFSETS).toEqual({
-      __row: 0,
-      submission_time: STICKY_COLUMN_WIDTHS.__row,
-      name:
-        STICKY_COLUMN_WIDTHS.__row + STICKY_COLUMN_WIDTHS.submission_time,
-      phone:
-        STICKY_COLUMN_WIDTHS.__row +
-        STICKY_COLUMN_WIDTHS.submission_time +
-        STICKY_COLUMN_WIDTHS.name,
-    });
-    expect(STICKY_TOTAL_WIDTH).toBe(
-      Object.values(STICKY_COLUMN_WIDTHS).reduce((a, b) => a + b, 0),
-    );
-    for (const w of Object.values(STICKY_COLUMN_WIDTHS)) {
-      expect(w).toBeGreaterThan(0);
-    }
-  });
-
-  it("layering keeps corners above headers above pinned body", () => {
-    expect(STICKY_Z.corner).not.toBe(STICKY_Z.head);
-    expect(STICKY_Z.head).not.toBe(STICKY_Z.body);
+  it("row, system, flow, custom, and lead columns all scroll normally", () => {
+    // Row renders conditionally like any column (no frozen twin).
+    expect(page).toContain("{rowVisible && (");
+    // No body cell pins: the only `sticky` left is the header row's
+    // vertical top-0 (plus the manager footer, a different file).
+    const stickyUses = page.split("sticky").length - 1;
+    const topUses = page.split("sticky top-0").length - 1;
+    expect(stickyUses).toBe(topUses);
+    expect(page).toContain("sticky top-0");
   });
 });
 
-describe("2/3. data columns scroll while pinned columns stay", () => {
-  it.each(["TravelDate", "status", "custom-field-uuid", "lead_source"])(
-    "scrolls (not pinned): %s",
-    (key) => {
-      expect(isStickyColumnKey(key)).toBe(false);
-      expect(stickyColumnStyle(key)).toBeNull();
-    },
-  );
-});
-
-describe("6. header and body stay aligned", () => {
-  it("one shared geometry object feeds both cells per key", () => {
-    for (const key of STICKY_COLUMN_ORDER) {
-      expect(stickyColumnStyle(key)).toEqual(stickyColumnStyle(key));
-      expect(stickyColumnStyle(key)).toMatchObject({
-        left: STICKY_COLUMN_OFFSETS[key],
-        width: STICKY_COLUMN_WIDTHS[key],
-        minWidth: STICKY_COLUMN_WIDTHS[key],
-      });
-    }
-  });
-
-  it("the page feeds the shared layouts map to header and body cells", () => {
-    const uses = page.split("stickyLayouts[").length - 1;
+describe("6. header and body share one width source", () => {
+  it("both cells size from columnWidthStyle (no separate geometry)", () => {
+    const uses = page.split("columnWidthStyle(").length - 1;
     expect(uses).toBeGreaterThanOrEqual(4);
-    expect(page).toContain("resolveStickyLayouts(");
     expect(page).toContain("TableHead");
     expect(page).toContain("TableCell");
   });
@@ -108,7 +71,7 @@ describe("6. header and body stay aligned", () => {
     expect(page).toContain("[&_tr]:border-b-0");
   });
 
-  it("pinned flow columns render first, so positional offsets hold", () => {
+  it("flow columns render in payload order (data order untouched)", () => {
     const { columns } = buildFlowTableColumns([], null);
     expect(columns.map((c) => c.key).slice(0, 3)).toEqual([
       "submission_time",
@@ -142,20 +105,61 @@ describe("1/4/7. single table viewport, no page scroll, vertical intact", () => 
     expect(page).not.toMatch(/overflow-x-(auto|scroll)/);
     expect(globals).not.toMatch(/body\s*\{[^}]*overflow-x/);
   });
+
+  it("pagination footer sits outside the horizontal scroll area", () => {
+    const viewportIdx = page.indexOf("workspace-table-viewport");
+    const footerIdx = page.indexOf("<WorkspacePagination");
+    expect(viewportIdx).toBeGreaterThan(-1);
+    expect(footerIdx).toBeGreaterThan(viewportIdx);
+    // Old standalone pager is gone; footer owns paging now.
+    expect(page).not.toContain(">Previous<");
+    expect(page).toContain("onPage={setPage}");
+    expect(page).toContain("totalPages={totalPages}");
+  });
 });
 
-describe("8/9. pagination + visibility + Lead Source unchanged", () => {
-  it("pagination plumbing is intact", () => {
+describe("custom columns render last in the table", () => {
+  it("thead: Row, flow map, then custom map — in that order", () => {
+    const thead = page.slice(
+      page.indexOf("<TableHeader"),
+      page.indexOf("</TableHeader>")
+    );
+    const rowIdx = thead.indexOf("{rowVisible && (");
+    const flowIdx = thead.indexOf("flowColumnsVisible.map");
+    // Business columns render through the Group 3 display-ordered
+    // list derived from the visibility output.
+    const customIdx = thead.indexOf("customFieldsOrdered.map");
+    expect(rowIdx).toBeGreaterThan(-1);
+    expect(flowIdx).toBeGreaterThan(rowIdx);
+    expect(customIdx).toBeGreaterThan(flowIdx);
+    // No lead pseudo-column conditional remains.
+    expect(thead).not.toContain("{leadSourceVisible && (");
+  });
+
+  it("tbody rows follow the same order", () => {
+    const tbody = page.slice(page.indexOf("<TableBody"));
+    const flowIdx = tbody.indexOf("flowColumnsVisible.map");
+    const customIdx = tbody.indexOf("customFieldsOrdered.map");
+    expect(flowIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeGreaterThan(flowIdx);
+    expect(tbody).not.toContain("{leadSourceVisible && (");
+    expect(tbody).not.toContain("<AdSourceCell");
+  });
+});
+
+describe("8/9. pagination + visibility unchanged", () => {
+  it("pagination plumbing is intact (footer owns paging)", () => {
     for (const token of [
       "workspaceRowNumber",
-      "WORKSPACE_PAGE_SIZES",
-      "Previous",
-      "Next",
+      "WorkspacePagination",
       "totalPages",
-      "rangeText",
+      "onPage={setPage}",
+      "selectPageSize",
     ]) {
       expect(page).toContain(token);
     }
+    // Old standalone pager is gone.
+    expect(page).not.toContain(">Previous<");
   });
 
   it("column visibility plumbing is intact", () => {
@@ -165,22 +169,38 @@ describe("8/9. pagination + visibility + Lead Source unchanged", () => {
       "ColumnsMenu",
       "flowColumnsVisible",
       "customFieldsVisible",
-      "leadSourceVisible",
     ]) {
       expect(page).toContain(token);
     }
+    expect(page).not.toContain("leadSourceVisible");
   });
 
-  it("Lead Source remains the final column", () => {
-    // First occurrences live in the header row: custom heads, then
-    // the Lead Source head. (Anchor to the header text node with
-    // its trailing newline, not the code comment further up.)
-    const customIdx = page.indexOf("customFieldsVisible.map");
-    const leadIdx = page.indexOf("Lead Source\n");
-    expect(customIdx).toBeGreaterThan(-1);
-    expect(leadIdx).toBeGreaterThan(customIdx);
-    // Still conditional + centered, as before.
-    expect(page).toContain("{leadSourceVisible && (");
+  it("no Lead Source pseudo-column remains in the table", () => {
+    expect(page).not.toContain("LEAD_SOURCE_VIS_ID");
+    expect(page).not.toContain("<AdSourceCell");
+    expect(page).not.toContain("Lead Source\n");
+  });
+
+  it("renamed business headers render from stored field names", () => {
+    // Headers render {formatColumnLabel(f.name)} — the provisioned
+    // spec names below are what appear as Lead Type / Stage /
+    // Lead Received; the legacy labels must not be hardcoded.
+    expect(page).not.toContain("Lead Quality");
+    expect(page).not.toContain("Quotation / Package");
+    expect(page).not.toContain("AdSourceCell");
+  });
+
+  it("Lead Received detection feeds CustomCell without persisting", () => {
+    expect(page).toContain("isLeadReceivedField");
+    expect(page).toContain("receivedDefaults[row.runId]");
+    expect(page).toContain("receivedDefaultLabel(adSourcePlatform(");
+  });
+
+  it("stored values win over detected defaults (never overwritten)", () => {
+    const storedIdx = page.indexOf("customValues?.[row.runId]?.[f.id]");
+    const detectedIdx = page.indexOf("receivedDefaults[row.runId]");
+    expect(storedIdx).toBeGreaterThan(-1);
+    expect(detectedIdx).toBeGreaterThan(storedIdx);
   });
 
   it("filters, search, and views are untouched", () => {
@@ -209,7 +229,7 @@ describe("10. no regression to Google Sheets or Workspace data", () => {
   });
 
   it("column definitions and data flow are untouched", () => {
-    for (const token of ["cellText(row, c)", "CustomCell", "AdSourceCell", "onSaved"]) {
+    for (const token of ["cellText(row, c)", "CustomCell", "onSaved"]) {
       expect(page).toContain(token);
     }
   });

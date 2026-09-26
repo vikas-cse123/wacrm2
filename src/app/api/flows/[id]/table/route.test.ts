@@ -72,6 +72,8 @@ const h = vi.hoisted(() => ({
     ],
   },
   rpcArgs: null as Record<string, unknown> | null,
+  // Agent flow-answer overrides (workspace_flow_overrides rows).
+  overrides: [] as Array<Record<string, unknown>>,
   // Service-role provisioning capture (default business columns).
   adminFields: [] as Array<Record<string, unknown>>,
   adminInserts: [] as Array<Record<string, unknown>[]>,
@@ -144,6 +146,17 @@ vi.mock("@/lib/supabase/server", () => ({
           }),
         };
       }
+      if (table === "workspace_flow_overrides") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                in: async () => ({ data: h.overrides, error: null }),
+              }),
+            }),
+          }),
+        };
+      }
       if (table === "contacts") {
         return {
           select: () => ({
@@ -184,6 +197,7 @@ beforeEach(() => {
     entry_node_id: "start",
   };
   h.rpcArgs = null;
+  h.overrides = [];
   h.adminFields = [];
   h.adminInserts = [];
   h.adminScopes = [];
@@ -296,8 +310,8 @@ describe("GET /api/flows/[id]/table", () => {
         "Assigned To",
         "Call Status",
         "No. of Calls Tried",
-        "Lead Quality",
-        "Quotation / Package",
+        "Lead Type",
+        "Stage",
         "Follow-Up Status",
         "Last Contact Date",
         "Customer Response",
@@ -305,6 +319,7 @@ describe("GET /api/flows/[id]/table", () => {
         "Next Action",
         "Reason for Lost Lead",
         "Final Remark",
+        "Lead Received",
       ]);
       for (const row of rows) {
         expect(row.account_id).toBe("acct-1");
@@ -324,9 +339,9 @@ describe("GET /api/flows/[id]/table", () => {
       { params: Promise.resolve({ id: "flow-1" }) },
     );
     expect(res.status).toBe(200);
-    // Only the 11 missing columns are filled — the existing one kept.
+    // Only the 12 missing columns are filled — the existing one kept.
     expect(h.adminInserts).toHaveLength(1);
-    expect(h.adminInserts[0]).toHaveLength(11);
+    expect(h.adminInserts[0]).toHaveLength(12);
     expect(
       (h.adminInserts[0] as Array<Record<string, unknown>>).map((r) => r.name),
     ).not.toContain("Assigned To");
@@ -453,5 +468,44 @@ describe("GET table with Workspace filters (server-side)", () => {
       { params: Promise.resolve({ id: "flow-1" }) },
     );
     expect(inverted.status).toBe(400);
+  });
+});
+
+describe("GET table with Workspace flow overrides", () => {
+  it("attaches overrides separately while rows keep original answers", async () => {
+    h.overrides = [
+      {
+        account_id: "acct-1",
+        flow_id: "flow-1",
+        flow_run_id: "run-1",
+        field_key: "Name",
+        value_text: "Edited Name",
+      },
+    ];
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      rows: Array<{ runId: string; answers: Record<string, unknown> }>;
+      flowOverrides: Record<string, Record<string, string | null>>;
+    };
+    // Originals preserved in rows; overrides ride along additively.
+    const run1 = json.rows.find((r) => r.runId === "run-1");
+    expect(run1?.answers).toMatchObject({ Name: "Rahul" });
+    expect(json.flowOverrides).toEqual({ "run-1": { Name: "Edited Name" } });
+  });
+
+  it("omits runs without overrides (refresh-safe, no phantom edits)", async () => {
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      flowOverrides: Record<string, Record<string, string | null>>;
+    };
+    expect(json.flowOverrides).toEqual({});
   });
 });

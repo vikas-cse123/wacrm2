@@ -288,18 +288,18 @@ describe("POST /api/flows/[id]/duplicate", () => {
     expect(h.state.flowDeletes).toContain("flow-copy-1");
   });
 
-  it("provisions the 12 default business columns on the copy", async () => {
+  it("provisions the 13 default business columns on the copy", async () => {
     const res = await postDuplicate();
     expect(res.status).toBe(201);
     expect(h.state.fieldInserts).toHaveLength(1);
     const rows = h.state.fieldInserts[0];
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
     expect(rows.map((r) => r.name)).toEqual([
       "Assigned To",
       "Call Status",
       "No. of Calls Tried",
-      "Lead Quality",
-      "Quotation / Package",
+      "Lead Type",
+      "Stage",
       "Follow-Up Status",
       "Last Contact Date",
       "Customer Response",
@@ -307,6 +307,7 @@ describe("POST /api/flows/[id]/duplicate", () => {
       "Next Action",
       "Reason for Lost Lead",
       "Final Remark",
+      "Lead Received",
     ]);
     for (const row of rows) {
       expect(row.account_id).toBe("acct-1");
