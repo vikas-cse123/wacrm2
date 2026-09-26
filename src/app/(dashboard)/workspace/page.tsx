@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DM_Sans } from 'next/font/google';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Inbox, Plus, Search, Table2 } from 'lucide-react';
@@ -44,20 +45,29 @@ import {
   type WorkspaceAssigneeSelection,
 } from '@/lib/flows/workspace-filters';
 import { AddColumnDialog } from '@/components/workspace/add-column-dialog';
-import { AdSourceCell } from '@/components/workspace/ad-source-cell';
 import { ColumnsMenu } from '@/components/workspace/columns-menu';
+import { FlowAnswerCell } from '@/components/workspace/flow-answer-cell';
+import { TravelCrmSettings } from '@/components/workspace/travel-crm-settings';
 import { CustomCell } from '@/components/workspace/custom-cell';
 import {
   WorkspaceFilters,
   type AppliedDateFilter,
 } from '@/components/workspace/workspace-filters';
 import { ColumnResizeHandle } from '@/components/workspace/column-resize-handle';
-import {
-  STICKY_ROW_COLUMN_KEY,
-  STICKY_Z,
-  resolveStickyLayouts,
-} from '@/components/workspace/sticky-columns';
+import { TravelCrmAction } from '@/components/workspace/travel-crm-action';
+import { WorkspacePagination } from '@/components/workspace/workspace-pagination';
 import { columnWidthStyle } from '@/lib/flows/workspace-column-widths';
+import { formatColumnLabel } from '@/lib/flows/column-label';
+
+/**
+ * Workspace-only typeface (DM Sans). Applied to the page root so
+ * the rest of the application keeps its own font — nothing global
+ * changes.
+ */
+const dmSans = DM_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '700'],
+});
 import {
   headerTextColor,
   buildHeaderColorMap,
@@ -66,14 +76,17 @@ import {
 import {
   customFieldVisId,
   flowColumnVisId,
-  LEAD_SOURCE_VIS_ID,
   ROW_VIS_ID,
 } from '@/lib/flows/workspace-visibility';
 import {
+  isLeadReceivedField,
+  orderBusinessColumns,
+  receivedDefaultLabel,
+} from '@/lib/flows/workspace-defaults';
+import { adSourcePlatform } from '@/lib/flows/workspace-ad-source';
+import {
   DEFAULT_WORKSPACE_PAGE_SIZE,
-  WORKSPACE_PAGE_SIZES,
   applyWorkspacePageSizeChange,
-  formatWorkspaceRange,
   isWorkspacePageSize,
   workspaceRowNumber,
   type WorkspacePageSize,
@@ -84,11 +97,17 @@ import type {
   FlowTableRow,
   FlowTableView,
 } from '@/lib/flows/flow-tables';
-import { flowColumnRenderKey, flowDisplayName } from '@/lib/flows/flow-tables';
+import { flowColumnRenderKey, flowDisplayName, resolveFlowAnswers } from '@/lib/flows/flow-tables';
+import { formatPhoneForDisplay } from '@/lib/whatsapp/phone-utils';
 import {
   applyVisibility,
   useWorkspaceVisibility,
 } from '@/lib/flows/workspace-visibility';
+import {
+  loadSelectedFlowId,
+  resolveInitialFlowId,
+  saveSelectedFlowId,
+} from '@/lib/flows/workspace-selected-flow';
 import { EmptyState } from '@/components/dashboard/empty-state';
 import { Skeleton } from '@/components/dashboard/skeleton';
 
@@ -141,20 +160,32 @@ function StatusBadge({ status }: { status: FlowTableRow['status'] }) {
  * Plain-text content for one flow (non-custom) table cell. Empty
  * values render BLANK (never a dash placeholder) — display-only;
  * the underlying row data is untouched.
+ *
+ * Dispatch is by column identity (system vs flow-derived), never
+ * by key text alone: a flow question may legally share its key
+ * with a system column (e.g. var_key "name" beside the system
+ * WhatsApp Name column). The system slot always shows the
+ * canonical WhatsApp contact value; the flow slot always shows
+ * that question's submitted answer — the two never leak into
+ * each other.
  */
 export function cellText(row: FlowTableRow, column: FlowTableColumn): string {
-  switch (column.key) {
-    case 'name':
-      return row.name ?? '';
-    case 'phone':
-      return row.phone ?? '';
-    case 'submission_time':
-      return formatDateTime(row.startedAt);
-    case 'status':
-      return row.status === 'completed' ? 'Completed' : 'Incomplete';
-    default:
-      return row.answers[column.key] ?? '';
+  if (column.system) {
+    switch (column.key) {
+      case 'name':
+        return row.name ?? '';
+      case 'phone':
+        // Display-only: clearly Indian +91 numbers render as their
+        // 10-digit mobile number; everything else (and storage,
+        // search, messaging) keeps the canonical value.
+        return formatPhoneForDisplay(row.phone);
+      case 'submission_time':
+        return formatDateTime(row.startedAt);
+      case 'status':
+        return row.status === 'completed' ? 'Completed' : 'Incomplete';
+    }
   }
+  return row.answers[column.key] ?? '';
 }
 
 export default function WorkspacePage() {
@@ -212,7 +243,15 @@ export default function WorkspacePage() {
   }>({ key: null, map: {} });
 
   // Account-scoped flow list (same source as the rest of the app).
+  // The initial selection is the remembered flow for this account
+  // when it is still listed, else the first flow — resolved in the
+  // same flush as the list itself, so the table request derives
+  // from the remembered id and its data is the first (and only)
+  // fetch: no wrong-flow flash. Re-runs only when the account
+  // changes, so a previous account's selection never carries over;
+  // in-session changes persist immediately via selectFlow below.
   useEffect(() => {
+    if (accountId === null) return;
     const ctrl = new AbortController();
     fetch('/api/flows', { signal: ctrl.signal, cache: 'no-store' })
       .then(async (res) => {
@@ -226,7 +265,12 @@ export default function WorkspacePage() {
         }));
         if (ctrl.signal.aborted) return;
         setFlows(list);
-        setFlowId((prev) => prev ?? list[0]?.id ?? null);
+        setFlowId(
+          resolveInitialFlowId(
+            list.map((f) => f.id),
+            loadSelectedFlowId(accountId),
+          ),
+        );
       })
       .catch((err) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -236,7 +280,7 @@ export default function WorkspacePage() {
         setFlows([]);
       });
     return () => ctrl.abort();
-  }, []);
+  }, [accountId]);
 
   // Assigned-To roster — same endpoint as Settings → Team Members.
   // Best-effort: a failed fetch leaves [] so Clear + Unassigned
@@ -330,7 +374,8 @@ export default function WorkspacePage() {
     setView('completed');
     setPage(0);
     setSelected(null);
-  }, []);
+    saveSelectedFlowId(accountId, id);
+  }, [accountId]);
 
   const selectView = useCallback((v: Exclude<FlowTableView, 'all'>) => {
     setView(v);
@@ -449,16 +494,6 @@ export default function WorkspacePage() {
     const total = payload?.meta.total ?? 0;
     return Math.max(1, Math.ceil(total / pageSize));
   }, [payload, pageSize]);
-  const rangeText = useMemo(() => {
-    const total = payload?.meta.total ?? 0;
-    return formatWorkspaceRange({
-      page,
-      pageSize,
-      total,
-      rowsOnPage: payload?.rows.length ?? 0,
-    });
-  }, [payload, page, pageSize]);
-
   const activeFlowName = flows?.find((f) => f.id === flowId)?.name ?? null;
 
   const customFields = useMemo(() => payload?.customFields ?? [], [payload]);
@@ -468,6 +503,49 @@ export default function WorkspacePage() {
   const reloadTable = useCallback(() => {
     setRefreshSeq((n) => n + 1);
   }, []);
+
+  // Two-way Travel CRM sync: after a successful lead create whose
+  // dialog edits landed in Workspace, refresh the table and patch
+  // the open row instantly — custom-field cells (Type/Stage/Received)
+  // through the same optimistic override map as manual edits, flow
+  // answers + contact name/phone on the drawer row. The table refetch
+  // then confirms every patched value from the server.
+  const handleTravelCrmSynced = useCallback(
+    (
+      patch: {
+        answers: Record<string, string | null>;
+        name: string | null;
+        phone: string | null;
+        customValues: Record<string, string | null>;
+      },
+      runId: string,
+    ) => {
+      if (requestKey && Object.keys(patch.customValues).length > 0) {
+        setValueOverrides((prev) => ({
+          key: requestKey,
+          map: {
+            ...(prev.key === requestKey ? prev.map : {}),
+            [runId]: {
+              ...((prev.key === requestKey ? prev.map : {})[runId] ?? {}),
+              ...patch.customValues,
+            },
+          },
+        }));
+      }
+      setSelected((prev) =>
+        prev === null
+          ? prev
+          : {
+              ...prev,
+              ...(patch.name !== null ? { name: patch.name } : {}),
+              ...(patch.phone !== null ? { phone: patch.phone } : {}),
+              answers: { ...prev.answers, ...patch.answers },
+            },
+      );
+      reloadTable();
+    },
+    [reloadTable, requestKey],
+  );
 
   const handleCustomSaved = useCallback(
     (fieldId: string, runId: string, value: string | null) => {
@@ -509,12 +587,11 @@ export default function WorkspacePage() {
   // scoped, localStorage-backed): hiding filters these render
   // arrays, never the payload — data, definitions, values, and
   // order are preserved, so a restored column returns to its
-  // original position with Lead Source still final.
+  // original position.
   const visibility = useWorkspaceVisibility(accountId, flowId);
   const {
     flowColumns: flowColumnsVisible,
     customFields: customFieldsVisible,
-    leadSourceVisible,
   } = useMemo(
     () =>
       applyVisibility(
@@ -524,6 +601,34 @@ export default function WorkspacePage() {
       ),
     [payload, customFields, visibility.hiddenIds]
   );
+
+  // "Lead Received" auto-detection: when the cell has no stored
+  // value, display the ad-platform default (Facebook/Instagram)
+  // derived read-only from the row's contact source URL — the
+  // same derivation the old Lead Source icon used. A manual pick
+  // is stored and always wins; detection is never written back.
+  const leadReceivedField = useMemo(
+    () => customFieldsVisible.find((f) => isLeadReceivedField({ name: f.name })) ?? null,
+    [customFieldsVisible]
+  );
+  // Group 3 display order for the business/workspace columns:
+  // Assigned To, Received, Type, Stage first (stored-name
+  // identity), then everything else in stored relative order.
+  // Render-only: visibility, widths, header colors, values, and
+  // the Columns menu all keep using the stored-order lists above.
+  const customFieldsOrdered = useMemo(
+    () => orderBusinessColumns(customFieldsVisible),
+    [customFieldsVisible]
+  );
+  const receivedDefaults = useMemo(() => {
+    if (!leadReceivedField || !payload) return {} as Record<string, string>;
+    const map: Record<string, string> = {};
+    for (const row of payload.rows) {
+      const label = receivedDefaultLabel(adSourcePlatform(row.sourceUrl ?? null));
+      if (label) map[row.runId] = label;
+    }
+    return map;
+  }, [leadReceivedField, payload]);
 
   // Effective header backgrounds for the VISIBLE set — customs
   // first, then semantic reference colors, then unused palette
@@ -544,51 +649,31 @@ export default function WorkspacePage() {
             visId: customFieldVisId(f.id),
             label: f.name,
           })),
-          ...(leadSourceVisible
-            ? [{ visId: LEAD_SOURCE_VIS_ID, label: 'Lead Source' }]
-            : []),
         ],
         headerColors
       ),
-    [flowColumnsVisible, customFieldsVisible, leadSourceVisible, headerColors]
+    [flowColumnsVisible, customFieldsVisible, headerColors]
   );
 
-  // Sticky geometry, width-aware: each pinned column's left
-  // is the exact sum of its predecessors' resolved widths, so a
-  // resize can never open gaps or overlaps. Shared by header and
-  // body cells of the pinned block.
-  const stickyVisIdFor = useCallback(
-    (stickyKey: string) =>
-      stickyKey === STICKY_ROW_COLUMN_KEY
-        ? ROW_VIS_ID
-        : flowColumnVisId(stickyKey),
-    []
-  );
-  const stickyLayouts = useMemo(
-    () => resolveStickyLayouts(stickyVisIdFor, columnWidths),
-    [stickyVisIdFor, columnWidths]
-  );
-
-  // Header paint for one column: sticky geometry (when pinned) or
-  // resized width + map background + auto-contrast text. Sticky
-  // corners reuse the exact same geometry/background, so no seams
-  // appear while scrolling. The map fallback covers keys missing
+  // No pinned/frozen columns: every column scrolls horizontally
+  // as one unified grid. Only the header row sticks vertically
+  // (top-0) so column titles stay visible while rows scroll.
+  // The row-number column hides exactly like any other column.
+  const rowVisible = !visibility.hiddenIds.includes(ROW_VIS_ID);
+  // Header paint for one column: resized width + map background +
+  // auto-contrast text. The map fallback covers keys missing
   // from the visible set (defensive only).
   const headStyle = useCallback(
-    (visId: string, label: string, stickyKey?: string) => {
+    (visId: string, label: string) => {
       const background =
         headerMap[visId] ?? resolveHeaderColor(visId, label, headerColors);
-      const geometry =
-        stickyKey !== undefined
-          ? (stickyLayouts[stickyKey] ?? columnWidthStyle(visId, columnWidths))
-          : columnWidthStyle(visId, columnWidths);
       return {
-        ...geometry,
+        ...columnWidthStyle(visId, columnWidths),
         backgroundColor: background,
         color: headerTextColor(background),
       };
     },
-    [headerMap, headerColors, stickyLayouts, columnWidths]
+    [headerMap, headerColors, columnWidths]
   );
 
   // Live width during a drag (no fetch); persist on release.
@@ -632,9 +717,9 @@ export default function WorkspacePage() {
   );
 
   return (
-    <div className="space-y-5">
+    <div className={cn('space-y-5', dmSans.className)}>
       <div>
-        <h1 className="text-foreground text-2xl font-bold tracking-tight">
+        <h1 className="text-foreground text-[30px] font-bold tracking-tight">
           Workspace
         </h1>
         <p className="text-muted-foreground mt-1 text-sm">
@@ -688,7 +773,7 @@ export default function WorkspacePage() {
                   size="sm"
                   onClick={() => selectView(v.id)}
                   className={cn(
-                    'h-8 rounded-full px-3.5 text-[13px] font-medium',
+                    'h-8 rounded-full px-3.5 text-sm font-medium',
                     view !== v.id &&
                       'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
@@ -772,12 +857,17 @@ export default function WorkspacePage() {
                     setEditingField(null);
                     setAddColumnOpen(true);
                   }}
-                  className="h-8"
+                  className="h-8 text-sm"
                 >
                   <Plus className="h-4 w-4" />
                   Add Column
                 </Button>
               )}
+              <TravelCrmSettings
+                key={flowId ?? 'no-flow'}
+                flowId={flowId}
+                flowName={flowDisplayName(activeFlowName)}
+              />
             </div>
           </div>
 
@@ -812,45 +902,18 @@ export default function WorkspacePage() {
             )
           ) : (
             <>
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <Select
-                    value={String(pageSize)}
-                    onValueChange={selectPageSize}
-                  >
-                    <SelectTrigger
-                      className="border-border bg-card h-8 w-[84px] text-[13px]"
-                      aria-label="Rows per page"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WORKSPACE_PAGE_SIZES.map((size) => (
-                        <SelectItem key={size} value={String(size)}>
-                          {size}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-muted-foreground text-sm tabular-nums">
-                    {rangeText}
-                  </p>
-                </div>
-              </div>
+              <div className="border-border bg-card overflow-hidden rounded-xl border">
               <div
                 className={cn(
-                  'workspace-table-viewport border-border bg-card max-h-[70vh] overflow-auto rounded-xl border',
+                  'workspace-table-viewport max-h-[70vh] overflow-auto',
                   resizingKey !== null && 'select-none'
                 )}
               >
                 <Table>
-                  {/* Enterprise grid: every header cell is sticky-top
-                      (opaque, so rows slide underneath); the pinned
-                      block (No. + Submission Time + Name + Phone)
-                      additionally sticks left via the shared sticky
-                      layouts — the SAME width/left object feeds each
-                      header cell and its body cells, so the two can
-                      never misalign, including after a resize. The
+                  {/* Enterprise grid: every header cell sticks to the
+                      top (opaque, so rows slide underneath) while the
+                      whole table scrolls horizontally as ONE unified
+                      grid — no pinned or frozen columns. The
                       tr-level divider is neutralized (merged to
                       border-b-0 by tailwind-merge) in favour of the
                       th-level divider, which travels with the stuck
@@ -858,12 +921,10 @@ export default function WorkspacePage() {
                       right boundary (writers only). */}
                   <TableHeader className="[&_tr]:border-b-0">
                     <TableRow>
+                      {rowVisible && (
                       <TableHead
-                        className={cn(
-                          'sticky top-0 h-14 truncate border-r border-b border-border px-3 text-[13px] font-semibold last:border-r-0',
-                          STICKY_Z.corner
-                        )}
-                        style={headStyle(ROW_VIS_ID, 'Row', STICKY_ROW_COLUMN_KEY)}
+                        className="sticky top-0 z-20 h-16 truncate border-r border-b border-border px-4 align-middle text-[15px] font-bold last:border-r-0"
+                        style={headStyle(ROW_VIS_ID, 'Row')}
                       >
                         No.
                         {canSendMessages && (
@@ -877,23 +938,16 @@ export default function WorkspacePage() {
                           />
                         )}
                       </TableHead>
+                      )}
                       {flowColumnsVisible.map((c) => {
                         const visId = flowColumnVisId(c.key);
-                        // Sticky geometry is system-only: a flow answer
-                        // that shares a system key (e.g. var_key "name"
-                        // beside system Name) scrolls normally instead
-                        // of pinning over its system twin.
-                        const geom = c.system ? stickyLayouts[c.key] : undefined;
                         return (
                           <TableHead
                             key={flowColumnRenderKey(c)}
-                            className={cn(
-                              'sticky top-0 h-14 truncate border-r border-b border-border px-3 text-[13px] font-semibold whitespace-nowrap last:border-r-0',
-                              geom ? STICKY_Z.corner : STICKY_Z.head
-                            )}
-                            style={headStyle(visId, c.label, c.system ? c.key : undefined)}
+                            className="sticky top-0 z-20 h-16 truncate border-r border-b border-border px-4 align-middle text-[15px] font-bold whitespace-nowrap last:border-r-0"
+                            style={headStyle(visId, c.label)}
                           >
-                            {c.label}
+                            {formatColumnLabel(c.label)}
                             {canSendMessages && (
                               <ColumnResizeHandle
                                 columnKey={visId}
@@ -907,16 +961,13 @@ export default function WorkspacePage() {
                           </TableHead>
                         );
                       })}
-                      {customFieldsVisible.map((f) => (
+                      {customFieldsOrdered.map((f) => (
                         <TableHead
                           key={f.id}
-                          className={cn(
-                            'sticky top-0 h-14 truncate border-r border-b border-border px-3 text-[13px] font-semibold whitespace-nowrap last:border-r-0',
-                            STICKY_Z.head
-                          )}
-                          style={headStyle(customFieldVisId(f.id), f.name)}
-                        >
-                          {f.name}
+                          className="sticky top-0 z-20 h-16 truncate border-r border-b border-border px-4 align-middle text-[15px] font-bold whitespace-nowrap last:border-r-0"
+                            style={headStyle(customFieldVisId(f.id), f.name)}
+                          >
+                            {formatColumnLabel(f.name)}
                           {canSendMessages && (
                             <ColumnResizeHandle
                               columnKey={customFieldVisId(f.id)}
@@ -931,27 +982,6 @@ export default function WorkspacePage() {
                           )}
                         </TableHead>
                       ))}
-                      {leadSourceVisible && (
-                        <TableHead
-                          className={cn(
-                            'sticky top-0 h-14 w-16 truncate border-r border-b border-border px-3 text-center text-[13px] font-semibold whitespace-nowrap last:border-r-0',
-                            STICKY_Z.head
-                          )}
-                          style={headStyle(LEAD_SOURCE_VIS_ID, 'Lead Source')}
-                        >
-                          Lead Source
-                          {canSendMessages && (
-                            <ColumnResizeHandle
-                              columnKey={LEAD_SOURCE_VIS_ID}
-                              onResize={handleResizeWidth}
-                              onCommit={handleCommitWidth}
-                              onActiveChange={(active) =>
-                                setResizingKey(active ? LEAD_SOURCE_VIS_ID : null)
-                              }
-                            />
-                          )}
-                        </TableHead>
-                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -961,12 +991,10 @@ export default function WorkspacePage() {
                         className="cursor-pointer"
                         onClick={() => setSelected(row)}
                       >
+                        {rowVisible && (
                         <TableCell
-                          className={cn(
-                            'text-muted-foreground sticky border-r border-border bg-card tabular-nums last:border-r-0',
-                            STICKY_Z.body
-                          )}
-                          style={stickyLayouts[STICKY_ROW_COLUMN_KEY]}
+                          className="text-muted-foreground border-r border-border text-sm tabular-nums last:border-r-0"
+                          style={columnWidthStyle(ROW_VIS_ID, columnWidths)}
                         >
                           {workspaceRowNumber({
                             page,
@@ -974,26 +1002,49 @@ export default function WorkspacePage() {
                             index: rowIndex,
                           }).toLocaleString()}
                         </TableCell>
+                        )}
                         {flowColumnsVisible.map((c) => {
-                          const geom = c.system ? stickyLayouts[c.key] : undefined;
+                          // Flow-derived cells edit through Workspace
+                          // overrides (originals stay in row.answers);
+                          // system columns keep their plain rendering.
+                          // Display = override ?? original, resolved
+                          // per row from the table payload.
+                          const rowOverrides =
+                            payload.flowOverrides?.[row.runId];
+                          const overrideFor =
+                            rowOverrides !== undefined &&
+                            Object.prototype.hasOwnProperty.call(rowOverrides, c.key)
+                              ? (rowOverrides[c.key] ?? null)
+                              : undefined;
                           return (
                             <TableCell
                               key={flowColumnRenderKey(c)}
-                              className={cn(
-                                'max-w-56 truncate border-r border-border last:border-r-0',
-                                geom && cn('sticky bg-card', STICKY_Z.body)
+                              className="max-w-56 truncate border-r border-border last:border-r-0"
+                              style={columnWidthStyle(
+                                flowColumnVisId(c.key),
+                                columnWidths
                               )}
-                              style={
-                                geom ??
-                                columnWidthStyle(flowColumnVisId(c.key), columnWidths)
-                              }
                             >
-                              {cellText(row, c)}
+                              {!c.system && flowId !== null ? (
+                                <FlowAnswerCell
+                                  flowId={flowId}
+                                  runId={row.runId}
+                                  columnKey={c.key}
+                                  label={formatColumnLabel(c.label)}
+                                  options={c.options ?? null}
+                                  original={row.answers[c.key] ?? null}
+                                  override={overrideFor}
+                                  canEdit={canSendMessages}
+                                  onChanged={reloadTable}
+                                />
+                              ) : (
+                                cellText(row, c)
+                              )}
                             </TableCell>
                           );
                         })}
                         {flowId &&
-                          customFieldsVisible.map((f) => (
+                          customFieldsOrdered.map((f) => (
                             <TableCell
                               key={f.id}
                               className="max-w-56 overflow-hidden border-r border-border last:border-r-0"
@@ -1009,7 +1060,9 @@ export default function WorkspacePage() {
                                 stored={
                                   overridesForRequest[row.runId]?.[f.id] ??
                                   payload.customValues?.[row.runId]?.[f.id] ??
-                                  null
+                                  (leadReceivedField?.id === f.id
+                                    ? (receivedDefaults[row.runId] ?? null)
+                                    : null)
                                 }
                                 canEdit={canSendMessages}
                                 onSaved={handleCustomSaved}
@@ -1017,41 +1070,21 @@ export default function WorkspacePage() {
                               />
                             </TableCell>
                           ))}
-                        {leadSourceVisible && (
-                          <TableCell
-                            className="w-16 border-r border-border text-center last:border-r-0"
-                            style={columnWidthStyle(
-                              LEAD_SOURCE_VIS_ID,
-                              columnWidths
-                            )}
-                          >
-                            <AdSourceCell sourceUrl={row.sourceUrl} />
-                          </TableCell>
-                        )}
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </div>
-              <div className="text-muted-foreground flex items-center justify-end text-sm">
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page === 0 || loading}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page + 1 >= totalPages || loading}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
+              <WorkspacePagination
+                page={page}
+                totalPages={totalPages}
+                total={payload?.meta.total ?? 0}
+                pageSize={pageSize}
+                rowsOnPage={payload?.rows.length ?? 0}
+                disabled={loading}
+                onPage={setPage}
+                onPageSize={(size) => selectPageSize(String(size))}
+              />
               </div>
             </>
           )}
@@ -1122,21 +1155,29 @@ export default function WorkspacePage() {
                   </h3>
                   {payload && payload.columns.some((c) => !c.system) ? (
                     <dl className="mt-2 space-y-2 text-sm">
-                      {payload.columns
-                        .filter((c) => !c.system)
-                        .map((c) => (
-                          <div
-                            key={flowColumnRenderKey(c)}
-                            className="flex justify-between gap-4"
-                          >
-                            <dt className="text-muted-foreground shrink-0">
-                              {c.label}
-                            </dt>
-                            <dd className="text-foreground text-right break-words">
-                              {selected.answers[c.key] ?? '—'}
-                            </dd>
-                          </div>
-                        ))}
+                      {(() => {
+                        // Workspace display values (agent overrides win
+                        // where present; originals otherwise).
+                        const display = resolveFlowAnswers(
+                          selected.answers,
+                          payload.flowOverrides?.[selected.runId],
+                        );
+                        return payload.columns
+                          .filter((c) => !c.system)
+                          .map((c) => (
+                            <div
+                              key={flowColumnRenderKey(c)}
+                              className="flex justify-between gap-4"
+                            >
+                              <dt className="text-muted-foreground shrink-0">
+                                {formatColumnLabel(c.label)}
+                              </dt>
+                              <dd className="text-foreground text-right break-words">
+                                {display[c.key] ?? '—'}
+                              </dd>
+                            </div>
+                          ));
+                      })()}
                     </dl>
                   ) : (
                     <p className="text-muted-foreground mt-1 text-sm">
@@ -1159,6 +1200,14 @@ export default function WorkspacePage() {
                     <Inbox className="mr-2 h-4 w-4" />
                     No conversation linked
                   </Button>
+                )}
+                {flowId !== null && (
+                  <TravelCrmAction
+                    key={selected.runId}
+                    flowId={flowId}
+                    runId={selected.runId}
+                    onWorkspaceSynced={handleTravelCrmSynced}
+                  />
                 )}
               </div>
             </>

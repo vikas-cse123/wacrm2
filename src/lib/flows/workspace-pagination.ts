@@ -70,3 +70,43 @@ export function formatWorkspaceRange(args: {
   const to = Math.min(total, page * pageSize + rowsOnPage);
   return `${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}`;
 }
+
+/**
+ * Compact, deterministic page-button model for the enterprise
+ * footer. `page` is zero-based; items are 1-based page numbers
+ * with `"ellipsis"` gap markers:
+ *
+ *   18 pages, page 1  → [1, 2, "ellipsis", 18]
+ *   18 pages, page 10 → [1, "ellipsis", 9, 10, 11, "ellipsis", 18]
+ *   18 pages, page 18 → [1, "ellipsis", 17, 18]
+ *   ≤7 pages          → every page, no ellipsis
+ *
+ * Pure function of (page, totalPages): same inputs always yield
+ * the same buttons, at most 5 numbers + 2 ellipsis markers.
+ */
+export type WorkspacePageItem = number | "ellipsis";
+
+export function getWorkspacePageItems(
+  page: number,
+  totalPages: number
+): WorkspacePageItem[] {
+  const total = Math.max(1, Math.floor(totalPages));
+  const current = Math.min(Math.max(1, Math.floor(page) + 1), total);
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const keep = new Set(
+    [1, total, current - 1, current, current + 1].filter(
+      (n) => n >= 1 && n <= total
+    )
+  );
+  const sorted = [...keep].sort((a, b) => a - b);
+  const out: WorkspacePageItem[] = [];
+  let prev = 0;
+  for (const n of sorted) {
+    if (n - prev > 1) out.push("ellipsis");
+    out.push(n);
+    prev = n;
+  }
+  return out;
+}

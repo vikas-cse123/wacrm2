@@ -134,7 +134,7 @@ export function WorkspaceFilters({
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
         className={cn(
-          'border-border bg-card inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[13px] font-medium',
+          'border-border bg-card inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-sm font-medium',
           'text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
           'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
         )}

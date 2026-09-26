@@ -41,6 +41,50 @@ export function isValidE164(phone: string): boolean {
 }
 
 /**
+ * True only for a clearly Indian number: digits are exactly `91`
+ * followed by a 10-digit national number. Anything else (short,
+ * long, non-numeric, IDs) is never treated as Indian.
+ */
+export function isIndianCountryCodeNumber(value: string | null | undefined): boolean {
+  if (!value) return false
+  return /^91\d{10}$/.test(normalizePhone(value))
+}
+
+/**
+ * DISPLAY ONLY — hide the +91/91 country code for clearly Indian
+ * numbers (12 digits starting with 91), showing the 10-digit
+ * mobile number. Every other value renders unchanged (non-Indian
+ * numbers keep their country code; invalid/ambiguous values are
+ * never stripped). Never use the result for storage, messaging,
+ * matching, or API payloads — see displayToCanonicalPhone to map
+ * an edited display value back.
+ */
+export function formatPhoneForDisplay(value: string | null | undefined): string {
+  if (!value) return ''
+  const digits = normalizePhone(value)
+  if (/^91\d{10}$/.test(digits)) return digits.slice(2)
+  return value
+}
+
+/**
+ * Map an edited display value back to its canonical form for
+ * storage/API payloads. When the dialog opened with a stripped
+ * Indian number (`wasStripped`) and the edited value is exactly
+ * 10 digits, the 91 prefix is restored; every other shape passes
+ * through verbatim (today's behavior), so non-Indian edits and
+ * full international entries are never mangled or double-prefixed.
+ */
+export function displayToCanonicalPhone(
+  displayValue: string | null | undefined,
+  wasStripped: boolean,
+): string {
+  if (!wasStripped) return (displayValue ?? '').trim()
+  const digits = normalizePhone(displayValue ?? '')
+  if (!digits) return ''
+  return digits.length === 10 ? `91${digits}` : digits
+}
+
+/**
  * Generate plausible phone number variants for retry when Meta's
  * sandbox rejects a number with error #131030 ("not in allowed list").
  *

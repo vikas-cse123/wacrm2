@@ -50,6 +50,20 @@ describe("reference palette", () => {
 });
 
 describe("semantic mapping (mapped columns present)", () => {
+  it("paints the Row-number column #f1f5f9", () => {
+    expect(defaultHeaderColor("core:row", "Row")).toBe("#f1f5f9");
+    expect(
+      buildHeaderColorMap(
+        [
+          { visId: "core:row", label: "Row" },
+          { visId: "flow:phone", label: "Phone Number" },
+          { visId: "custom:a", label: "Assigned To" },
+        ],
+        {}
+      )["core:row"]
+    ).toBe("#f1f5f9");
+  });
+
   it("paints Phone Number blue (visId and label variants)", () => {
     expect(defaultHeaderColor("flow:phone", "Phone Number")).toBe(BLUE);
     expect(defaultHeaderColor("flow:phone", "Phone No")).toBe(BLUE);
@@ -84,7 +98,6 @@ describe("semantic mapping (mapped columns present)", () => {
 
   it("paints every other business column the default green", () => {
     for (const label of [
-      "Row",
       "Submission Time",
       "Assigned To",
       "Call Status",
@@ -125,8 +138,8 @@ describe("fallback reassignment (mapped columns absent)", () => {
   });
 
   it("colors of absent mapped columns still appear (red/green reuse)", () => {
-    // Flow without Reason/Remark/Follow-Up/Name/Phone: red, remark
-    // green, teal, orange and blue must still paint something.
+    // Flow without Reason/Remark/Follow-Up/Name/Phone: the fixed Row
+    // color plus the first five palette colors in order.
     const map = buildHeaderColorMap(
       [
         { visId: "core:row", label: "Row" },
@@ -138,7 +151,10 @@ describe("fallback reassignment (mapped columns absent)", () => {
       ],
       {},
     );
-    expect(Object.values(map).sort()).toEqual([...HEADER_REFERENCE_PALETTE].sort());
+    expect(map["core:row"]).toBe("#f1f5f9");
+    expect(Object.values(map).sort()).toEqual(
+      ["#f1f5f9", "#93c47d", "#6d9eeb", "#ff9900", "#46bdc6", "#34a853"].sort()
+    );
   });
 
   it("keeps semantic colors where their columns exist, reassigns the rest", () => {
@@ -506,22 +522,34 @@ describe("taller headers, sticky intact, functionality intact", () => {
   const root = process.cwd();
   const page = readFileSync(`${root}/src/app/(dashboard)/workspace/page.tsx`, "utf8");
 
-  it("headers are taller, semibold, and still sticky", () => {
-    // 56px sits inside the 52–60px enterprise band.
-    expect(page).toContain("h-14");
-    expect(page).toContain("font-semibold");
-    expect(page).toContain("text-[13px]");
+  it("headers are taller, bold, and vertically stuck (no pinned columns)", () => {
+    // 64px sits inside the 58–64px prominent-header band.
+    expect(page).toContain("h-16");
+    expect(page).toContain("text-[15px]");
+    expect(page).toContain("font-bold");
     expect(page).toContain("sticky top-0");
-    expect(page).toContain("resolveStickyLayouts(");
+    expect(page).not.toContain("resolveStickyLayouts(");
+    expect(page).not.toContain("stickyLayouts");
   });
 
-  it("every header paints via the shared resolver (sticky corners included)", () => {
-    // One headStyle call site per header group (row, flow, custom,
-    // lead); the uniqueness map + contrast run inside it.
+  it("workspace uses DM Sans locally with a larger type scale", () => {
+    // Scoped to the Workspace page only — the app font system is untouched.
+    expect(page).toContain("DM_Sans");
+    expect(page).toContain("dmSans.className");
+    expect(page).toContain("text-[30px]");
+    // Prominent headers: 64px, 15–16px, weight 700.
+    expect(page).toContain("text-[15px] font-bold");
+  });
+
+  it("every header paints via the shared resolver", () => {
+    // One headStyle call site per header group (row, flow, custom);
+    // the uniqueness map + contrast run inside it.
     const uses = page.split("headStyle(").length - 1;
-    expect(uses).toBeGreaterThanOrEqual(4);
+    expect(uses).toBeGreaterThanOrEqual(3);
     expect(page).toContain("buildHeaderColorMap(");
     expect(page).toContain("headerTextColor(");
+    expect(page).toContain("columnWidthStyle(");
+    expect(page).not.toContain("resolveStickyLayouts(");
     expect(page).toContain("headerColorMap={headerMap}");
   });
 
@@ -540,7 +568,7 @@ describe("taller headers, sticky intact, functionality intact", () => {
       "applyVisibility",
       "buildWorkspaceTableQuery",
       "debouncedSearch",
-      "Lead Source\n",
+      "receivedDefaults",
     ]) {
       expect(page).toContain(token);
     }

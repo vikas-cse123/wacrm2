@@ -6,7 +6,6 @@ import {
   Columns3,
   Eye,
   Loader2,
-  Lock,
   Pencil,
   RotateCcw,
   Search,
@@ -25,8 +24,6 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
@@ -41,9 +38,11 @@ import { HeaderColorSwatches } from './header-color-picker';
 import {
   describeVisibilityMenu,
   filterVisibilityMenu,
+  flattenVisibilityMenu,
   customFieldVisId,
   type VisibilityMenuItem,
 } from '@/lib/flows/workspace-visibility';
+import { formatColumnLabel } from '@/lib/flows/column-label';
 
 /**
  * Columns management panel.
@@ -145,7 +144,7 @@ export function ColumnsMenu({
       <DropdownMenu>
         <DropdownMenuTrigger
           className={cn(
-            'border-border bg-card inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[13px] font-medium',
+            'border-border bg-card inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-sm font-medium',
             'text-muted-foreground hover:bg-muted hover:text-foreground transition-colors',
             'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
           )}
@@ -301,14 +300,17 @@ function VisibilityPanel({
   const empty =
     model.core.length === 0 &&
     model.flow.length === 0 &&
-    model.custom.length === 0 &&
-    model.leadSource === null;
+    model.custom.length === 0;
+  // ONE unified list — no section groupings. Row entry first,
+  // then flow, then custom columns, each keeping its own row
+  // behavior (hideable checkboxes, editable custom rows).
+  const items = useMemo(() => flattenVisibilityMenu(model), [model]);
 
   return (
     <>
       <div className="px-2 pt-1.5">
         <p className="text-foreground px-1 text-sm font-semibold">Columns</p>
-        <p className="text-muted-foreground px-1 text-xs">
+        <p className="text-muted-foreground px-1 text-sm">
           Manage visible columns
         </p>
       </div>
@@ -329,106 +331,50 @@ function VisibilityPanel({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search columns..."
             aria-label="Search columns"
-            className="h-8 pl-8 text-[13px]"
+            className="h-8 pl-8 text-sm"
           />
         </div>
       </div>
 
       {empty ? (
-        <p className="text-muted-foreground px-3 py-4 text-[13px]">
+        <p className="text-muted-foreground px-3 py-4 text-sm">
           No columns match your search.
         </p>
       ) : (
-        <>
-          {model.core.length > 0 && (
-            <>
-              <DropdownMenuLabel className="text-muted-foreground text-[11px] tracking-wide uppercase">
-                Core
-              </DropdownMenuLabel>
-              <div className="px-1 pb-1">
-                {model.core.map((item) => (
-                  <LockedRow
-                    key={item.id}
-                    item={item}
-                    headerColors={headerColors}
-                    onColorColumn={onColorColumn}
-                    canCustomizeColors={canCustomizeColors}
-                    headerColorMap={headerColorMap}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-          {model.flow.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-muted-foreground text-[11px] tracking-wide uppercase">
-                Flow columns
-              </DropdownMenuLabel>
-              <div className="px-1 pb-1">
-                {model.flow.map((item) => (
-                  <HideableRow
-                    key={item.id}
-                    item={item}
-                    checked={!hidden.has(item.id)}
-                    onToggle={() => onToggleVisibility(item.id)}
-                    headerColors={headerColors}
-                    onColorColumn={onColorColumn}
-                    canCustomizeColors={canCustomizeColors}
-                    headerColorMap={headerColorMap}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-          {model.custom.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-muted-foreground text-[11px] tracking-wide uppercase">
-                Custom columns
-              </DropdownMenuLabel>
-              <div className="px-1 pb-1">
-                {model.custom.map((item) => {
-                  const field = fieldByVisId.get(item.id);
-                  if (!field) return null;
-                  return (
-                    <CustomVisibilityRow
-                      key={item.id}
-                      item={item}
-                      checked={!hidden.has(item.id)}
-                      onToggle={() => onToggleVisibility(item.id)}
-                      onEdit={() => onEditField(field)}
-                      onDelete={() => onDeleteField(field)}
-                      headerColors={headerColors}
-                      onColorColumn={onColorColumn}
-                      canCustomizeColors={canCustomizeColors}
-                      headerColorMap={headerColorMap}
-                    />
-                  );
-                })}
-              </div>
-            </>
-          )}
-          {model.leadSource !== null && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-muted-foreground text-[11px] tracking-wide uppercase">
-                Lead Source
-              </DropdownMenuLabel>
-              <div className="px-1 pb-1">
-                <HideableRow
-                  item={model.leadSource}
-                  checked={!hidden.has(model.leadSource.id)}
-                  onToggle={() => onToggleVisibility(model.leadSource!.id)}
+        <div className="px-1 pb-1">
+          {items.map((item) => {
+            const field = fieldByVisId.get(item.id);
+            if (field) {
+              return (
+                <CustomVisibilityRow
+                  key={item.id}
+                  item={item}
+                  checked={!hidden.has(item.id)}
+                  onToggle={() => onToggleVisibility(item.id)}
+                  onEdit={() => onEditField(field)}
+                  onDelete={() => onDeleteField(field)}
                   headerColors={headerColors}
                   onColorColumn={onColorColumn}
                   canCustomizeColors={canCustomizeColors}
                   headerColorMap={headerColorMap}
                 />
-              </div>
-            </>
-          )}
-        </>
+  );
+}
+
+            return (
+              <HideableRow
+                key={item.id}
+                item={item}
+                checked={!hidden.has(item.id)}
+                onToggle={() => onToggleVisibility(item.id)}
+                headerColors={headerColors}
+                onColorColumn={onColorColumn}
+                canCustomizeColors={canCustomizeColors}
+                headerColorMap={headerColorMap}
+              />
+            );
+          })}
+        </div>
       )}
 
       <div className="border-border bg-popover sticky bottom-0 border-t px-1 pt-1">
@@ -436,7 +382,7 @@ function VisibilityPanel({
           <button
             type="button"
             onClick={onShowAll}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <Eye className="h-3.5 w-3.5" aria-hidden="true" />
             Show all columns
@@ -444,7 +390,7 @@ function VisibilityPanel({
           <button
             type="button"
             onClick={onReset}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
             Reset columns
@@ -456,8 +402,7 @@ function VisibilityPanel({
 }
 
 /** Compact header-tint dot. Writers (agent+) only; viewers never see it. */
-function HeaderColorDot({
-  item,
+function HeaderColorDot({ item,
   headerColors,
   onColorColumn,
   canCustomizeColors,
@@ -495,8 +440,16 @@ function HeaderColorDot({
   );
 }
 
-/** Locked system column: always visible, toggle disabled. */
-function LockedRow({
+/**
+ * Fixed-width, right-aligned color area. Every manager row ends
+ * with this slot, so all color dots line up vertically no matter
+ * how long the label is (labels truncate) or which row actions
+ * precede it (custom edit/delete sit BEFORE the slot). Renders
+ * the empty slot when coloring is unavailable, preserving
+ * alignment in search results too. Positioning never depends
+ * on label content.
+ */
+function ColorDotSlot({
   item,
   headerColors,
   onColorColumn,
@@ -510,17 +463,7 @@ function LockedRow({
   headerColorMap?: Record<string, string>;
 }) {
   return (
-    <div
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px]"
-      title="Always visible"
-    >
-      <Lock
-        className="text-muted-foreground h-3.5 w-3.5 shrink-0"
-        aria-hidden="true"
-      />
-      <span className="text-muted-foreground min-w-0 flex-1 truncate">
-        {item.label}
-      </span>
+    <span className="flex w-6 shrink-0 items-center justify-center">
       <HeaderColorDot
         item={item}
         headerColors={headerColors}
@@ -528,19 +471,14 @@ function LockedRow({
         canCustomizeColors={canCustomizeColors}
         headerColorMap={headerColorMap}
       />
-      <Checkbox
-        checked
-        disabled
-        aria-label={`${item.label} (always visible)`}
-      />
-    </div>
+    </span>
   );
 }
 
-/**
- * Hideable column without management actions. The label toggles the
- * checkbox natively — one control, keyboard accessible.
- */
+/** Hideable column without management actions. The label toggles the
+ * checkbox natively — one control, keyboard accessible. Every
+ * column renders here, including Row, Submission Time, Name, and
+ * Phone Number: nothing is locked. */
 function HideableRow({
   item,
   checked,
@@ -559,14 +497,14 @@ function HideableRow({
   headerColorMap?: Record<string, string>;
 }) {
   return (
-    <label className="text-foreground hover:bg-muted flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors">
+    <label className="text-foreground hover:bg-muted flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors">
       <Checkbox
         checked={checked}
         onCheckedChange={onToggle}
         aria-label={`${checked ? 'Hide' : 'Show'} ${item.label}`}
       />
-      <span className="min-w-0 flex-1 truncate">{item.label}</span>
-      <HeaderColorDot
+      <span className="min-w-0 flex-1 truncate">{formatColumnLabel(item.label)}</span>
+      <ColorDotSlot
         item={item}
         headerColors={headerColors}
         onColorColumn={onColorColumn}
@@ -604,7 +542,7 @@ function CustomVisibilityRow({
   headerColorMap?: Record<string, string>;
 }) {
   return (
-    <div className="group hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors">
+    <div className="group hover:bg-muted flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors">
       <Checkbox
         checked={checked}
         onCheckedChange={onToggle}
@@ -616,20 +554,13 @@ function CustomVisibilityRow({
         aria-label={`${checked ? 'Hide' : 'Show'} ${item.label}`}
         className="text-foreground focus-visible:ring-ring min-w-0 flex-1 truncate rounded text-left focus-visible:ring-2 focus-visible:outline-none"
       >
-        {item.label}
+        {formatColumnLabel(item.label)}
       </button>
-      <HeaderColorDot
-        item={item}
-        headerColors={headerColors}
-        onColorColumn={onColorColumn}
-        canCustomizeColors={canCustomizeColors}
-        headerColorMap={headerColorMap}
-      />
       <button
         type="button"
         aria-label={`Edit ${item.label}`}
         onClick={onEdit}
-        className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none"
+        className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none"
       >
         <Pencil className="h-3.5 w-3.5" />
       </button>
@@ -637,10 +568,17 @@ function CustomVisibilityRow({
         type="button"
         aria-label={`Delete ${item.label}`}
         onClick={onDelete}
-        className="text-muted-foreground hover:bg-muted hover:text-destructive focus-visible:ring-ring flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none"
+        className="text-muted-foreground hover:bg-muted hover:text-destructive focus-visible:ring-ring flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
+      <ColorDotSlot
+        item={item}
+        headerColors={headerColors}
+        onColorColumn={onColorColumn}
+        canCustomizeColors={canCustomizeColors}
+        headerColorMap={headerColorMap}
+      />
     </div>
   );
 }

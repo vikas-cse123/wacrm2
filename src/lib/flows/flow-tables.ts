@@ -30,6 +30,13 @@ export interface FlowTableColumn {
   /** Display label. Answer labels come from the flow, not prompt text identity. */
   label: string;
   system: boolean;
+  /**
+   * Fixed choices for buttons/list questions (button titles / list
+   * row titles from node config), when the question offers them.
+   * Absent for free-text questions and system columns. Display and
+   * override editors read this — Sheets and Travel CRM never do.
+   */
+  options?: string[];
 }
 
 /**
@@ -105,6 +112,14 @@ export interface FlowTablePayload {
   customFields?: WorkspaceField[];
   /** Custom cell values by run id, then field id. */
   customValues?: WorkspaceValuesByRun;
+  /**
+   * Agent overrides for flow-derived cells, by run id then
+   * question key. Present key (even null) = edited (display wins);
+   * absent key = show the original flow answer. Deleting an
+   * override restores the original. Absent on older responses —
+   * always treated as {}.
+   */
+  flowOverrides?: Record<string, Record<string, string | null>>;
 }
 
 export const FLOW_TABLE_PAGE_SIZE = 25;
@@ -175,6 +190,27 @@ function answerText(value: unknown): string | null {
  * Column order invariant (Workspace requirement): Submission Time
  * is ALWAYS index 0, followed by Name, Phone Number, the dynamic
  * flow columns, and Status last — for every flow, both views.
+ *
+ * When the flow itself collects a name, that flow-derived "Name"
+ * column sits IMMEDIATELY after Submission Time (index 1), with
+ * the system contact column ("WhatsApp Name") and Phone Number
+ * following it:
+ *   No. | Submission Time | Name | WhatsApp Name | Phone Number | …
+ * Without a flow Name field the system order is unchanged:
+ *   No. | Submission Time | Name | Phone Number | …
+ * Only the display order of that one column moves — keys, flags,
+ * answerKeys, values, visibility ids, and widths all stay exactly
+ * as derived, so filters, Sheets, Travel CRM, and saved column
+ * configurations keep working untouched.
+ *
+ * Name disambiguation (display-only): when the flow itself
+ * collects a name (a flow-derived column labelled "Name"), the
+ * system contact column renders as "WhatsApp Name" so the two
+ * are never confused. The system column keeps key "name" and
+ * `system: true`; the flow column keeps its own key, label, and
+ * answer values. Nothing is removed, merged, or re-keyed —
+ * Sheets, filters, Travel CRM, exports, visibility, and stored
+ * submissions all keep working on the original identities.
  */
 export function buildFlowTableColumns(
   nodes: FlowNodeLite[],
@@ -182,6 +218,7 @@ export function buildFlowTableColumns(
 ): { columns: FlowTableColumn[]; nameKey: string | null; answerKeys: string[] } {
   const ordered = orderNodesForSheets(entryNodeKey, nodes);
   const derived = deriveFlowColumns(ordered, true);
+  const choiceOptions = choiceOptionsByKey(ordered);
   const answerKeys: string[] = [];
   const columns: FlowTableColumn[] = [
     { key: "submission_time", label: "Submission Time", system: true },
@@ -190,13 +227,49 @@ export function buildFlowTableColumns(
   ];
   if (derived.name) {
     answerKeys.push(derived.name.key);
-    columns.push({ key: derived.name.key, label: derived.name.header, system: false });
+    columns.push({
+      key: derived.name.key,
+      label: derived.name.header,
+      system: false,
+      options: choiceOptions.get(derived.name.key),
+    });
   }
   for (const col of derived.rest) {
     answerKeys.push(col.key);
-    columns.push({ key: col.key, label: col.header, system: false });
+    columns.push({
+      key: col.key,
+      label: col.header,
+      system: false,
+      options: choiceOptions.get(col.key),
+    });
   }
   columns.push({ key: "status", label: "Status", system: true });
+  // Rename by column identity (system vs flow-derived), never by
+  // blind label matching: only the SYSTEM name column is relabelled,
+  // and only when a FLOW-DERIVED column actually renders as "Name".
+  // A flow "Name" question stays visible as "Name"; custom business
+  // fields live outside this column list and never trigger this.
+  const flowHasNameColumn = columns.some(
+    (c) => !c.system && c.label.trim().toLowerCase() === "name",
+  );
+  if (flowHasNameColumn) {
+    const systemName = columns.find((c) => c.system && c.key === "name");
+    if (systemName) systemName.label = "WhatsApp Name";
+  }
+  // Position the flow-collected "Name" column immediately after
+  // Submission Time (index 1), ahead of the system WhatsApp Name
+  // and Phone Number columns. Name-promoted questions already land
+  // nearby; a "Name"-labelled question arriving via the general
+  // flow order is relocated from among the other fields.
+  // Display order only: the column object (key, label, flag) moves
+  // as-is, so visibility, widths, and data resolution are unaffected.
+  const flowNameIdx = columns.findIndex(
+    (c) => !c.system && c.label.trim().toLowerCase() === "name",
+  );
+  if (flowNameIdx > 1) {
+    const [flowNameCol] = columns.splice(flowNameIdx, 1);
+    columns.splice(1, 0, flowNameCol);
+  }
   return { columns, nameKey: derived.name?.key ?? null, answerKeys };
 }
 
@@ -205,6 +278,87 @@ export function buildFlowTableColumns(
 export function flowDisplayName(name: string | null | undefined): string {
   const trimmed = name?.trim() ?? "";
   return trimmed ? trimmed : "Untitled Flow";
+}
+
+/**
+ * Choice titles offered by buttons/list question nodes, keyed by
+ * the same identity rule deriveFlowColumns uses (collect_input →
+ * var_key, buttons/list → node_key). First-included-wins, skipped
+ * nodes (non-questions, sheet_include: false, duplicates) never
+ * contribute — mirroring derivation so options always belong to
+ * the column that renders them. Pure.
+ */
+export function choiceOptionsByKey(
+  nodes: FlowNodeLite[],
+): Map<string, string[]> {
+  const seen = new Set<string>();
+  const out = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (!["collect_input", "send_buttons", "send_list"].includes(n.node_type)) {
+      continue;
+    }
+    const cfg = n.config as {
+      var_key?: string;
+      sheet_include?: boolean;
+      buttons?: Array<{ title?: string }>;
+      sections?: Array<{ rows?: Array<{ title?: string }> }>;
+    };
+    if (cfg.sheet_include === false) continue;
+    const isCollect = n.node_type === "collect_input";
+    const key = isCollect ? cfg.var_key : n.node_key;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (isCollect) continue;
+    const titles: string[] =
+      n.node_type === "send_buttons"
+        ? (cfg.buttons ?? [])
+            .map((b) => (typeof b?.title === "string" ? b.title.trim() : ""))
+            .filter((t) => t !== "")
+        : (cfg.sections ?? []).flatMap((s) =>
+            (s?.rows ?? [])
+              .map((r) => (typeof r?.title === "string" ? r.title.trim() : ""))
+              .filter((t) => t !== ""),
+          );
+    if (titles.length > 0) out.set(key, [...new Set(titles)]);
+  }
+  return out;
+}
+
+/**
+ * Apply Workspace flow overrides onto original answers for
+ * DISPLAY: override wins per key (explicit null clears to blank),
+ * absent keys keep the original. Only keys present in `answers`
+ * are eligible, so overrides for deleted questions never surface.
+ * Pure — originals are never mutated (a copy is returned).
+ */
+export function resolveFlowAnswers(
+  answers: Record<string, string | null>,
+  overrides: Record<string, string | null> | null | undefined,
+): Record<string, string | null> {
+  if (!overrides) return { ...answers };
+  const out = { ...answers };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key in out) out[key] = value;
+  }
+  return out;
+}
+/**
+ * Key of the exact flow-derived Workspace "Name" column, if the
+ * column list contains one. Identity-based (a NON-SYSTEM column
+ * whose display label is exactly "Name", case-insensitive) — the
+ * same identity the table renders, so Travel CRM prefills and any
+ * other consumer read the very same question's answer. Returns
+ * null when no flow-derived Name column exists (system Name,
+ * custom business fields, and other name-like labels never
+ * match). Pure and deterministic.
+ */
+export function findFlowNameAnswerKey(
+  columns: readonly Pick<FlowTableColumn, "key" | "label" | "system">[],
+): string | null {
+  const col = columns.find(
+    (c) => !c.system && c.label.trim().toLowerCase() === "name",
+  );
+  return col?.key ?? null;
 }
 
 /** Shape one RPC row into a table row (identity = flow_run_id). */
@@ -220,10 +374,6 @@ export function toFlowTableRow(
     completionNodeId,
   });
   const vars = rpc.vars ?? {};
-  const collectedName =
-    nameKey && vars[nameKey] !== undefined
-      ? answerText(vars[nameKey])
-      : null;
   const answers: Record<string, string | null> = {};
   for (const key of answerKeys) {
     answers[key] = key in vars ? answerText(vars[key]) : null;
@@ -232,7 +382,12 @@ export function toFlowTableRow(
     runId: rpc.run_id,
     contactId: rpc.contact_id,
     conversationId: rpc.conversation_id,
-    name: collectedName ?? rpc.contact_name,
+    // The system slot always carries the canonical WhatsApp/contact
+    // name — never the flow-collected answer, even when the flow
+    // asked for one (that value lives in `answers` under its own
+    // question key and renders in its own "Name" column). No
+    // inference, no merging: the two values stay separate.
+    name: rpc.contact_name,
     phone: rpc.contact_phone,
     startedAt: rpc.started_at,
     lastAdvancedAt: rpc.last_advanced_at,

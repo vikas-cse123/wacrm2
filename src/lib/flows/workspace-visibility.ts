@@ -9,11 +9,11 @@
 // Identity (never display names):
 //   flow answer column → `flow:<column.key>` (stable var/node key)
 //   custom field       → `custom:<field.id>` (stable UUID)
-//   lead source        → `lead_source` (constant)
+//   row number         → `core:row` (constant)
 //
-// Locked (always visible, never toggleable):
-//   Row (implicit), Submission Time, Name, Phone Number.
-// The `status` system column is excluded from the table AND the
+// Nothing is locked: EVERY column — Row, Submission Time, Name,
+// Phone Number included — is hideable exactly like the rest. The
+// `status` system column is excluded from the table AND the
 // menu by design (the Completed/Incomplete tabs already
 // communicate classification).
 //
@@ -28,15 +28,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { FlowTableColumn } from './flow-tables';
 import type { WorkspaceField } from './workspace-fields';
 
-export const LEAD_SOURCE_VIS_ID = 'lead_source';
 export const ROW_VIS_ID = 'core:row';
-
-/** Flow-column keys that are permanently visible. */
-export const LOCKED_FLOW_COLUMN_KEYS: ReadonlySet<string> = new Set([
-  'submission_time',
-  'name',
-  'phone',
-]);
 
 /**
  * Display-excluded regardless of visibility state. The Status
@@ -54,21 +46,18 @@ export function customFieldVisId(id: string): string {
 }
 
 export interface VisibilityMenuItem {
-  /** Stable visibility id (see above). Locked core rows included. */
+  /** Stable visibility id (see above). */
   id: string;
   label: string;
-  locked: boolean;
 }
 
 export interface VisibilityMenuModel {
-  /** Locked system columns (Row + Submission Time + Name + Phone). */
+  /** Row-number entry, first in the manager (hideable like the rest). */
   core: VisibilityMenuItem[];
   /** Hideable flow answer columns (dynamic per flow, never hardcoded). */
   flow: VisibilityMenuItem[];
-  /** Hideable custom Workspace columns. */
+  /** Hideable custom Workspace columns (incl. business columns). */
   custom: VisibilityMenuItem[];
-  /** Hideable Lead Source pseudo-column. */
-  leadSource: VisibilityMenuItem;
 }
 
 /**
@@ -80,16 +69,12 @@ export function describeVisibilityMenu(
   customFields: WorkspaceField[]
 ): VisibilityMenuModel {
   const core: VisibilityMenuItem[] = [
-    { id: ROW_VIS_ID, label: 'Row', locked: true },
+    { id: ROW_VIS_ID, label: 'Row' },
   ];
   const flow: VisibilityMenuItem[] = [];
   for (const c of flowColumns) {
     if (DISPLAY_EXCLUDED_COLUMN_KEYS.has(c.key)) continue;
-    if (LOCKED_FLOW_COLUMN_KEYS.has(c.key)) {
-      core.push({ id: flowColumnVisId(c.key), label: c.label, locked: true });
-    } else {
-      flow.push({ id: flowColumnVisId(c.key), label: c.label, locked: false });
-    }
+    flow.push({ id: flowColumnVisId(c.key), label: c.label });
   }
   return {
     core,
@@ -97,24 +82,33 @@ export function describeVisibilityMenu(
     custom: customFields.map((f) => ({
       id: customFieldVisId(f.id),
       label: f.name,
-      locked: false,
     })),
-    leadSource: { id: LEAD_SOURCE_VIS_ID, label: 'Lead Source', locked: false },
   };
+}
+
+/**
+ * Flatten a (possibly search-filtered) menu model into ONE unified
+ * column list for the manager: row-number entry first, then flow
+ * columns, then custom columns. Order is preserved.
+ * The manager renders no section groupings — one clean
+ * list with search + checkboxes. Nothing is locked: every entry
+ * is hideable.
+ */
+export function flattenVisibilityMenu(
+  model: VisibilityMenuModel,
+): VisibilityMenuItem[] {
+  return [...model.core, ...model.flow, ...model.custom];
 }
 
 /**
  * Filter a menu model by the manager search query (case-insensitive
  * substring on labels). Filters the manager list ONLY — table rows
- * are never touched. Sections with zero matches come back empty
- * (the UI hides them); a non-matching Lead Source comes back null.
+ * are never touched.
  */
 export function filterVisibilityMenu(
   model: VisibilityMenuModel,
   query: string
-): Omit<VisibilityMenuModel, 'leadSource'> & {
-  leadSource: VisibilityMenuItem | null;
-} {
+): VisibilityMenuModel {
   const q = query.trim().toLowerCase();
   if (!q) return model;
   const match = (item: VisibilityMenuItem) =>
@@ -123,7 +117,6 @@ export function filterVisibilityMenu(
     core: model.core.filter(match),
     flow: model.flow.filter(match),
     custom: model.custom.filter(match),
-    leadSource: match(model.leadSource) ? model.leadSource : null,
   };
 }
 
@@ -132,16 +125,15 @@ export interface AppliedVisibility {
   flowColumns: FlowTableColumn[];
   /** Custom fields to render (order preserved). */
   customFields: WorkspaceField[];
-  /** Whether the Lead Source column renders (always final). */
-  leadSourceVisible: boolean;
 }
 
 /**
  * Apply a hidden-id set to the live payload. Pure filter — input
  * arrays are never mutated and order is never changed, so an
  * unhidden column automatically returns to its original position.
- * Locked core columns render even if their id somehow lands in the
- * hidden set (defensive; the UI never offers that toggle).
+ * Every column is hideable, including Row, Submission Time, Name,
+ * and Phone Number: a hidden id always wins, with no locked
+ * exceptions.
  */
 export function applyVisibility(
   flowColumns: FlowTableColumn[],
@@ -153,13 +145,11 @@ export function applyVisibility(
     flowColumns: flowColumns.filter(
       (c) =>
         !DISPLAY_EXCLUDED_COLUMN_KEYS.has(c.key) &&
-        (LOCKED_FLOW_COLUMN_KEYS.has(c.key) ||
-          !hidden.has(flowColumnVisId(c.key)))
+        !hidden.has(flowColumnVisId(c.key))
     ),
     customFields: customFields.filter(
       (f) => !hidden.has(customFieldVisId(f.id))
     ),
-    leadSourceVisible: !hidden.has(LEAD_SOURCE_VIS_ID),
   };
 }
 
@@ -235,7 +225,7 @@ export interface WorkspaceVisibility {
   /** Currently hidden visibility ids for the active scope. */
   hiddenIds: string[];
   toggle: (id: string) => void;
-  /** Make every hideable column visible (core untouched — always visible). */
+  /** Make every column visible, Row included. */
   showAll: () => void;
   /** Restore the default configuration (all visible; definitions/data intact). */
   reset: () => void;

@@ -78,6 +78,37 @@ describe("2. one mapping serves values and options (never random)", () => {
       ["Lead Quality", "Fake"],
       ["Quotation / Package", "Sent"],
       ["Quotation / Package", "Not Yet"],
+      ["Lead Type", "Fresh"],
+      ["Lead Type", "Hot"],
+      ["Lead Type", "Warm"],
+      ["Lead Type", "Cold"],
+      ["Lead Type", "Prospect"],
+      ["Stage", "New Lead"],
+      ["Stage", "Contacted"],
+      ["Stage", "Qualified"],
+      ["Stage", "Quotation Required"],
+      ["Stage", "Quotation Sent"],
+      ["Stage", "In Negotiation"],
+      ["Stage", "Ready To Book"],
+      ["Stage", "Booking Confirmed"],
+      ["Stage", "Follow Up"],
+      ["Stage", "Amendment"],
+      ["Stage", "Lost"],
+      ["Stage", "Cancelled"],
+      ["Stage", "Invalid"],
+      ["Stage", "On Hold"],
+      ["Lead Received", "Website"],
+      ["Lead Received", "Social Media"],
+      ["Lead Received", "Facebook Ads"],
+      ["Lead Received", "Instagram Ads"],
+      ["Lead Received", "Google Ads"],
+      ["Lead Received", "Whatsapp"],
+      ["Lead Received", "Phone Call"],
+      ["Lead Received", "Referral"],
+      ["Lead Received", "Walk In"],
+      ["Lead Received", "Repeat Customer"],
+      ["Lead Received", "Partner"],
+      ["Lead Received", "Other"],
       ["Follow-Up Status", "Follow-up Pending"],
       ["Follow-Up Status", "Negotiation Going On"],
       ["Follow-Up Status", "Booked"],
@@ -321,7 +352,7 @@ describe("6/7/selected+options share the chips (assignee included)", () => {
       "utf8",
     );
     expect(src).toContain("getSelectChip(field.name, shown)");
-    expect(src).toContain("getSelectChip(field.name, o)");
+    expect(src).toContain("getSelectChip(field.name, o.value)");
     expect(src).toContain("assigneeChipFor(");
     expect(src).toContain("UNASSIGNED_CHIP");
     expect(src).toContain("<SelectChipView");
@@ -357,5 +388,82 @@ describe("12/13. behavior and Sheets unchanged", () => {
       expect(src).not.toContain("getSelectChip");
       expect(src).not.toContain("workspace-select-chips");
     }
+  });
+});
+
+describe("Lead Type / Stage / Lead Received: exact option sets, distinct chips", () => {
+  it("Lead Type maps its 5 options to distinct backgrounds", () => {
+    const options = ["Fresh", "Hot", "Warm", "Cold", "Prospect"];
+    const bgs = new Set(
+      options.map((o) => {
+        const chip = getSelectChip("Lead Type", o);
+        expect(chip).not.toBeNull();
+        return chip!.background;
+      }),
+    );
+    expect(bgs.size).toBe(5);
+  });
+
+  it("Stage maps its 14 options to distinct backgrounds", () => {
+    const options = [
+      "New Lead",
+      "Contacted",
+      "Qualified",
+      "Quotation Required",
+      "Quotation Sent",
+      "In Negotiation",
+      "Ready To Book",
+      "Booking Confirmed",
+      "Follow Up",
+      "Amendment",
+      "Lost",
+      "Cancelled",
+      "Invalid",
+      "On Hold",
+    ];
+    const bgs = new Set(
+      options.map((o) => {
+        const chip = getSelectChip("Stage", o);
+        expect(chip).not.toBeNull();
+        return chip!.background;
+      }),
+    );
+    expect(bgs.size).toBe(14);
+  });
+
+  it("Lead Received maps its 12 options to distinct backgrounds", () => {
+    const options = [
+      "Website",
+      "Social Media",
+      "Facebook Ads",
+      "Instagram Ads",
+      "Google Ads",
+      "Whatsapp",
+      "Phone Call",
+      "Referral",
+      "Walk In",
+      "Repeat Customer",
+      "Partner",
+      "Other",
+    ];
+    const bgs = new Set(
+      options.map((o) => {
+        const chip = getSelectChip("Lead Received", o);
+        expect(chip).not.toBeNull();
+        return chip!.background;
+      }),
+    );
+    expect(bgs.size).toBe(12);
+  });
+
+  it("legacy Lead Quality / Quotation values keep their chips", () => {
+    expect(getSelectChip("Lead Quality", "Fake")).toEqual({
+      background: "#dc2626",
+      color: "#ffffff",
+    });
+    expect(getSelectChip("Quotation / Package", "Sent")).toEqual({
+      background: "#15803d",
+      color: "#ffffff",
+    });
   });
 });

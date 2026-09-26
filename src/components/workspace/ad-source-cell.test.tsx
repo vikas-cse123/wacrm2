@@ -86,23 +86,20 @@ describe("AdSourceCell", () => {
   });
 });
 
-describe("Lead Source column placement (Workspace table)", () => {
+describe("Lead Received replaces the Lead Source icon column", () => {
   const pageSrc = readFileSync(
     join(process.cwd(), "src/app/(dashboard)/workspace/page.tsx"),
     "utf8",
   );
 
-  it("header reads Lead Source and is the final header cell", () => {
-    const header = pageSrc.slice(0, pageSrc.indexOf("</TableHeader>"));
-    expect(header).toContain("Lead Source");
-    expect(header.slice(header.lastIndexOf("<TableHead"))).toContain(
-      "Lead Source",
-    );
+  it("no Lead Source header or icon cell remains in the table", () => {
+    expect(pageSrc).not.toContain("Lead Source\n");
+    expect(pageSrc).not.toContain("<AdSourceCell");
+    expect(pageSrc).not.toContain("LEAD_SOURCE_VIS_ID");
   });
 
-  it("the AdSourceCell is the final body cell of its row", () => {
-    const fromCell = pageSrc.slice(pageSrc.indexOf("<AdSourceCell"));
-    const rowTail = fromCell.slice(0, fromCell.indexOf("</TableRow>"));
-    expect(rowTail).not.toContain("<TableCell");
+  it("the stored Lead Received field renders through the custom-cell path", () => {
+    expect(pageSrc).toContain("receivedDefaults");
+    expect(pageSrc).toContain("isLeadReceivedField");
   });
 });

@@ -158,9 +158,12 @@ export async function GET(
   const total = Number((payload as { total?: unknown }).total ?? 0) || 0
   const rows = rpcRows.map((r) => toFlowTableRow(r, completionNodeId, nameKey, answerKeys));
 
-  // Ad Source URLs for this page: one batched contacts lookup
+  // Contact source URLs for this page: one batched contacts lookup
   // (flow_run.contact_id → contacts.source_url), never N+1.
   // RLS scopes the read like every other query on this route.
+  // The client uses them read-only for the "Lead Received"
+  // auto-detect default (Facebook/Instagram ad platform) — the
+  // response shape is unchanged.
   const contactIds = [...new Set(rows.map((r) => r.contactId).filter(Boolean))] as string[];
   const sourceByContact: Record<string, string | null> = {};
   if (contactIds.length > 0) {
@@ -214,6 +217,32 @@ export async function GET(
       (customValues[v.flow_run_id] ??= {})[v.field_id] = v.value_text;
     }
   }
+  // Agent overrides for flow-derived cells (one batched read, no
+  // N+1). Originals stay in `rows[].answers`; this additive map
+  // drives Workspace display + restore UI only — flow_runs.vars,
+  // Sheets, and history are untouched. Best-effort: a read failure
+  // (e.g. migration not yet applied) degrades to originals.
+  const flowOverrides: Record<string, Record<string, string | null>> = {};
+  if (runIds.length > 0) {
+    try {
+      const { data: overrideRows, error: overrideErr } = await supabase
+        .from("workspace_flow_overrides")
+        .select("flow_run_id, field_key, value_text")
+        .eq("account_id", (flow as { account_id: string }).account_id)
+        .eq("flow_id", id)
+        .in("flow_run_id", runIds);
+      if (overrideErr) throw overrideErr;
+      for (const v of (overrideRows ?? []) as Array<{
+        flow_run_id: string;
+        field_key: string;
+        value_text: string | null;
+      }>) {
+        (flowOverrides[v.flow_run_id] ??= {})[v.field_key] = v.value_text;
+      }
+    } catch (err) {
+      console.error("workspace flow overrides read failed", err);
+    }
+  }
   return NextResponse.json({
     meta: {
       flowId: (flow as { id: string }).id,
@@ -246,5 +275,6 @@ export async function GET(
       };
     }),
     customValues,
+    flowOverrides,
   });
 }

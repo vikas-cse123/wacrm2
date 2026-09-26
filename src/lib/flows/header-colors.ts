@@ -9,6 +9,9 @@
 //   #34a853  Final Remark (green)
 //   #ea4335  Reason for Lost Lead (red)
 //
+// Plus one fixed semantic:
+//   #f1f5f9  Row-number ("No.") column
+//
 // Resolution per visible set (deterministic, stable):
 //   1. stored custom overrides win first (first-wins in
 //      visible order — the API rejects duplicate customs with
@@ -59,6 +62,8 @@ export const HEADER_REFERENCE_PALETTE: readonly string[] = [
 
 /** Default / remaining business column background. */
 export const HEADER_REFERENCE_DEFAULT = "#93c47d";
+/** Row-number ("No.") column background. */
+export const HEADER_REFERENCE_ROW = "#f1f5f9";
 /** Phone Number column background. */
 export const HEADER_REFERENCE_PHONE = "#6d9eeb";
 /** Name column background. */
@@ -147,9 +152,11 @@ function hashString(value: string): number {
  *   - Reason for Lost Lead / Reason of Lost → red
  */
 function semanticReferenceColor(visId: string, label: string): string | null {
+  if (visId === "core:row") return HEADER_REFERENCE_ROW;
   if (visId === "flow:phone") return HEADER_REFERENCE_PHONE;
   if (visId === "flow:name") return HEADER_REFERENCE_NAME;
   const name = typeof label === "string" ? label.trim().toLowerCase() : "";
+  if (name === "row") return HEADER_REFERENCE_ROW;
   if (name.includes("phone")) return HEADER_REFERENCE_PHONE;
   if (name === "name") return HEADER_REFERENCE_NAME;
   if (
