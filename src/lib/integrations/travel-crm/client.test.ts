@@ -138,4 +138,40 @@ describe("fetchTravelCrmLookups", () => {
     expect(err.code).toBe("TRAVEL_CRM_UNAUTHORIZED");
     expect(err.message).not.toContain(SECRET);
   });
+
+  it("sends the owner email as an encoded query locator with Bearer auth", async () => {
+    const seen: Array<{ url: string; authorization: string | null }> = [];
+    const out = await fetchTravelCrmLookups(
+      BASE,
+      SECRET,
+      (async (url: string, init?: RequestInit) => {
+        seen.push({
+          url: String(url),
+          authorization: new Headers(init?.headers).get("authorization"),
+        });
+        return jsonResponse(200, { success: true, data: { leadSources: [] } });
+      }) as typeof fetch,
+      { ownerEmail: "Owner@Acct1.Test " },
+    );
+    expect(out).toEqual({ leadSources: [] });
+    expect(seen).toHaveLength(1);
+    const upstream = new URL(seen[0]!.url);
+    expect(upstream.searchParams.get("assignedToEmail")).toBe("Owner@Acct1.Test");
+    expect(seen[0]!.authorization).toBe(`Bearer ${SECRET}`);
+    expect(seen[0]!.url).not.toContain(SECRET);
+  });
+
+  it("omits the locator when no owner email resolves (existing behavior)", async () => {
+    const seen: string[] = [];
+    await fetchTravelCrmLookups(
+      BASE,
+      SECRET,
+      (async (url: string) => {
+        seen.push(String(url));
+        return jsonResponse(200, { success: true, data: {} });
+      }) as typeof fetch,
+      { ownerEmail: null },
+    );
+    expect(seen).toEqual([`${BASE}/api/integrations/wacrm/lookups`]);
+  });
 });

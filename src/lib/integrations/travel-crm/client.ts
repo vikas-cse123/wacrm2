@@ -11,6 +11,12 @@
 //   Authorization: Bearer wacrm_<secret>
 //   → { success: true, data: { leadId, alreadyExists } }
 //   GET  {base}/api/integrations/wacrm/lookups (same auth)
+//   → { success: true, data: { ... } }
+// The lookups GET accepts an optional `assignedToEmail` query locator
+// (the calling account's owner email, resolved server-side): Travel
+// CRM uses it for first-use credential association when no credential
+// row exists yet. The secret itself always travels ONLY in the
+// Authorization header — never in the URL, query, or body.
 // ============================================================
 
 export type TravelCrmErrorCode =
@@ -209,10 +215,17 @@ export async function fetchTravelCrmLookups(
   baseUrl: string,
   secret: string,
   fetchImpl: typeof fetch = fetch,
+  opts: { ownerEmail?: string | null } = {},
 ): Promise<Record<string, unknown>> {
+  const ownerEmail =
+    typeof opts.ownerEmail === "string" && opts.ownerEmail.trim() ? opts.ownerEmail.trim() : null;
+  const url =
+    ownerEmail !== null
+      ? `${baseUrl}/api/integrations/wacrm/lookups?assignedToEmail=${encodeURIComponent(ownerEmail)}`
+      : `${baseUrl}/api/integrations/wacrm/lookups`;
   let res: Response;
   try {
-    res = await fetchImpl(`${baseUrl}/api/integrations/wacrm/lookups`, {
+    res = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${secret}` },
       signal: AbortSignal.timeout(TIMEOUT_MS),
