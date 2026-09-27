@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   workspace_fields: [] as Row[],
   workspace_values: [] as Row[],
   profiles: [] as Row[],
+  accounts: [] as Row[],
   links: [] as Row[],
   flowSettings: [] as Row[],
   travelCalls: [] as Array<{ url: string; body: unknown }>,
@@ -64,6 +65,8 @@ function storeFor(table: string): Row[] {
       return h.workspace_values;
     case "profiles":
       return h.profiles;
+    case "accounts":
+      return h.accounts;
     case "travel_crm_lead_links":
       return h.links;
     case "travel_crm_flow_settings":
@@ -134,7 +137,7 @@ const LOOKUPS = {
 function mockTravel() {
   vi.spyOn(globalThis, "fetch").mockImplementation((async (url: string, init: RequestInit) => {
     const u = String(url);
-    if (u.endsWith("/api/integrations/wacrm/lookups")) {
+    if (u.includes("/api/integrations/wacrm/lookups")) {
       const data = h.lookupsOverride ?? LOOKUPS;
       return new Response(JSON.stringify({ success: true, data }), { status: 200 });
     }
@@ -239,9 +242,10 @@ function seedWithName() {
     { flow_run_id: "run-1", field_id: "f-pn", value_text: "Decoy Parent" },
     { flow_run_id: "run-1", field_id: "f-fn", value_text: "Decoy Full" },
   ];
+  h.accounts = [{ id: "acct-1", owner_user_id: "u-owner" }];
   h.profiles = [
     { account_id: "acct-1", user_id: "u-agent", email: "agent@acme.com", full_name: "Agent" },
-  ];
+    { account_id: "acct-1", user_id: "u-owner", email: "owner@acme.com", full_name: "Owner" },];
   h.links = [];
   h.flowSettings = [];
 }

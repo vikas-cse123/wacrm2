@@ -106,6 +106,28 @@ describe("GET /api/integrations/travel-crm/lookups (itinerary proxy)", () => {
     expect(JSON.stringify(json)).not.toContain(SECRET);
   });
 
+  it("prefers master IDs over legacy display names (no duplicate Singapore)", async () => {
+    const SG_ID = "11111111-2222-3333-4444-555555555555";
+    const SENTOSA_ID = "22222222-3333-4444-5555-666666666666";
+    h.lookups = {
+      destinations: [{ value: SG_ID, label: "Singapore" }],
+      cities: [{ value: SENTOSA_ID, label: "Sentosa", destinationValue: SG_ID }],
+      countries: ["Singapore", "Thailand"],
+      citiesByDestination: {},
+    };
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      destinations: Array<{ value: string; label: string }>;
+      cities: Array<{ value: string; label: string; destinationValue: string | null }>;
+    };
+    // Exactly one Singapore — the master ID entry, never the legacy name.
+    expect(json.destinations).toEqual([{ value: SG_ID, label: "Singapore" }]);
+    expect(json.cities).toEqual([
+      { value: SENTOSA_ID, label: "Sentosa", destinationValue: SG_ID },
+    ]);
+  });
+
   it("sends the authenticated account owner email as the lookup locator", async () => {
     const res = await GET();
     expect(res.status).toBe(200);

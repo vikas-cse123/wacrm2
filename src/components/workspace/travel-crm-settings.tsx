@@ -24,6 +24,9 @@ import {
 import { TRAVEL_CRM_SERVICE_LABELS } from "@/lib/integrations/travel-crm/services";
 import {
   citiesForDestination,
+  cityLabelForValue,
+  destinationLabelForValue,
+  resolveSelectValue,
   validateNightsInput,
 } from "@/lib/integrations/travel-crm/itineraries";
 import {
@@ -425,6 +428,20 @@ export function TravelCrmSettings({
                     const cityOptions = row.destination
                       ? citiesForDestination(cities, row.destination)
                       : [];
+                    // Stored values are stable Travel CRM IDs. When a
+                    // stored ID has no matching lookup option (stale or
+                    // archived master), show the "Select" placeholder
+                    // instead of a raw UUID — the stored value stays
+                    // intact in state and on save.
+                    const destinationValue = resolveSelectValue(destinations, row.destination);
+                    const cityValue = resolveSelectValue(cityOptions, row.city);
+                    // Explicit label resolution (ID → name) for display:
+                    // the stored UUID is passed to the Select only as the
+                    // value; the human-readable name is rendered directly
+                    // so the trigger never shows a raw UUID, even during
+                    // SSR or before Base UI registers its items.
+                    const destinationLabel = destinationLabelForValue(destinations, row.destination);
+                    const cityLabel = cityLabelForValue(cityOptions, row.city);
                     return (
                       <div
                         key={i}
@@ -438,11 +455,13 @@ export function TravelCrmSettings({
                             Destination
                           </label>
                           <Select
-                            value={row.destination || undefined}
+                            value={destinationValue}
                             onValueChange={(v) => setDestination(i, v ?? "")}
                           >
                             <SelectTrigger id={`itin-dest-${i}`} aria-label="Destination" className="h-8 w-full">
-                              <SelectValue placeholder="Select" />
+                              <SelectValue placeholder="Select">
+                                {destinationLabel !== null ? destinationLabel : undefined}
+                              </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                               {destinations.map((o) => (
@@ -461,7 +480,7 @@ export function TravelCrmSettings({
                             City
                           </label>
                           <Select
-                            value={row.city || undefined}
+                            value={cityValue}
                             onValueChange={(v) => setCity(i, v ?? "")}
                             disabled={!row.destination}
                           >
@@ -470,7 +489,9 @@ export function TravelCrmSettings({
                                 placeholder={
                                   row.destination ? "Select" : "Pick destination first"
                                 }
-                              />
+                              >
+                                {cityLabel !== null ? cityLabel : undefined}
+                              </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                               {cityOptions.map((o) => (

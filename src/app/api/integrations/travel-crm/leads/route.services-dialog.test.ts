@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TRAVEL_CRM_SERVICE_LABELS } from "@/lib/integrations/travel-crm/services";
+
 type Row = Record<string, unknown>;
 
 const SECRET = "wacrm_secret_123";
@@ -17,6 +19,7 @@ const h = vi.hoisted(() => ({
   workspace_fields: [] as Row[],
   workspace_values: [] as Row[],
   profiles: [] as Row[],
+  accounts: [] as Row[],
   links: [] as Row[],
   flowSettings: [] as Row[],
   travelCalls: [] as Array<{ url: string; body: unknown }>,
@@ -64,6 +67,8 @@ function storeFor(table: string): Row[] {
       return h.workspace_values;
     case "profiles":
       return h.profiles;
+    case "accounts":
+      return h.accounts;
     case "travel_crm_lead_links":
       return h.links;
     case "travel_crm_flow_settings":
@@ -128,20 +133,22 @@ const LOOKUPS = {
   leadSources: [{ value: "WHATSAPP", label: "WhatsApp" }],
   leadTypes: [{ value: "FRESH", label: "Fresh" }],
   leadStages: [{ value: "NEW_LEAD", label: "New Lead" }],
+  // Production-like catalog: Travel CRM derives labels from enums, so
+  // VEHICLE_TRANSFER/OTHER_ADD_ON do NOT carry WACRM's display labels.
   serviceTypes: [
     { value: "CRUISE", label: "Cruise" },
     { value: "FLIGHT", label: "Flight" },
     { value: "HOTEL", label: "Hotel" },
-    { value: "VEHICLE_TRANSFER", label: "Vehicle (disposal)" },
+    { value: "VEHICLE_TRANSFER", label: "Vehicle Transfer" },
     { value: "SIGHTSEEING", label: "Sightseeing" },
-    { value: "OTHER_ADD_ON", label: "Add-on Service (Rail, Passport, etc.)" },
+    { value: "OTHER_ADD_ON", label: "Other Add On" },
   ],
 };
 
 function mockTravel() {
   vi.spyOn(globalThis, "fetch").mockImplementation((async (url: string, init: RequestInit) => {
     const u = String(url);
-    if (u.endsWith("/api/integrations/wacrm/lookups")) {
+    if (u.includes("/api/integrations/wacrm/lookups")) {
       const data = h.lookupsOverride ?? LOOKUPS;
       return new Response(JSON.stringify({ success: true, data }), { status: 200 });
     }
@@ -208,9 +215,10 @@ function seed(withServices: boolean) {
   h.flow_nodes = [];
   h.workspace_fields = [{ id: "f-asg", flow_id: "flow-1", name: "Assigned To", field_type: "select" }];
   h.workspace_values = [{ flow_run_id: "run-1", field_id: "f-asg", value_text: "u-agent" }];
+  h.accounts = [{ id: "acct-1", owner_user_id: "u-owner" }];
   h.profiles = [
     { account_id: "acct-1", user_id: "u-agent", email: "agent@acme.com", full_name: "Agent" },
-  ];
+    { account_id: "acct-1", user_id: "u-owner", email: "owner@acme.com", full_name: "Owner" },];
   h.links = [];
   h.flowSettings = [];
 }
@@ -244,6 +252,7 @@ type MissingPayload = {
   code: string;
   mapping: { missing: string[] };
   prefill: Record<string, unknown>;
+  configuredServices?: unknown;
 };
 
 describe("saved Services defaults reach the completion dialog", () => {
@@ -255,7 +264,10 @@ describe("saved Services defaults reach the completion dialog", () => {
     expect(json.success).toBe(false);
     expect(json.code).toBe("MISSING_FIELDS");
     expect(json.mapping.missing).not.toContain("services");
-    expect(json.prefill.services).toEqual(["CRUISE", "FLIGHT", "HOTEL"]);
+    // Dialog prefill carries Settings labels; the dialog renders exactly
+    // the per-flow configuration (never the full live catalog).
+    expect(json.prefill.services).toEqual(["Cruise", "Flight", "Hotel"]);
+    expect(json.configuredServices).toEqual(["Cruise", "Flight", "Hotel"]);
     expect(h.travelCalls.filter((c) => c.url.endsWith("/leads"))).toHaveLength(0);
   });
 
@@ -265,12 +277,14 @@ describe("saved Services defaults reach the completion dialog", () => {
     const first = (await (
       await POST(post({ flow_id: "flow-1", flow_run_id: "run-1" }))
     ).json()) as MissingPayload;
-    expect(first.prefill.services).toEqual(["CRUISE", "FLIGHT", "HOTEL"]);
+    expect(first.prefill.services).toEqual(["Cruise", "Flight", "Hotel"]);
+    expect(first.configuredServices).toEqual(["Cruise", "Flight", "Hotel"]);
     const second = (await (
       await POST(post({ flow_id: "flow-1", flow_run_id: "run-1" }))
     ).json()) as MissingPayload;
     // Stored defaults are untouched by dialog rounds — same prefill.
-    expect(second.prefill.services).toEqual(["CRUISE", "FLIGHT", "HOTEL"]);
+    expect(second.prefill.services).toEqual(["Cruise", "Flight", "Hotel"]);
+    expect(second.configuredServices).toEqual(["Cruise", "Flight", "Hotel"]);
     expect(h.flowSettings).toHaveLength(1);
     expect(h.flowSettings[0].services).toEqual(["Cruise", "Flight", "Hotel"]);
   });
@@ -282,7 +296,8 @@ describe("saved Services defaults reach the completion dialog", () => {
     const a = (await (
       await POST(post({ flow_id: "flow-1", flow_run_id: "run-1" }))
     ).json()) as MissingPayload;
-    expect(a.prefill.services).toEqual(["CRUISE", "HOTEL"]);
+    expect(a.prefill.services).toEqual(["Cruise", "Hotel"]);
+    expect(a.configuredServices).toEqual(["Cruise", "Hotel"]);
     const b = (await (
       await POST(
         post({
@@ -292,7 +307,8 @@ describe("saved Services defaults reach the completion dialog", () => {
         }),
       )
     ).json()) as MissingPayload;
-    expect(b.prefill.services).toEqual(["FLIGHT", "SIGHTSEEING"]);
+    expect(b.prefill.services).toEqual(["Flight", "Sightseeing"]);
+    expect(b.configuredServices).toEqual(["Flight", "Sightseeing"]);
   });
 
   it("12. no configuration invents nothing (missing + empty prefill)", async () => {
@@ -302,6 +318,8 @@ describe("saved Services defaults reach the completion dialog", () => {
     expect(json.code).toBe("MISSING_FIELDS");
     expect(json.mapping.missing).toContain("services");
     expect(json.prefill.services).toEqual([]);
+    // Empty configuration list: the dialog shows no service options.
+    expect(json.configuredServices).toEqual([]);
     expect(h.travelCalls.filter((c) => c.url.endsWith("/leads"))).toHaveLength(0);
   });
 });
@@ -398,5 +416,97 @@ describe("per-lead Services edits ride the dedicated override path", () => {
     expect(json.code).toBe("INVALID_OVERRIDES");
     expect(json.fields.services?.join(" ")).toContain("FLIGHT");
     expect(h.travelCalls.filter((c) => c.url.endsWith("/leads"))).toHaveLength(0);
+  });
+});
+
+describe("dialog Services section shows only the per-flow configuration", () => {
+  // Production-like full catalog: 13 live entries with their own labels.
+  const FULL_CATALOG = {
+    leadSources: [{ value: "WHATSAPP", label: "WhatsApp" }],
+    leadTypes: [{ value: "FRESH", label: "Fresh" }],
+    leadStages: [{ value: "NEW_LEAD", label: "New Lead" }],
+    serviceTypes: [
+      { value: "FLIGHT", label: "Flight" },
+      { value: "HOTEL", label: "Hotel" },
+      { value: "CRUISE", label: "Cruise" },
+      { value: "VEHICLE_TRANSFER", label: "Vehicle Transfer" },
+      { value: "SIGHTSEEING", label: "Sightseeing" },
+      { value: "VISA", label: "Visa" },
+      { value: "TRAVEL_INSURANCE", label: "Travel Insurance" },
+      { value: "RAIL", label: "Rail" },
+      { value: "PASSPORT_ASSISTANCE", label: "Passport Assistance" },
+      { value: "MEAL", label: "Meal" },
+      { value: "GUIDE", label: "Guide" },
+      { value: "OTHER_ADD_ON", label: "Other Add On" },
+      { value: "GENERAL_ENQUIRY", label: "General Enquiry" },
+    ],
+  };
+  const CONFIGURED = [
+    "Cruise",
+    "Hotel",
+    "Sightseeing",
+    "Add-on Service (Rail, Passport, etc.)",
+  ];
+
+  it("dialog carries exactly the four configured services, never the catalog", async () => {
+    seed(false);
+    saveSettings("flow-1", CONFIGURED);
+    h.lookupsOverride = FULL_CATALOG;
+    h.workspace_values = [];
+    const res = await POST(post({ flow_id: "flow-1", flow_run_id: "run-1" }));
+    const json = (await res.json()) as MissingPayload;
+    expect(json.code).toBe("MISSING_FIELDS");
+    // Exactly the configured categories…
+    expect(json.configuredServices).toEqual(CONFIGURED);
+    expect(json.prefill.services).toEqual(CONFIGURED);
+    // …while the live catalog stays intact for payload validation.
+    expect(
+      ((json as unknown as { options: { services: Array<{ value: string }> } }).options.services ??
+        []).map((o) => o.value),
+    ).toEqual(FULL_CATALOG.serviceTypes.map((o) => o.value));
+    // Unconfigured catalog entries are absent from the dialog list…
+    for (const absent of ["Flight", "Vehicle Transfer", "Visa", "Rail", "General Enquiry"]) {
+      expect(json.configuredServices as string[]).not.toContain(absent);
+    }
+    // …and Add-on Service stays a single option (never expanded).
+    expect((json.configuredServices as string[]).filter((s) => s.includes("Rail"))).toEqual([
+      "Add-on Service (Rail, Passport, etc.)",
+    ]);
+    expect(h.travelCalls.filter((c) => c.url.endsWith("/leads"))).toHaveLength(0);
+  });
+
+  it("checked configured labels still map to payload enums", async () => {
+    seed(true);
+    saveSettings("flow-1", ["Cruise", "Hotel"]);
+    const res = await POST(
+      post({
+        flow_id: "flow-1",
+        flow_run_id: "run-1",
+        overrides: { ...FUNNEL, services: "Cruise; Hotel" },
+      }),
+    );
+    expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
+    expect(h.travelCalls[0].body).toMatchObject({ services: ["CRUISE", "HOTEL"] });
+  });
+
+  it("all six display labels map to exact enums against the production-like catalog", async () => {
+    seed(true);
+    saveSettings("flow-1", [...TRAVEL_CRM_SERVICE_LABELS]);
+    h.lookupsOverride = FULL_CATALOG;
+    const res = await POST(
+      post({
+        flow_id: "flow-1",
+        flow_run_id: "run-1",
+        overrides: {
+          ...FUNNEL,
+          services:
+            "Cruise; Flight; Hotel; Vehicle (disposal); Sightseeing; Add-on Service (Rail, Passport, etc.)",
+        },
+      }),
+    );
+    expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
+    expect(h.travelCalls[0].body).toMatchObject({
+      services: ["CRUISE", "FLIGHT", "HOTEL", "VEHICLE_TRANSFER", "SIGHTSEEING", "OTHER_ADD_ON"],
+    });
   });
 });

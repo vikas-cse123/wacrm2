@@ -8,8 +8,9 @@ import {
 import { isUniqueViolation } from "@/lib/contacts/dedupe";
 import {
   loadWorkspaceLead,
-  resolveOwnerEmailByUserId,
+  type TravelCrmAssignmentIssue,
 } from "@/lib/integrations/travel-crm/lead";
+import { resolveAccountOwnerEmail } from "@/lib/integrations/travel-crm/account-owner";
 import {
   buildReceivedOptions,
   canonicalizeLeadSource,
@@ -282,29 +283,21 @@ export async function POST(request: Request) {
       console.error("[travel-crm] link read failed:", err);
     }
 
-    // --- Overrides: assigned member first (membership-checked). ---
-    let overrideEmail = loaded.assignedOwnerEmail;
-    let overrideIssue = loaded.assignmentIssue;
-    const rawAssignee = overrides.assignedUserId;
-    if (rawAssignee !== undefined) {
-      const userIdValue = asText(rawAssignee);
-      if (!userIdValue) {
-        return invalidOverrides("Select a team member.", {
-          assignedToEmail: ["Select a team member."],
-        });
-      }
-      const resolved = await resolveOwnerEmailByUserId(supabase, accountId, userIdValue);
-      if (resolved.status !== "ok") {
-        return invalidOverrides(
-          resolved.status === "unknown-member"
-            ? "Selected team member was not found."
-            : "Selected team member has no email on file.",
-          { assignedToEmail: ["Select a valid team member."] },
-        );
-      }
-      overrideEmail = resolved.email;
-      overrideIssue = null;
-    }
+    // --- Travel CRM assignment: ALWAYS the WACRM workspace owner. ---
+    // Business rule: the Travel CRM lead must be assigned to the OWNER of
+    // the WACRM workspace (resolved server-side from the authenticated
+    // account's own rows — never request input). The WACRM lead's
+    // Workspace "Assigned To" value and the dialog's assignedUserId
+    // override are intentionally NEVER used for Travel CRM assignment:
+    // the creation payload is pinned to the owner email, so Travel CRM
+    // finds the owner's matching user and assigns there. Unresolvable
+    // owner email gates creation with "assignment-required" instead of
+    // sending null (Travel CRM would never silently pick another user).
+    const ownerEmail = await resolveAccountOwnerEmail(supabase, accountId);
+    const overrideEmail: string | null = ownerEmail;
+    const overrideIssue: TravelCrmAssignmentIssue | null = ownerEmail
+      ? null
+      : "assignment-required";
 
     // --- Overrides: free inputs become extra mapping candidates. ---
     // --- NOTE: services bypasses this path (dedicated override
@@ -503,7 +496,14 @@ export async function POST(request: Request) {
     } = { destinations: [], cities: [], citiesByDestination: {} };
     let sendServices = draft.services;
     try {
-      const lookups = await fetchTravelCrmLookups(baseUrl, secret);
+      // Same owner-email locator as the lookups proxy: scopes the
+      // upstream itinerary destination/city feed to the current
+      // workspace's linked Travel CRM account, so a shared
+      // integration secret can never surface another account's
+      // master data here.
+      const lookups = await fetchTravelCrmLookups(baseUrl, secret, fetch, {
+        ownerEmail,
+      });
       const builtItinerary = buildItineraryLookups(lookups);
       itineraryLookups = builtItinerary;
       options = {
@@ -700,18 +700,51 @@ export async function POST(request: Request) {
       }
     }
 
+    // --- Funnel mapping reconciliation: the mapper always reports
+    // --- leadSource/leadType/leadStage as missing (they have no
+    // --- WACRM equivalent), but the route resolves them above from
+    // --- overrides → Workspace row → Type/Stage identity defaults
+    // --- (Fresh/New Lead). Once resolved, the mapping must reflect
+    // --- reality: an available field must never stay in missing[]/
+    // --- ambiguous[]/invalid[] — otherwise the dialog keeps asking
+    // --- for a value the UI already shows and the MISSING_FIELDS
+    // --- payload reports a lie. Unresolved ambiguities/invalid
+    // --- stored values stay flagged (never silently cleared).
+    for (const f of FUNNEL_FIELDS) {
+      const value = funnel[f];
+      if (value !== null && value !== "") {
+        mapping.fields[f] = {
+          status: "available",
+          source: { kind: "flow-default", key: "funnel-resolved" },
+        };
+        mapping.missing = mapping.missing.filter((x) => x !== f);
+        mapping.ambiguous = mapping.ambiguous.filter((a) => a.field !== f);
+        mapping.invalid = mapping.invalid.filter((v) => v.field !== f);
+        if (!mapping.available.includes(f)) mapping.available.push(f);
+      } else if (
+        mapping.fields[f]?.status !== "ambiguous" &&
+        mapping.fields[f]?.status !== "invalid"
+      ) {
+        mapping.fields[f] = { status: "missing" };
+        if (!mapping.missing.includes(f)) mapping.missing.push(f);
+      }
+    }
+
     // --- Flow service defaults: fill missing services only, after
     // --- live options resolve. Lead data and dialog overrides always
     // --- win (mapping resolved them first); defaults that cannot be
     // --- canonicalized against live options are left missing so the
     // --- dialog asks. No configuration → services stay missing.
     // --- Stored flow configuration is never modified here.
+    // --- The same configured labels (read once below) drive the
+    // --- dialog Services section, so it shows ONLY the per-flow
+    // --- configuration — never the full live catalog.
+    const flowServiceLabels = await readFlowServiceLabels(supabase, accountId, flowId);
     if (mapping.fields.services?.status === "missing") {
-      const flowDefaults = await readFlowServiceLabels(supabase, accountId, flowId);
-      if (flowDefaults.length > 0) {
+      if (flowServiceLabels.length > 0) {
         const canonical = options
-          ? canonicalizeServices(flowDefaults, options.services ?? null)
-          : [...flowDefaults];
+          ? canonicalizeServices(flowServiceLabels, options.services ?? null)
+          : [...flowServiceLabels];
         const allowed = options?.services?.map((o) => o.value);
         if (!allowed || allowed.length === 0 || canonical.every((s) => allowed.includes(s))) {
           draft.services = canonical;
@@ -912,6 +945,15 @@ export async function POST(request: Request) {
       rowLeadStage: rowDisplay.leadStage,
     };
 
+    // Dialog Services section shows ONLY the flow-configured labels
+    // (preselected exactly as in Settings). The creation payload
+    // still uses draft.services (canonical enums) — only the
+    // dialog-facing prefill carries labels. Without configuration
+    // the draft value stands (lead data or empty).
+    if (flowServiceLabels.length > 0) {
+      prefill.services = [...flowServiceLabels];
+    }
+
     if (!canCreate) {
       return NextResponse.json({
         success: false,
@@ -929,6 +971,10 @@ export async function POST(request: Request) {
         destinations: itineraryLookups.destinations,
         cities: itineraryLookups.cities,
         citiesByDestination: itineraryLookups.citiesByDestination,
+        // Per-flow service configuration for the dialog Services
+        // section: exactly these labels render as checkboxes ([] when
+        // unconfigured — never the full live catalog).
+        configuredServices: [...flowServiceLabels],
         assignedOwnerEmail: overrideEmail,
         assignmentIssue: overrideIssue,
         link: await safeLinkState(supabase, accountId, runId),

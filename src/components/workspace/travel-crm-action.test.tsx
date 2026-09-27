@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 
 import {
   buildDialogInputs,
@@ -11,6 +12,8 @@ import {
   travelerAgeCount,
   travelerFormToOverrides,
   TravelCrmAction,
+  TRAVEL_DATE_REQUIRED_ERROR,
+  validateTravelDateValue,
   validateTravelerForm,
   type TravelerForm,
 } from "./travel-crm-action";
@@ -399,6 +402,78 @@ describe("services multi-select input", () => {
   });
 });
 
+describe("dialog Services section follows the per-flow configuration", () => {
+  const mapping = {
+    available: ["customerName"],
+    missing: ["services"],
+    ambiguous: [],
+    invalid: [],
+    ready: false,
+  };
+  const liveOptions = {
+    leadSource: null,
+    leadType: null,
+    leadStage: null,
+    services: [
+      { value: "FLIGHT", label: "Flight" },
+      { value: "HOTEL", label: "Hotel" },
+      { value: "CRUISE", label: "Cruise" },
+      { value: "VEHICLE_TRANSFER", label: "Vehicle Transfer" },
+      { value: "VISA", label: "Visa" },
+    ],
+  };
+  const CONFIGURED = [
+    "Cruise",
+    "Hotel",
+    "Sightseeing",
+    "Add-on Service (Rail, Passport, etc.)",
+  ];
+
+  it("shows exactly the configured services (never the full catalog)", () => {
+    const inputs = buildDialogInputs(
+      mapping,
+      { services: CONFIGURED },
+      liveOptions,
+      null,
+      null,
+      null,
+      CONFIGURED,
+    );
+    const services = inputs.find((i) => i.field === "services");
+    expect(services?.kind).toBe("multi");
+    expect(services?.options?.map((o) => o.label)).toEqual(CONFIGURED);
+    expect(services?.value).toEqual(CONFIGURED);
+  });
+
+  it("unconfigured catalog entries never appear as options", () => {
+    const inputs = buildDialogInputs(
+      mapping,
+      { services: CONFIGURED },
+      liveOptions,
+      null,
+      null,
+      null,
+      CONFIGURED,
+    );
+    const labels = inputs.find((i) => i.field === "services")?.options?.map((o) => o.label) ?? [];
+    for (const absent of ["Flight", "Vehicle Transfer", "Visa"]) {
+      expect(labels).not.toContain(absent);
+    }
+    expect(labels.filter((l) => l === "Rail" || l === "Meal")).toEqual([]);
+  });
+
+  it("empty configuration hides the Services section", () => {
+    const inputs = buildDialogInputs(mapping, { services: [] }, liveOptions, null, null, null, []);
+    expect(inputs.find((i) => i.field === "services")).toBeUndefined();
+  });
+
+  it("absent configuration data keeps the legacy live-catalog behavior", () => {
+    const inputs = buildDialogInputs(mapping, { services: ["Flight"] }, liveOptions, null, null);
+    const services = inputs.find((i) => i.field === "services");
+    expect(services?.options).toEqual(liveOptions.services);
+  });
+});
+
 describe("Travelers section (Adults/CWB/CWOB/Infants + ages)", () => {
   const blank: TravelerForm = {
     adults: "2",
@@ -682,5 +757,66 @@ describe("Departure Country/City catalog selects (saved flow defaults)", () => {
     expect(resolveDepartureCityOnCountryChange("United Arab Emirates", "Dubai")).toBe("Dubai");
     expect(resolveDepartureCityOnCountryChange("India", "Delhi")).toBe("Delhi");
     expect(resolveDepartureCityOnCountryChange("India", "")).toBe("");
+  });
+});
+
+describe("Travel Date required validation (Create Lead dialog)", () => {
+  // submit() blocks the create request with this inline error when the
+  // Travel Date input is rendered but empty; the same validator clears
+  // the error once a valid date is selected. Date format and payload
+  // mapping are untouched — presence only.
+  it("empty Travel Date yields the required error (blocks submit)", () => {
+    expect(validateTravelDateValue("")).toBe(TRAVEL_DATE_REQUIRED_ERROR);
+    expect(validateTravelDateValue("   ")).toBe(TRAVEL_DATE_REQUIRED_ERROR);
+    expect(validateTravelDateValue(undefined)).toBe(TRAVEL_DATE_REQUIRED_ERROR);
+    expect(validateTravelDateValue(null)).toBe(TRAVEL_DATE_REQUIRED_ERROR);
+    expect(validateTravelDateValue(42)).toBe(TRAVEL_DATE_REQUIRED_ERROR);
+    expect(TRAVEL_DATE_REQUIRED_ERROR).toBe("Travel Date is required.");
+  });
+
+  it("valid Travel Date yields no error (submit flow continues)", () => {
+    expect(validateTravelDateValue("2026-12-01")).toBeNull();
+    expect(validateTravelDateValue(" 2026-12-01 ")).toBeNull();
+  });
+
+  it("correcting an empty date removes the validation error", () => {
+    let error = validateTravelDateValue("");
+    expect(error).toBe(TRAVEL_DATE_REQUIRED_ERROR);
+    error = validateTravelDateValue("2026-12-01");
+    expect(error).toBeNull();
+  });
+});
+
+describe("Complete Travel CRM fields modal sizing", () => {
+  it("fills most of the viewport height with a wide content area (no cramped scrollbar)", () => {
+    const src = readFileSync(`${process.cwd()}/src/components/workspace/travel-crm-action.tsx`, "utf8");
+    const titleAt = src.indexOf("Complete Travel CRM fields");
+    const dialogBlock = src.slice(src.lastIndexOf("DialogContent", titleAt));
+    // Wide modal on desktop; base dialog keeps max-w-[calc(100%-2rem)]
+    // so small screens stay responsive.
+    expect(dialogBlock).toContain("sm:max-w-3xl");
+    // The popup itself is capped to most of the viewport height and laid
+    // out as a flex column so the form area grows to fill it.
+    expect(dialogBlock).toContain("max-h-[min(92vh,60rem)]");
+    expect(dialogBlock).toContain("flex-col");
+    // The content area flexes to the remaining space and scrolls ONLY
+    // when the viewport genuinely cannot fit the whole form (small
+    // screens) — the Create/Cancel footer stays pinned below it.
+    expect(dialogBlock).toContain("min-h-0");
+    expect(dialogBlock).toContain("flex-1");
+    expect(dialogBlock).toContain("overflow-y-auto");
+  });
+});
+
+describe("Create Lead itinerary displays names — never raw UUIDs", () => {
+  it("resolves destination/city IDs to labels and renders them as SelectValue children", () => {
+    const src = readFileSync(`${process.cwd()}/src/components/workspace/travel-crm-action.tsx`, "utf8");
+    // Explicit ID → name resolution for both destination and city.
+    expect(src).toContain("destinationLabelForValue(destinations, row.destination)");
+    expect(src).toContain("cityLabelForValue(cityOptions, row.city)");
+    expect(src).toContain("destinationLabel !== null ? destinationLabel : undefined");
+    expect(src).toContain("cityLabel !== null ? cityLabel : undefined");
+    // The stored UUID stays the Select value; only display resolves.
+    expect(src).toContain("resolveSelectValue(destinations, row.destination)");
   });
 });

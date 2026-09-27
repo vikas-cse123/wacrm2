@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   workspace_fields: [] as Row[],
   workspace_values: [] as Row[],
   profiles: [] as Row[],
+  accounts: [] as Row[],
   links: [] as Row[],
   flowSettings: [] as Row[],
   travelCalls: [] as Array<{ url: string; body: unknown }>,
@@ -64,6 +65,8 @@ function storeFor(table: string): Row[] {
       return h.workspace_values;
     case "profiles":
       return h.profiles;
+    case "accounts":
+      return h.accounts;
     case "travel_crm_lead_links":
       return h.links;
     case "travel_crm_flow_settings":
@@ -134,7 +137,7 @@ const LOOKUPS = {
 function mockTravel() {
   vi.spyOn(globalThis, "fetch").mockImplementation((async (url: string, init: RequestInit) => {
     const u = String(url);
-    if (u.endsWith("/api/integrations/wacrm/lookups")) {
+    if (u.includes("/api/integrations/wacrm/lookups")) {
       const data = h.lookupsOverride ?? LOOKUPS;
       return new Response(JSON.stringify({ success: true, data }), { status: 200 });
     }
@@ -182,9 +185,10 @@ function seed() {
   h.flow_nodes = [];
   h.workspace_fields = [{ id: "f-asg", flow_id: "flow-1", name: "Assigned To", field_type: "select" }];
   h.workspace_values = [{ flow_run_id: "run-1", field_id: "f-asg", value_text: "u-agent" }];
+  h.accounts = [{ id: "acct-1", owner_user_id: "u-owner" }];
   h.profiles = [
     { account_id: "acct-1", user_id: "u-agent", email: "agent@acme.com", full_name: "Agent" },
-  ];
+    { account_id: "acct-1", user_id: "u-owner", email: "owner@acme.com", full_name: "Owner" },];
   h.links = [];
   h.flowSettings = [];
 }
@@ -306,6 +310,36 @@ describe("Travelers overrides → Travel CRM payload", () => {
       infantAges: [],
     });
     expect(h.travelCalls).toHaveLength(0);
+  });
+
+  it("a lead without traveler data reports only Adults missing (optional counts never block)", async () => {
+    const vars = h.flow_runs[0].vars as Record<string, unknown>;
+    delete vars.adults;
+    const res = await POST(post({ flow_id: "flow-1", flow_run_id: "run-1", overrides: FUNNEL }));
+    const json = (await res.json()) as { code: string; mapping: { missing: string[] } };
+    expect(json.code).toBe("MISSING_FIELDS");
+    // Adults is required and genuinely absent from the lead data — the
+    // dialog's Travelers section (defaulting to 1) collects it.
+    expect(json.mapping.missing).toContain("adults");
+    // CWB/CWOB/Infants are optional in the Travel CRM contract: never
+    // reported missing, never blocking.
+    expect(json.mapping.missing).not.toContain("childrenWithBed");
+    expect(json.mapping.missing).not.toContain("childrenWithoutBed");
+    expect(json.mapping.missing).not.toContain("infants");
+  });
+
+  it("dialog default Adults=1 satisfies the required count on Create", async () => {
+    const vars = h.flow_runs[0].vars as Record<string, unknown>;
+    delete vars.adults;
+    const res = await POST(
+      post({
+        flow_id: "flow-1",
+        flow_run_id: "run-1",
+        overrides: { ...FUNNEL, adults: "1" },
+      }),
+    );
+    expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
+    expect(h.travelCalls[0].body).toMatchObject({ adults: 1 });
   });
 });
 

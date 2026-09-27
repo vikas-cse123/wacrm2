@@ -4,12 +4,15 @@ import { readFileSync } from "node:fs";
 import {
   buildItineraryLookups,
   citiesForDestination,
+  cityLabelForValue,
   defaultsToDraftItinerary,
+  destinationLabelForValue,
   draftToItineraryDefaults,
   extractCityOptions,
   extractDestinationOptions,
   isCompatibleCity,
   normalizeItineraryDefaults,
+  resolveSelectValue,
   validateNightsInput,
 } from "./itineraries";
 
@@ -236,5 +239,116 @@ describe("12+13. stable IDs preserved + payload mapping", () => {
     ]);
     expect(back).toEqual([{ destination: "dest-sg", city: "city-marina", nights: 4 }]);
     expect(draftToItineraryDefaults([])).toEqual([]);
+  });
+});
+
+describe("14. master-ID catalogs never mix with legacy display names", () => {
+  // Regression: Travel CRM returns BOTH master IDs and legacy
+  // display-name lists for backward compatibility. Merging them
+  // produced two identical "Singapore" options (one by ID, one by
+  // name); picking the legacy one emptied the City dropdown because
+  // no city's destinationValue equals a display name.
+  const SG_ID = "11111111-2222-3333-4444-555555555555";
+  const SENTOSA_ID = "22222222-3333-4444-5555-666666666666";
+  const MIXED = {
+    destinations: [{ value: SG_ID, label: "Singapore" }],
+    cities: [{ value: SENTOSA_ID, label: "Sentosa", destinationValue: SG_ID }],
+    countries: ["Singapore", "Thailand"],
+    leadSources: [],
+  };
+
+  it("1. Singapore destination loads exactly once, by ID", () => {
+    const dests = extractDestinationOptions(MIXED);
+    expect(dests).toEqual([{ value: SG_ID, label: "Singapore" }]);
+  });
+
+  it("2. Singapore's cities are populated from linkage", () => {
+    const built = buildItineraryLookups(MIXED);
+    expect(built.cities).toEqual([
+      { value: SENTOSA_ID, label: "Sentosa", destinationValue: SG_ID },
+    ]);
+    expect(citiesForDestination(built.cities, SG_ID).map((c) => c.value)).toEqual([SENTOSA_ID]);
+  });
+
+  it("3. city filtering uses the destination ID, not the name", () => {
+    const built = buildItineraryLookups(MIXED);
+    // Legacy display name matches nothing — the linkage is ID-based.
+    expect(citiesForDestination(built.cities, "Singapore")).toEqual([]);
+    expect(citiesForDestination(built.cities, SG_ID)).toHaveLength(1);
+  });
+
+  it("legacy lists still work when no master catalog exists (old servers)", () => {
+    expect(extractDestinationOptions({ countries: ["Singapore"] })).toEqual([
+      { value: "Singapore", label: "Singapore" },
+    ]);
+    const free = extractCityOptions({ cities: ["Delhi", "Mumbai"] });
+    expect(citiesForDestination(free, "anything")).toHaveLength(2);
+  });
+});
+
+describe("15. ID storage with label display", () => {
+  const SG_ID = "11111111-2222-3333-4444-555555555555";
+  const SENTOSA_ID = "22222222-3333-4444-5555-666666666666";
+  const DESTINATIONS = [{ value: SG_ID, label: "Singapore" }];
+  const CITIES = [{ value: SENTOSA_ID, label: "Sentosa", destinationValue: SG_ID }];
+
+  it("4. selected destination resolves to 'Singapore', not the UUID", () => {
+    expect(destinationLabelForValue(DESTINATIONS, SG_ID)).toBe("Singapore");
+  });
+
+  it("5. selected city resolves to its name, not the UUID", () => {
+    expect(cityLabelForValue(CITIES, SENTOSA_ID)).toBe("Sentosa");
+  });
+
+  it("6. saved UUID values rehydrate to labels per row", () => {
+    const saved = [
+      { destination: SG_ID, city: SENTOSA_ID, nights: 4 },
+      { destination: SG_ID, city: SENTOSA_ID, nights: 2 },
+    ];
+    const labels = saved.map((r) => ({
+      destination: destinationLabelForValue(DESTINATIONS, r.destination),
+      city: cityLabelForValue(citiesForDestination(CITIES, r.destination), r.city),
+    }));
+    expect(labels).toEqual([
+      { destination: "Singapore", city: "Sentosa" },
+      { destination: "Singapore", city: "Sentosa" },
+    ]);
+  });
+
+  it("8. multiple rows keep each row's correct labels", () => {
+    const BALI_ID = "33333333-4444-5555-6666-777777777777";
+    const KUTA_ID = "44444444-5555-6666-7777-888888888888";
+    const dests = [...DESTINATIONS, { value: BALI_ID, label: "Bali" }];
+    const cities = [...CITIES, { value: KUTA_ID, label: "Kuta", destinationValue: BALI_ID }];
+    const rows = [
+      { destination: SG_ID, city: SENTOSA_ID },
+      { destination: BALI_ID, city: KUTA_ID },
+    ];
+    expect(
+      rows.map((r) => ({
+        destination: destinationLabelForValue(dests, r.destination),
+        city: cityLabelForValue(citiesForDestination(cities, r.destination), r.city),
+      })),
+    ).toEqual([
+      { destination: "Singapore", city: "Sentosa" },
+      { destination: "Bali", city: "Kuta" },
+    ]);
+  });
+
+  it("9. persisted payload still contains IDs", () => {
+    const draft = defaultsToDraftItinerary([
+      { destination: SG_ID, city: SENTOSA_ID, nights: 4 },
+    ]);
+    expect(draft).toEqual([{ country: SG_ID, destination: SENTOSA_ID, nights: 4 }]);
+  });
+
+  it("10. invalid stored IDs resolve to null (fallback, never UUID text)", () => {
+    expect(destinationLabelForValue(DESTINATIONS, "dead-id")).toBeNull();
+    expect(cityLabelForValue(CITIES, "dead-id")).toBeNull();
+    expect(resolveSelectValue(DESTINATIONS, "dead-id")).toBeUndefined();
+    expect(resolveSelectValue(CITIES, "dead-id")).toBeUndefined();
+    // Matched IDs pass through untouched for Select state.
+    expect(resolveSelectValue(DESTINATIONS, SG_ID)).toBe(SG_ID);
+    expect(resolveSelectValue([], "")).toBeUndefined();
   });
 });

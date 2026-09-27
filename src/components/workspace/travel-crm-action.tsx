@@ -29,6 +29,9 @@ import {
 } from "@/lib/integrations/travel-crm/services";
 import {
   citiesForDestination,
+  cityLabelForValue,
+  destinationLabelForValue,
+  resolveSelectValue,
   validateNightsInput,
 } from "@/lib/integrations/travel-crm/itineraries";
 import {
@@ -89,6 +92,8 @@ interface PrepareResult {
   citiesByDestination?: Record<string, LookupOption[]> | null;
   assignedOwnerEmail?: string | null;
   assignmentIssue?: string | null;
+  /** Per-flow configured service labels for the dialog Services section. */
+  configuredServices?: string[] | null;
   workspaceSync?: {
     updated: string[];
     failed: Array<{ field: string; error: string }>;
@@ -196,6 +201,19 @@ export function resizeAgeRows(ages: string[], count: number): string[] {
 
 function isWholeNumber(text: string): boolean {
   return /^\d+$/.test(text.trim());
+}
+
+/** Inline validation message for an empty Travel Date. */
+export const TRAVEL_DATE_REQUIRED_ERROR = "Travel Date is required.";
+
+/**
+ * Validate the Travel Date value before Create. Returns
+ * TRAVEL_DATE_REQUIRED_ERROR when empty/blank, null when a value is
+ * present. Date format/payload mapping is untouched — presence only.
+ */
+export function validateTravelDateValue(value: unknown): string | null {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? null : TRAVEL_DATE_REQUIRED_ERROR;
 }
 
 /**
@@ -516,6 +534,7 @@ export function buildDialogInputs(
     cities?: LookupOption[] | null;
     citiesByDestination?: Record<string, LookupOption[]> | null;
   } | null,
+  configuredServices?: string[] | null,
 ): DialogInput[] {
   const wanted = new Set<string>();
   for (const f of mapping.missing) {
@@ -589,6 +608,15 @@ export function buildDialogInputs(
     : [];
   if (prefilledServices.length > 0) {
     wanted.add("services");
+  }
+  // The Services section shows ONLY the per-flow configuration. An
+  // explicitly empty configuration hides the section entirely —
+  // never the full live catalog, never invented labels. (Absent
+  // configuration data keeps the legacy behavior.)
+  const hasConfiguredServices =
+    configuredServices !== undefined && configuredServices !== null;
+  if (hasConfiguredServices && configuredServices.length === 0) {
+    wanted.delete("services");
   }
   const ambiguousBy = new Map(mapping.ambiguous.map((a) => [a.field, a.candidates]));
   const resolved = resolveItineraryLookups(
@@ -671,13 +699,24 @@ export function buildDialogInputs(
         : optionKey
           ? (options?.[optionKey] ?? null)
           : undefined;
+    // Services options come from the per-flow configuration when the
+    // server provides it — never the full live catalog. An explicitly
+    // empty configuration yields no options (the section itself is
+    // hidden above). Absent configuration data keeps the legacy
+    // live-catalog behavior.
+    const serviceOptions =
+      field === "services" && hasConfiguredServices
+        ? (configuredServices as string[]).map((label) => ({ value: label, label }))
+        : null;
     // Funnel dropdowns never degrade to text inputs: when the
     // server sends no option list, fall back to the canonical
     // Workspace label sets above.
     const fieldOptions =
-      liveOptions && liveOptions.length > 0
-        ? liveOptions
-        : (FUNNEL_FALLBACK_OPTIONS[field] ?? undefined);
+      serviceOptions !== null
+        ? serviceOptions
+        : liveOptions && liveOptions.length > 0
+          ? liveOptions
+          : (FUNNEL_FALLBACK_OPTIONS[field] ?? undefined);
     return {
       field,
       label: INPUT_LABELS[field] ?? field,
@@ -860,6 +899,7 @@ export function TravelCrmAction({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [travelDateError, setTravelDateError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ leadId: string; leadUrl: string } | null>(null);
   const [dialog, setDialog] = useState<{
     mapping: MappingPayload;
@@ -870,6 +910,7 @@ export function TravelCrmAction({
     cities: LookupOption[] | null;
     citiesByDestination: Record<string, LookupOption[]> | null;
     assignmentIssue: string | null;
+    configuredServices: string[] | null;
   } | null>(null);
   const [members, setMembers] = useState<TeamMember[] | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -905,6 +946,7 @@ export function TravelCrmAction({
         cities: dialog.cities,
         citiesByDestination: dialog.citiesByDestination,
       },
+      dialog.configuredServices,
     );
   }
 
@@ -921,6 +963,7 @@ export function TravelCrmAction({
 
   function openDialog(json: PrepareResult & { mapping: MappingPayload; prefill: Record<string, unknown> }) {
     setValues(seedValues(json.prefill));
+    setTravelDateError(null);
     setItineraryRows(seedItineraryDialogRows(json.prefill));
     setTravelers(seedTravelerForm(json.prefill));
     setMembers(null);
@@ -933,6 +976,9 @@ export function TravelCrmAction({
       cities: json.cities ?? null,
       citiesByDestination: json.citiesByDestination ?? null,
       assignmentIssue: json.assignmentIssue ?? null,
+      configuredServices: Array.isArray(json.configuredServices)
+        ? json.configuredServices.filter((s): s is string => typeof s === "string")
+        : null,
     });
   }
 
@@ -960,6 +1006,14 @@ export function TravelCrmAction({
 
   async function submit() {
     const inputs = dialogInputs();
+    // Travel Date is required when shown: block the create request
+    // here (dialog stays open) with an inline field error instead
+    // of sending. Untouched when the field isn't rendered.
+    if (inputs.some((i) => i.field === "travelStartDate")) {
+      const dateError = validateTravelDateValue(values.travelStartDate);
+      setTravelDateError(dateError);
+      if (dateError) return;
+    }
     const overrides: Record<string, unknown> = {};
     for (const input of inputs) {
       // Itinerary has its own row state — never a generic override.
@@ -1076,6 +1130,9 @@ export function TravelCrmAction({
           cities: json.cities ?? null,
           citiesByDestination: json.citiesByDestination ?? null,
           assignmentIssue: json.assignmentIssue ?? null,
+          configuredServices: Array.isArray(json.configuredServices)
+            ? json.configuredServices.filter((s): s is string => typeof s === "string")
+            : null,
         });
         return;
       }
@@ -1133,7 +1190,7 @@ export function TravelCrmAction({
             {rows.slice(0, count).map((age, i) => {
               const label = `${single} ${i + 1} Age`;
               return (
-                <div key={`${group}-${i}`} className="grid gap-1">
+                <div key={`${group}-${i}`} className="grid min-w-0 gap-1">
                   <Label htmlFor={`tmc-${group}-${i}`} className="text-xs">
                     {label}
                   </Label>
@@ -1142,7 +1199,7 @@ export function TravelCrmAction({
                     aria-label={label}
                     type="number"
                     min={0}
-                    className="h-8"
+                    className="h-8 w-full min-w-0"
                     value={age}
                     onChange={(e) => setAge(group, count, i, e.target.value)}
                     placeholder="Age (optional)"
@@ -1155,7 +1212,7 @@ export function TravelCrmAction({
       };
       return (
         <div className="space-y-2">
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
             {(
               [
                 { key: "adults", label: "Adults", min: 1, placeholder: "1" },
@@ -1164,7 +1221,7 @@ export function TravelCrmAction({
                 { key: "infants", label: "Infants", min: 0, placeholder: "" },
               ] as const
             ).map((f) => (
-              <div key={f.key} className="grid gap-1">
+              <div key={f.key} className="grid min-w-0 gap-1">
                 <Label htmlFor={`tmc-travelers-${f.key}`} className="text-xs">
                   {f.label}
                 </Label>
@@ -1173,7 +1230,7 @@ export function TravelCrmAction({
                   aria-label={f.label}
                   type="number"
                   min={f.min}
-                  className="h-8"
+                  className="h-8 w-full min-w-0"
                   value={travelers[f.key]}
                   onChange={(e) => setCount(f.key, e.target.value)}
                   placeholder={f.placeholder || undefined}
@@ -1185,7 +1242,7 @@ export function TravelCrmAction({
             CWB = Child with Bed | CWOB = Child without Bed | Infants = Visa charges only
           </p>
           {(cwbCount > 0 || cwobCount > 0 || infantCount > 0) && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3">
               {ageRows("cwbAges", cwbCount, "CWB")}
               {ageRows("cwobAges", cwobCount, "CWOB")}
               {ageRows("infantAges", infantCount, "Infant")}
@@ -1228,12 +1285,25 @@ export function TravelCrmAction({
                 const cityOptions = row.destination
                   ? citiesForDestination(allCities, row.destination)
                   : [];
+                // Stored values are stable Travel CRM IDs. An ID with no
+                // matching option (stale/archived master) falls back to
+                // the placeholder instead of rendering a raw UUID; the
+                // stored value stays intact in state and on send.
+                const destinationValue = resolveSelectValue(destinations, row.destination);
+                const cityValue = resolveSelectValue(cityOptions, row.city);
+                // Explicit label resolution (ID → name) for display:
+                // the stored UUID is passed to the Select only as the
+                // value; the human-readable name is rendered directly
+                // so the trigger never shows a raw UUID, even during
+                // SSR or before Base UI registers its items.
+                const destinationLabel = destinationLabelForValue(destinations, row.destination);
+                const cityLabel = cityLabelForValue(cityOptions, row.city);
                 return (
                   <div key={i} className="grid grid-cols-[1fr_1fr_64px_auto] items-end gap-2">
                     <div className="grid gap-1">
                       <Label htmlFor={`lead-itin-dest-${i}`} className="text-xs">Destination</Label>
                       <Select
-                        value={row.destination || undefined}
+                        value={destinationValue}
                         onValueChange={(v) =>
                           setItineraryRows((prev) =>
                             updateItineraryDialogDestination(prev, i, v ?? "", allCities),
@@ -1241,7 +1311,9 @@ export function TravelCrmAction({
                         }
                       >
                         <SelectTrigger id={`lead-itin-dest-${i}`} aria-label="Destination" className="h-8 w-full">
-                          <SelectValue placeholder="Select" />
+                          <SelectValue placeholder="Select">
+                            {destinationLabel !== null ? destinationLabel : undefined}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {destinations.map((o) => (
@@ -1255,7 +1327,7 @@ export function TravelCrmAction({
                     <div className="grid gap-1">
                       <Label htmlFor={`lead-itin-city-${i}`} className="text-xs">City</Label>
                       <Select
-                        value={row.city || undefined}
+                        value={cityValue}
                         onValueChange={(v) =>
                           setItineraryRows((prev) =>
                             prev.map((r, idx) => (idx === i ? { ...r, city: v ?? "" } : r)),
@@ -1264,7 +1336,9 @@ export function TravelCrmAction({
                         disabled={!row.destination}
                       >
                         <SelectTrigger id={`lead-itin-city-${i}`} aria-label="City" className="h-8 w-full">
-                          <SelectValue placeholder={row.destination ? "Select" : "Pick destination first"} />
+                          <SelectValue placeholder={row.destination ? "Select" : "Pick destination first"}>
+                            {cityLabel !== null ? cityLabel : undefined}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {cityOptions.map((o) => (
@@ -1337,10 +1411,15 @@ export function TravelCrmAction({
       );
     }
     if (input.kind === "multi") {
+      // Services choices are exactly the input options when provided
+      // (per-flow configuration, possibly empty) — the six-label
+      // fallback only applies when no option list exists at all.
       const choices =
-        input.options && input.options.length > 0
+        input.field === "services" && input.options !== undefined && input.options !== null
           ? input.options.map((o) => o.label)
-          : [...TRAVEL_CRM_SERVICE_LABELS];
+          : input.options && input.options.length > 0
+            ? input.options.map((o) => o.label)
+            : [...TRAVEL_CRM_SERVICE_LABELS];
       const current = splitServiceLabels(val);
       const has = (label: string) =>
         current.some((c) => c.toLowerCase() === label.toLowerCase());
@@ -1457,13 +1536,26 @@ export function TravelCrmAction({
       );
     }
     return (
-      <Input
-        aria-label={input.label}
-        type={input.kind === "date" ? "date" : input.kind === "number" ? "number" : input.kind === "member" ? "text" : "text"}
-        value={val}
-        onChange={(e) => set(input.field, e.target.value)}
-        placeholder={input.hint ?? input.label}
-      />
+      <>
+        <Input
+          aria-label={input.label}
+          type={input.kind === "date" ? "date" : input.kind === "number" ? "number" : input.kind === "member" ? "text" : "text"}
+          value={val}
+          onChange={(e) => {
+            set(input.field, e.target.value);
+            // Selecting a valid Travel Date clears the inline error.
+            if (input.field === "travelStartDate") {
+              setTravelDateError(validateTravelDateValue(e.target.value));
+            }
+          }}
+          placeholder={input.hint ?? input.label}
+        />
+        {input.field === "travelStartDate" && travelDateError !== null && (
+          <p role="alert" className="text-xs text-red-500">
+            {travelDateError}
+          </p>
+        )}
+      </>
     );
   }
 
@@ -1506,7 +1598,7 @@ export function TravelCrmAction({
         </p>
       )}
       <Dialog open={dialog !== null} onOpenChange={(v) => !v && setDialog(null)}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="flex max-h-[min(92vh,60rem)] flex-col sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Complete Travel CRM fields</DialogTitle>
             <DialogDescription>
@@ -1514,7 +1606,7 @@ export function TravelCrmAction({
               Received, Type, and Stage are also prefilled and editable.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid max-h-[60vh] gap-3 overflow-y-auto pr-1">
+          <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto pr-1">
             {dialogInputs().map((input) => (
               <div key={input.field} className="grid gap-1.5">
                 <Label htmlFor={`tmc-${input.field}`}>{input.label}</Label>

@@ -18,6 +18,30 @@ export const TRAVEL_CRM_SERVICE_LABELS: readonly string[] = [
   "Add-on Service (Rail, Passport, etc.)",
 ];
 
+/**
+ * The six WACRM service display labels → their Travel CRM API enum
+ * values.
+ *
+ * The live Travel CRM catalog (`serviceTypes`) derives its labels from
+ * the enum via `labelForLookup` (title-cased enum words: "Vehicle
+ * Transfer", "Other Add On", …), which does NOT match WACRM's display
+ * labels for VEHICLE_TRANSFER ("Vehicle (disposal)") and OTHER_ADD_ON
+ * ("Add-on Service (Rail, Passport, etc.)"). This explicit map is the
+ * single authority that resolves WACRM's display labels to the exact
+ * Travel CRM enum, so the payload always carries an enum value — never
+ * a display label — while users keep seeing the same six options.
+ * Keys are the exact labels from TRAVEL_CRM_SERVICE_LABELS (matched
+ * case-insensitively during canonicalization).
+ */
+export const TRAVEL_CRM_SERVICE_VALUE_BY_LABEL: Readonly<Record<string, string>> = {
+  Cruise: "CRUISE",
+  Flight: "FLIGHT",
+  Hotel: "HOTEL",
+  "Vehicle (disposal)": "VEHICLE_TRANSFER",
+  Sightseeing: "SIGHTSEEING",
+  "Add-on Service (Rail, Passport, etc.)": "OTHER_ADD_ON",
+};
+
 export const TRAVEL_CRM_MAX_SERVICES = 20;
 export const TRAVEL_CRM_MAX_SERVICE_LENGTH = 80;
 
