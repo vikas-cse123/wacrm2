@@ -33,7 +33,9 @@ import {
 } from "@/lib/flows/workspace-defaults";
 import {
   buildItineraryLookups,
+  cityLabelForValue,
   defaultsToDraftItinerary,
+  destinationLabelForValue,
   normalizeItineraryDefaults,
 } from "@/lib/integrations/travel-crm/itineraries";
 import {
@@ -111,6 +113,43 @@ function invalidOverrides(message: string, fields?: Record<string, string[]>) {
     { success: false, code: "INVALID_OVERRIDES", error: message, fields: fields ?? {} },
     { status: 400 },
   );
+}
+
+/**
+ * Resolve stored destination/city master UUIDs to their display names
+ * for the Travel CRM create payload.
+ *
+ * Travel CRM's lead itinerary `country`/`destination` fields are free
+ * text and its Leads UI renders them verbatim, so WACRM must send NAMES
+ * — exactly like manually-created Travel CRM leads (whose form stores the
+ * destination/city display names). This resolves each row against the
+ * ALREADY-FETCHED, workspace-scoped itinerary lookups (the same source
+ * the dialog uses), never an unscoped database lookup:
+ *   - `country`  matching a destination master UUID → that destination's label;
+ *   - `destination` matching a city master UUID → that city's label;
+ *   - any other value (free text, flow-answer names, or a UUID from
+ *     another workspace absent from the scoped lookups) passes through
+ *     unchanged.
+ */
+function resolveItineraryForSend(
+  rows: ReadonlyArray<{
+    country: string | null;
+    destination: string | null;
+    nights: number | null;
+  }>,
+  lookups: {
+    destinations: ReadonlyArray<{ value: string; label: string }>;
+    cities: ReadonlyArray<{ value: string; label: string }>;
+  },
+): Array<{ country: string; destination: string; nights: number; sequence: number }> {
+  return rows.map((row, i) => ({
+    country:
+      destinationLabelForValue(lookups.destinations, row.country ?? "") ?? (row.country ?? ""),
+    destination:
+      cityLabelForValue(lookups.cities, row.destination ?? "") ?? (row.destination ?? ""),
+    nights: (row.nights ?? 0) as number,
+    sequence: i + 1,
+  }));
 }
 
 /** Maximum traveler age accepted per entry (Travel CRM validates authoritatively). */
@@ -1012,12 +1051,7 @@ export async function POST(request: Request) {
         childrenWithoutBedAges: draft.childrenWithoutBedAges,
         infantAges: draft.infantAges,
         services: sendServices,
-        itinerary: draft.itinerary.map((row, i) => ({
-          country: (row.country ?? "") as string,
-          destination: (row.destination ?? "") as string,
-          nights: (row.nights ?? 0) as number,
-          sequence: i + 1,
-        })),
+        itinerary: resolveItineraryForSend(draft.itinerary, itineraryLookups),
       });
     } catch (err) {
       await markLinkFailed(supabase, accountId, runId, err);
