@@ -319,7 +319,9 @@ describe("5. editing a lead itinerary does not mutate saved defaults", () => {
     );
     expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
     expect(h.travelCalls[0].body).toMatchObject({
-      itinerary: [{ country: "dest-sg", destination: "city-sentosa", nights: 3, sequence: 1 }],
+      itinerary: [
+        { country: "Singapore", destination: "Sentosa Island", nights: 3, sequence: 1 },
+      ],
     });
     // Saved default unchanged.
     expect(h.flowSettings).toHaveLength(1);
@@ -348,8 +350,83 @@ describe("13. existing Travel CRM lead payload mapping remains correct", () => {
     expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
     expect(h.travelCalls[0].body).toMatchObject({
       itinerary: [
-        { country: "dest-sg", destination: "city-marina", nights: 4, sequence: 1 },
-        { country: "dest-sg", destination: "city-sentosa", nights: 3, sequence: 2 },
+        { country: "Singapore", destination: "Marina Bay", nights: 4, sequence: 1 },
+        { country: "Singapore", destination: "Sentosa Island", nights: 3, sequence: 2 },
+      ],
+    });
+  });
+});
+
+describe("6. itinerary master UUIDs resolve to display names in the Travel CRM payload", () => {
+  // Destination/city values in the stored defaults are master UUIDs (the
+  // mock lookups' `value`). The create payload must carry the display
+  // NAMES (like manually-created Travel CRM leads), resolved only against
+  // the workspace-scoped lookups — never an unscoped lookup.
+  it("resolves destination UUID → destination name and city UUID → city name", async () => {
+    h.flowSettings.push({
+      account_id: "acct-1",
+      flow_id: "flow-1",
+      services: [],
+      itinerary: [{ destination: "dest-sg", city: "city-marina", nights: 4 }],
+    });
+    h.flow_runs[0].vars = {
+      ...(h.flow_runs[0].vars as Record<string, unknown>),
+      service: "Flight",
+    };
+    const res = await POST(post({ flow_id: "flow-1", flow_run_id: "run-1", overrides: FUNNEL }));
+    expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
+    expect(h.travelCalls[0].body).toMatchObject({
+      itinerary: [{ country: "Singapore", destination: "Marina Bay", nights: 4, sequence: 1 }],
+    });
+  });
+
+  it("leaves non-matching and already-name values unchanged", async () => {
+    h.flowSettings.push({
+      account_id: "acct-1",
+      flow_id: "flow-1",
+      services: [],
+      itinerary: [
+        { destination: "dest-sg", city: "city-marina", nights: 4 },
+        // Unknown values that match no master UUID → untouched.
+        { destination: "Unknown-Dest", city: "Free Text City", nights: 2 },
+        // Flow-answer/name-based values (already display names) → untouched.
+        { destination: "Singapore", city: "Sentosa Island", nights: 1 },
+      ],
+    });
+    h.flow_runs[0].vars = {
+      ...(h.flow_runs[0].vars as Record<string, unknown>),
+      service: "Flight",
+    };
+    const res = await POST(post({ flow_id: "flow-1", flow_run_id: "run-1", overrides: FUNNEL }));
+    expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
+    expect(h.travelCalls[0].body).toMatchObject({
+      itinerary: [
+        { country: "Singapore", destination: "Marina Bay", nights: 4, sequence: 1 },
+        { country: "Unknown-Dest", destination: "Free Text City", nights: 2, sequence: 2 },
+        { country: "Singapore", destination: "Sentosa Island", nights: 1, sequence: 3 },
+      ],
+    });
+  });
+
+  it("never resolves a UUID that is absent from this workspace's scoped lookups", async () => {
+    // `dest-foreign`/`city-foreign` belong to another workspace: they are
+    // not in the scoped lookups, so they must pass through unchanged and
+    // must NOT be resolved from another workspace's master.
+    h.flowSettings.push({
+      account_id: "acct-1",
+      flow_id: "flow-1",
+      services: [],
+      itinerary: [{ destination: "dest-foreign", city: "city-foreign", nights: 3 }],
+    });
+    h.flow_runs[0].vars = {
+      ...(h.flow_runs[0].vars as Record<string, unknown>),
+      service: "Flight",
+    };
+    const res = await POST(post({ flow_id: "flow-1", flow_run_id: "run-1", overrides: FUNNEL }));
+    expect(((await res.json()) as Record<string, unknown>).success).toBe(true);
+    expect(h.travelCalls[0].body).toMatchObject({
+      itinerary: [
+        { country: "dest-foreign", destination: "city-foreign", nights: 3, sequence: 1 },
       ],
     });
   });
