@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
 import { getTravelCrmConfig } from "@/lib/integrations/travel-crm/config";
+import { resolveAccountOwnerEmail } from "@/lib/integrations/travel-crm/account-owner";
 import { fetchTravelCrmLookups } from "@/lib/integrations/travel-crm/client";
 import { buildItineraryLookups } from "@/lib/integrations/travel-crm/itineraries";
 
@@ -21,12 +22,19 @@ export const dynamic = "force-dynamic";
  *     cities: [{value,label,destinationValue}],
  *     citiesByDestination: {<destinationValue>: [{value,label}]} }
  *
+ * Lookup bootstrap: the account owner's email (resolved server-side
+ * from the authenticated account's own rows — never request input)
+ * travels as an `assignedToEmail` query locator so Travel CRM can
+ * associate its credential on first use. The secret itself stays in
+ * the Authorization header only. A missing locator degrades to the
+ * previous behavior (plain credential-only fetch).
+ *
  * Empty arrays mean "Travel CRM provided nothing usable" — the
  * UI must show loading/error states, never fake options.
  */
 export async function GET() {
   try {
-    await getCurrentAccount();
+    const ctx = await getCurrentAccount();
     const { baseUrl, secret } = getTravelCrmConfig();
     if (!secret) {
       return NextResponse.json(
@@ -43,7 +51,13 @@ export async function GET() {
     }
     let lookups: Record<string, unknown>;
     try {
-      lookups = await fetchTravelCrmLookups(baseUrl, secret);
+      const ownerEmail = await resolveAccountOwnerEmail(ctx.supabase, ctx.accountId);
+      lookups = await fetchTravelCrmLookups(
+        baseUrl,
+        secret,
+        fetch,
+        ownerEmail ? { ownerEmail } : undefined,
+      );
     } catch (err) {
       console.error(
         "[travel-crm] itinerary lookups fetch failed:",
