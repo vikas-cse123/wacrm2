@@ -31,6 +31,8 @@
 // still report invalid).
 // ============================================================
 
+import { TRAVEL_CRM_SERVICE_VALUE_BY_LABEL } from "./services";
+
 export interface WacrmContactSource {
   name: string | null;
   phone: string | null;
@@ -168,26 +170,41 @@ export interface CanonicalOption {
 
 /**
  * Map raw WACRM service values onto canonical Travel CRM enum
- * values using live lookup options (matched by normalized value
- * OR label, so "Flight" and "Vehicle (disposal)" resolve without
- * hardcoding). Unmatched values pass through untouched — Travel
- * CRM validates authoritatively. Deterministic and pure.
+ * values. WACRM's six display labels resolve through the explicit
+ * label→value map first (the live catalog derives its labels from
+ * the enum and does NOT match two of the six display labels), so a
+ * label is never sent as the API value. Every other value is matched
+ * against the live lookup options (by normalized value OR label, so
+ * "Flight" and "Vehicle Transfer" resolve without hardcoding);
+ * unmatched values pass through untouched — Travel CRM validates
+ * authoritatively. Deterministic and pure.
  */
 export function canonicalizeServices(
   values: string[],
   options: readonly CanonicalOption[] | null | undefined,
 ): string[] {
-  if (!options || options.length === 0) return [...values];
   const byNorm = new Map<string, string>();
-  for (const o of options) {
-    const value = o.value;
-    if (!value) continue;
-    if (!byNorm.has(normalizeFieldToken(value))) {
-      byNorm.set(normalizeFieldToken(value), value);
-    }
-    if (typeof o.label === "string" && o.label) {
-      const key = normalizeFieldToken(o.label);
-      if (!byNorm.has(key)) byNorm.set(key, value);
+  // Explicit WACRM display-label → Travel CRM enum resolution first:
+  // these enums are fixed in the Travel CRM contract, so the six known
+  // labels resolve even when the live catalog is unreachable.
+  for (const [label, value] of Object.entries(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL)) {
+    const labelKey = normalizeFieldToken(label);
+    if (!byNorm.has(labelKey)) byNorm.set(labelKey, value);
+    const valueKey = normalizeFieldToken(value);
+    if (!byNorm.has(valueKey)) byNorm.set(valueKey, value);
+  }
+  // Live catalog fills in every other value/label; the explicit map
+  // above always wins for the six known labels.
+  if (options && options.length > 0) {
+    for (const o of options) {
+      const value = o.value;
+      if (!value) continue;
+      const valueKey = normalizeFieldToken(value);
+      if (!byNorm.has(valueKey)) byNorm.set(valueKey, value);
+      if (typeof o.label === "string" && o.label) {
+        const key = normalizeFieldToken(o.label);
+        if (!byNorm.has(key)) byNorm.set(key, value);
+      }
     }
   }
   return values.map((v) => byNorm.get(normalizeFieldToken(v)) ?? v);
@@ -857,7 +874,26 @@ export function mapLeadToTravelCrm(
   // Email and rooms are optional in Travel CRM: absence is never
   // reported as missing (present values still map; bad values
   // still report invalid).
-  const NEVER_MISSING = new Set(["email", "rooms"]);
+  // Optional fields are never "missing": email and rooms need no
+  // value to proceed, and dateOfBirth is optional in Travel CRM
+  // itself (optionalDate in both the core lead schema and the
+  // WACRM contract) — an empty DOB must not block creation nor
+  // appear in missing[]. Provided values still map normally.
+  // Children (CWB/CWOB) and Infants are optional traveler counts
+  // in the Travel CRM contract (defaults to 0; the WACRM payload
+  // schema marks them nullable + optional) — an empty value never
+  // blocks creation, so they must not surface in missing[] either.
+  // Adults stays REQUIRED (the Travel CRM lead schema defaults it
+  // to 1; WACRM's dialog confirms it, and the count feeds the
+  // traveler summary).
+  const NEVER_MISSING = new Set([
+    "email",
+    "rooms",
+    "dateOfBirth",
+    "childrenWithBed",
+    "childrenWithoutBed",
+    "infants",
+  ]);
   for (const [field, m] of Object.entries(fields)) {
     if (m.status === "available") available.push(field);
     else if (m.status === "missing") {

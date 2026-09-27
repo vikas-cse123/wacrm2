@@ -36,3 +36,19 @@ describe("Workspace page wiring", () => {
     expect(page).toContain("key={flowId ?? 'no-flow'}");
   });
 });
+
+describe("Itinerary Defaults display names — never raw UUIDs", () => {
+  it("renders the resolved destination/city label as SelectValue children", () => {
+    const src = readFileSync(
+      `${process.cwd()}/src/components/workspace/travel-crm-settings.tsx`,
+      "utf8",
+    );
+    // Explicit ID → name resolution, stored UUIDs stay the Select value.
+    expect(src).toContain("destinationLabelForValue(destinations, row.destination)");
+    expect(src).toContain("cityLabelForValue(cityOptions, row.city)");
+    expect(src).toContain("destinationLabel !== null ? destinationLabel : undefined");
+    expect(src).toContain("cityLabel !== null ? cityLabel : undefined");
+    // The stored UUID still travels as the option value (never the name).
+    expect(src).toContain("resolveSelectValue(destinations, row.destination)");
+  });
+});

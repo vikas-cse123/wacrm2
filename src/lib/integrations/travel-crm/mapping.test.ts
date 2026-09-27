@@ -209,6 +209,27 @@ describe("missing / ambiguous / invalid classification", () => {
     ]);
   });
 
+  it("optional traveler counts are never reported missing", () => {
+    // Children (CWB/CWOB) and Infants are optional in the Travel CRM
+    // contract (defaults to 0; the WACRM payload schema marks them
+    // nullable + optional) — an empty value must not appear in
+    // missing[] and must never block creation.
+    const r = mapLeadToTravelCrm(full(), "agent@acme.com");
+    for (const f of ["childrenWithBed", "childrenWithoutBed", "infants"]) {
+      expect(r.missing).not.toContain(f);
+    }
+    expect(r.fields.childrenWithBed).toMatchObject({ status: "missing" });
+    expect(r.fields.childrenWithoutBed).toMatchObject({ status: "missing" });
+    expect(r.fields.infants).toMatchObject({ status: "missing" });
+    // Adults stays required: absent lead data keeps it missing so the
+    // dialog can confirm the count.
+    const noAdults = mapLeadToTravelCrm(
+      { ...full(), answers: full().answers.filter((a) => a.key !== "adults") },
+      "agent@acme.com",
+    );
+    expect(noAdults.missing).toContain("adults");
+  });
+
   it("required list covers the Travel CRM contract", () => {
     expect([...TRAVEL_CRM_REQUIRED_FIELDS].sort()).toEqual(
       [
@@ -250,28 +271,61 @@ describe("missing / ambiguous / invalid classification", () => {
 });
 
 describe("canonicalizeServices", () => {
+  // Production-like live catalog: Travel CRM derives its labels from
+  // the enum (labelForLookup title-casing), so VEHICLE_TRANSFER and
+  // OTHER_ADD_ON do NOT carry WACRM's display labels. The explicit
+  // label→value map must still resolve WACRM's display labels to the
+  // correct enums — otherwise the display label would be sent as the
+  // API value and rejected.
   const options = [
     { value: "FLIGHT", label: "Flight" },
-    { value: "VEHICLE_TRANSFER", label: "Vehicle (disposal)" },
-    { value: "OTHER_ADD_ON", label: "Add-on Service (Rail, Passport, etc.)" },
+    { value: "HOTEL", label: "Hotel" },
+    { value: "CRUISE", label: "Cruise" },
+    { value: "VEHICLE_TRANSFER", label: "Vehicle Transfer" },
+    { value: "SIGHTSEEING", label: "Sightseeing" },
+    { value: "VISA", label: "Visa" },
+    { value: "OTHER_ADD_ON", label: "Other Add On" },
   ];
 
-  it("resolves display values and labels to canonical enums", () => {
-    expect(canonicalizeServices(["Flight", "Hotel"], options)).toEqual([
-      "FLIGHT",
-      "Hotel",
-    ]);
-    expect(canonicalizeServices(["Vehicle (disposal)"], options)).toEqual([
-      "VEHICLE_TRANSFER",
-    ]);
+  it("resolves every one of the six display labels to its canonical enum", () => {
+    expect(
+      canonicalizeServices(
+        [
+          "Cruise",
+          "Flight",
+          "Hotel",
+          "Vehicle (disposal)",
+          "Sightseeing",
+          "Add-on Service (Rail, Passport, etc.)",
+        ],
+        options,
+      ),
+    ).toEqual(["CRUISE", "FLIGHT", "HOTEL", "VEHICLE_TRANSFER", "SIGHTSEEING", "OTHER_ADD_ON"]);
+  });
+
+  it("resolves individual display labels and catalog labels to canonical enums", () => {
+    expect(canonicalizeServices(["Flight", "Hotel"], options)).toEqual(["FLIGHT", "HOTEL"]);
+    expect(canonicalizeServices(["Vehicle (disposal)"], options)).toEqual(["VEHICLE_TRANSFER"]);
     expect(
       canonicalizeServices(["Add-on Service (Rail, Passport, etc.)"], options),
     ).toEqual(["OTHER_ADD_ON"]);
   });
 
-  it("passes values through when options are unavailable", () => {
-    expect(canonicalizeServices(["Flight"], null)).toEqual(["Flight"]);
-    expect(canonicalizeServices(["Flight"], [])).toEqual(["Flight"]);
+  it("resolves the six known labels even when the catalog is unavailable", () => {
+    expect(canonicalizeServices(["Vehicle (disposal)"], null)).toEqual(["VEHICLE_TRANSFER"]);
+    expect(canonicalizeServices(["Add-on Service (Rail, Passport, etc.)"], [])).toEqual([
+      "OTHER_ADD_ON",
+    ]);
+    expect(canonicalizeServices(["Flight"], null)).toEqual(["FLIGHT"]);
+    // Unknown values still pass through for Travel CRM to validate.
+    expect(canonicalizeServices(["Teleport"], null)).toEqual(["Teleport"]);
+  });
+
+  it("passes enum values through verbatim", () => {
+    expect(canonicalizeServices(["VEHICLE_TRANSFER", "HOTEL"], options)).toEqual([
+      "VEHICLE_TRANSFER",
+      "HOTEL",
+    ]);
   });
 });
 
@@ -300,6 +354,40 @@ describe("optional fields are never reported missing", () => {
     const r = mapLeadToTravelCrm(source(), null);
     expect(r.fields.rooms.status).toBe("missing");
     expect(r.missing).not.toContain("rooms");
+  });
+
+  it("empty dateOfBirth is not in missing and never blocks readiness", () => {
+    const r = mapLeadToTravelCrm(source(), null);
+    expect(r.fields.dateOfBirth.status).toBe("missing");
+    expect(r.missing).not.toContain("dateOfBirth");
+    expect(r.draft.dateOfBirth).toBeNull();
+    // A lead complete in every genuinely required field is ready
+    // with no DOB provided.
+    const complete = mapLeadToTravelCrm(full(), "owner@acme.com");
+    expect(complete.missing).not.toContain("dateOfBirth");
+    expect(complete.ready).toBe(true);
+  });
+
+  it("provided dateOfBirth maps normally to an ISO date", () => {
+    const r = mapLeadToTravelCrm(
+      source({
+        answers: [{ key: "dob", label: "DOB", value: "1990-05-01" }],
+      }),
+      null,
+    );
+    expect(r.fields.dateOfBirth.status).toBe("available");
+    expect(r.draft.dateOfBirth).toBe("1990-05-01");
+    expect(r.missing).not.toContain("dateOfBirth");
+  });
+
+  it("malformed dateOfBirth still reports invalid", () => {
+    const r = mapLeadToTravelCrm(
+      source({
+        answers: [{ key: "dob", label: "DOB", value: "not-a-date" }],
+      }),
+      null,
+    );
+    expect(r.fields.dateOfBirth).toMatchObject({ status: "invalid" });
   });
 });
 

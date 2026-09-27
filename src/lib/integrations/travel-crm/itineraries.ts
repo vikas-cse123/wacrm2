@@ -46,18 +46,22 @@ export const TRAVEL_CRM_MAX_ITINERARY_ROWS = 50;
 export const TRAVEL_CRM_MAX_NIGHTS = 365;
 export const TRAVEL_CRM_MAX_LOCATION_LENGTH = 120;
 
-/** Lookup keys tried (in order) for destination options. */
-const DESTINATION_LOOKUP_KEYS = [
-  "destinations",
+/** Canonical lookup key for destination options (stable master IDs). */
+const DESTINATION_LOOKUP_KEY = "destinations" as const;
+
+/** Legacy display-name keys, fallback only when `destinations` is absent. */
+const LEGACY_DESTINATION_LOOKUP_KEYS = [
   "countries",
   "itineraryDestinations",
   "destinationList",
   "countryList",
 ] as const;
 
-/** Lookup keys tried (in order) for city options. */
-const CITY_LOOKUP_KEYS = [
-  "cities",
+/** Canonical lookup key for city options (with parent linkage). */
+const CITY_LOOKUP_KEY = "cities" as const;
+
+/** Legacy city keys, fallback only when `cities` carries no linkage. */
+const LEGACY_CITY_LOOKUP_KEYS = [
   "itineraryCities",
   "cityList",
   "destinationCities",
@@ -152,23 +156,40 @@ function parseOptionList(raw: unknown): Array<Record<string, unknown>> {
   return out;
 }
 
+/** Parse one raw list into deduped {value,label} destination pairs. */
+function collectOptions(raw: unknown): TravelCrmDestinationOption[] {
+  const out: TravelCrmDestinationOption[] = [];
+  const seen = new Set<string>();
+  for (const rec of parseOptionList(raw)) {
+    const value = readOptionValue(rec);
+    if (!value) continue;
+    pushUnique(out, seen, value, readOptionLabel(rec, value));
+  }
+  return out;
+}
+
 /**
  * Extract destination options from a live Travel CRM lookups
- * payload. Tries known keys in order and merges + dedupes by
- * stable `value`. Returns [] when nothing usable exists —
- * callers must render loading/error states, never fake values.
+ * payload. The canonical `destinations` key (stable master IDs)
+ * wins outright when present: legacy display-name lists
+ * (`countries`, …) are only a fallback for older servers, never
+ * merged — merging would create two visually identical options
+ * (one master entry by ID plus one legacy entry by display name)
+ * and selecting the legacy one breaks city linkage. Returns [] when
+ * nothing usable exists — callers must render loading/error
+ * states, never fake values.
  */
 export function extractDestinationOptions(
   lookups: Record<string, unknown> | null | undefined,
 ): TravelCrmDestinationOption[] {
   if (!lookups || typeof lookups !== "object") return [];
+  const primary = collectOptions(lookups[DESTINATION_LOOKUP_KEY]);
+  if (primary.length > 0) return primary;
   const out: TravelCrmDestinationOption[] = [];
   const seen = new Set<string>();
-  for (const key of DESTINATION_LOOKUP_KEYS) {
-    for (const rec of parseOptionList(lookups[key])) {
-      const value = readOptionValue(rec);
-      if (!value) continue;
-      pushUnique(out, seen, value, readOptionLabel(rec, value));
+  for (const key of LEGACY_DESTINATION_LOOKUP_KEYS) {
+    for (const option of collectOptions(lookups[key])) {
+      pushUnique(out, seen, option.value, option.label);
     }
   }
   return out;
@@ -177,6 +198,13 @@ export function extractDestinationOptions(
 /**
  * Extract city options (with parent destination linkage when the
  * lookup provides it) from a live Travel CRM lookups payload.
+ *
+ * The canonical flat `cities` list wins outright when any of its
+ * entries carries parent linkage: legacy unlinked lists are then
+ * ignored rather than merged, because merging would inject
+ * linkage-free entries that city filtering must exclude anyway.
+ * When `cities` carries no linkage at all, legacy keys are merged
+ * as a fallback for older servers (free pairing, server validates).
  * Handles flat lists, nested `cities` on destinations, and
  * `{destinationValue: [...]}` mapping objects. Returns [] when
  * nothing usable exists.
@@ -195,36 +223,55 @@ export function extractCityOptions(
     out.push({ value, label: label || value, destinationValue: parent });
   };
 
-  // 1. Flat city lists.
-  for (const key of CITY_LOOKUP_KEYS) {
-    const raw = lookups[key];
-    if (Array.isArray(raw)) {
-      for (const rec of parseOptionList(raw)) {
-        const value = readOptionValue(rec);
-        if (!value) continue;
-        pushCity(value, readOptionLabel(rec, value), readParentValue(rec));
-      }
-    } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-      // 2. Mapping object: { <destinationValue>: [...] }.
-      for (const [destKey, cityList] of Object.entries(
-        raw as Record<string, unknown>,
-      )) {
-        const parent = destKey.trim() || null;
-        for (const rec of parseOptionList(cityList)) {
-          const value = readOptionValue(rec);
-          if (!value) continue;
-          pushCity(
-            value,
-            readOptionLabel(rec, value),
-            readParentValue(rec) ?? parent,
-          );
-        }
+  const pushCityRecords = (
+    records: Array<Record<string, unknown>>,
+    fallbackParent: string | null,
+  ): boolean => {
+    let linked = false;
+    for (const rec of records) {
+      const value = readOptionValue(rec);
+      if (!value) continue;
+      const parent = readParentValue(rec) ?? fallbackParent;
+      if (parent !== null) linked = true;
+      pushCity(value, readOptionLabel(rec, value), parent);
+    }
+    return linked;
+  };
+
+  const pushMapping = (raw: unknown): boolean => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    let linked = false;
+    for (const [destKey, cityList] of Object.entries(raw as Record<string, unknown>)) {
+      const parent = destKey.trim() || null;
+      if (pushCityRecords(parseOptionList(cityList), parent) && parent !== null) linked = true;
+    }
+    return linked;
+  };
+
+  // 1. Canonical flat `cities` list.
+  const primaryRaw = lookups[CITY_LOOKUP_KEY];
+  let primaryLinked = false;
+  if (Array.isArray(primaryRaw)) {
+    primaryLinked = pushCityRecords(parseOptionList(primaryRaw), null);
+  } else if (primaryRaw && typeof primaryRaw === "object") {
+    // 2. Mapping object under the canonical key: { <destinationValue>: [...] }.
+    primaryLinked = pushMapping(primaryRaw);
+  }
+
+  // Legacy keys only when the canonical list carries no linkage.
+  if (!primaryLinked) {
+    for (const key of LEGACY_CITY_LOOKUP_KEYS) {
+      const raw = lookups[key];
+      if (Array.isArray(raw)) {
+        pushCityRecords(parseOptionList(raw), null);
+      } else {
+        pushMapping(raw);
       }
     }
   }
 
-  // 3. Nested `cities` on destination objects (any destination key).
-  for (const key of DESTINATION_LOOKUP_KEYS) {
+  // 3. Nested `cities` on destination objects (canonical + legacy keys).
+  for (const key of [DESTINATION_LOOKUP_KEY, ...LEGACY_DESTINATION_LOOKUP_KEYS]) {
     for (const rec of parseOptionList(lookups[key])) {
       const destValue = readOptionValue(rec);
       if (!destValue) continue;
@@ -293,6 +340,48 @@ export function citiesForDestination(
   const linked = normalized.filter((c) => c.destinationValue !== null);
   if (linked.length === 0) return [...normalized];
   return normalized.filter((c) => c.destinationValue === destinationValue);
+}
+
+/**
+ * Resolve a destination `value` (stable ID) to its display label.
+ * Returns null when no matching option exists — callers must render
+ * a safe fallback ("Select" / "Unknown destination"), never the raw
+ * ID. Stored values stay intact; only display is affected.
+ */
+export function destinationLabelForValue(
+  destinations: ReadonlyArray<{ value: string; label: string }>,
+  value: string,
+): string | null {
+  const match = destinations.find((o) => o.value === value);
+  return match ? match.label : null;
+}
+
+/**
+ * Resolve a city `value` (stable ID) to its display label within an
+ * option list (typically already filtered to the selected
+ * destination). Returns null when no matching option exists —
+ * callers must render a safe fallback, never the raw ID.
+ */
+export function cityLabelForValue(
+  cities: ReadonlyArray<{ value: string; label: string }>,
+  value: string,
+): string | null {
+  const match = cities.find((o) => o.value === value);
+  return match ? match.label : null;
+}
+
+/**
+ * Resolve a stored option value for Select display: returns the value
+ * unchanged when a matching option exists, otherwise undefined so the
+ * control renders its placeholder ("Select") instead of a raw UUID.
+ * Stored state is never modified — display only.
+ */
+export function resolveSelectValue(
+  options: ReadonlyArray<{ value: string }>,
+  value: string,
+): string | undefined {
+  if (!value) return undefined;
+  return options.some((o) => o.value === value) ? value : undefined;
 }
 
 /**

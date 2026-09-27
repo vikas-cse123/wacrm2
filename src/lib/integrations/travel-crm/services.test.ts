@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   TRAVEL_CRM_MAX_SERVICES,
   TRAVEL_CRM_SERVICE_LABELS,
+  TRAVEL_CRM_SERVICE_VALUE_BY_LABEL,
   isOfferedServiceLabel,
   joinServiceLabels,
   normalizeServiceLabels,
@@ -19,6 +20,25 @@ describe("TRAVEL_CRM_SERVICE_LABELS", () => {
       "Sightseeing",
       "Add-on Service (Rail, Passport, etc.)",
     ]);
+  });
+});
+
+describe("TRAVEL_CRM_SERVICE_VALUE_BY_LABEL", () => {
+  it("maps every display label to its exact Travel CRM API enum", () => {
+    expect(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL["Cruise"]).toBe("CRUISE");
+    expect(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL["Flight"]).toBe("FLIGHT");
+    expect(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL["Hotel"]).toBe("HOTEL");
+    expect(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL["Vehicle (disposal)"]).toBe("VEHICLE_TRANSFER");
+    expect(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL["Sightseeing"]).toBe("SIGHTSEEING");
+    expect(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL["Add-on Service (Rail, Passport, etc.)"]).toBe(
+      "OTHER_ADD_ON",
+    );
+  });
+
+  it("covers exactly the six offered labels (no drift between UI list and API values)", () => {
+    expect(Object.keys(TRAVEL_CRM_SERVICE_VALUE_BY_LABEL).sort()).toEqual(
+      [...TRAVEL_CRM_SERVICE_LABELS].sort(),
+    );
   });
 });
 
