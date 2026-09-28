@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { getMediaUrl, downloadMediaStream } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
@@ -17,19 +17,11 @@ export async function GET(
       )
     }
 
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
     // Resolve the caller's account_id — whatsapp_config is one-per-
     // account post-multi-user, so a teammate fetching media for a
@@ -38,7 +30,7 @@ export async function GET(
     const { data: profile } = await supabase
       .from('profiles')
       .select('account_id')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
     const accountId = profile?.account_id as string | undefined
     if (!accountId) {

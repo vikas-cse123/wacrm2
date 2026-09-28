@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { validateFlowForActivation } from '@/lib/flows/validate'
 
@@ -23,13 +23,11 @@ export async function POST(
 ) {
   const { id } = await context.params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAuthenticatedUser()
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status })
   }
+  const { supabase } = guard
 
   const body = (await request.json().catch(() => null)) as
     | { status?: 'draft' | 'active' | 'archived' }

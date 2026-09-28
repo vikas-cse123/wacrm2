@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
 import { DEFAULT_FALLBACK_POLICY } from '@/lib/flows/types'
@@ -15,22 +15,8 @@ import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
  * routes themselves are open.
  */
 
-async function requireUser(): Promise<
-  | { ok: true; userId: string; supabase: Awaited<ReturnType<typeof createClient>> }
-  | { ok: false; status: number; body: { error: string } }
-> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return { ok: false, status: 401, body: { error: 'Unauthorized' } }
-  }
-  return { ok: true, userId: user.id, supabase }
-}
-
 export async function GET() {
-  const guard = await requireUser()
+  const guard = await requireAuthenticatedUser()
   if (!guard.ok) {
     return NextResponse.json(guard.body, { status: guard.status })
   }
@@ -47,7 +33,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireUser()
+  const guard = await requireAuthenticatedUser()
   if (!guard.ok) {
     return NextResponse.json(guard.body, { status: guard.status })
   }

@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TextCellPopover } from "./text-cell-popover";
+import { AttachmentCellLink } from "./attachment-cell-link";
 
 /**
  * Editable flow-derived Workspace cell (one question column).
@@ -43,6 +44,15 @@ export interface FlowAnswerCellProps {
    * explicitly cleared → show blank + edited).
    */
   override: string | null | undefined;
+  /**
+   * Clickable file URL for attachment values, resolved by the parent
+   * (`resolveAttachmentUrl`). Null/absent = ordinary text cell —
+   * rendered exactly as before. When set AND the displayed value is
+   * non-empty, the cell renders the filename as a link that opens the
+   * actual existing WACRM media URL in a new tab, replacing the
+   * popover trigger (an attachment filename is not an editable text).
+   */
+  fileUrl?: string | null;
   canEdit: boolean;
   /** Parent refresh after a successful save/restore. */
   onChanged: () => void;
@@ -56,12 +66,29 @@ export function FlowAnswerCell({
   options,
   original,
   override,
+  fileUrl,
   canEdit,
   onChanged,
 }: FlowAnswerCellProps) {
   const [saving, setSaving] = useState(false);
   const display = override !== undefined ? override : original;
   const edited = override !== undefined;
+
+  // Attachment value (resolved file URL + non-empty display): the
+  // filename renders as a clickable link that opens the actual file in
+  // a new tab. Only these cells change — every other cell keeps its
+  // existing popover/select surface untouched.
+  if (fileUrl && display !== null && display !== undefined && display !== "") {
+    return (
+      <AttachmentCellLink
+        url={fileUrl}
+        fileName={display}
+        label={label}
+        edited={edited}
+        originalValue={original}
+      />
+    );
+  }
 
   async function request(
     method: "PUT" | "DELETE",

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 
 /**
@@ -20,20 +21,12 @@ import { supabaseAdmin } from '@/lib/flows/admin-client'
 async function requireOwnership(
   flowId: string,
 ): Promise<
-  | {
-      ok: true
-      userId: string
-      supabase: Awaited<ReturnType<typeof createClient>>
-    }
+  | { ok: true; userId: string; supabase: SupabaseClient }
   | { ok: false; status: number; body: { error: string } }
 > {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return { ok: false, status: 401, body: { error: 'Unauthorized' } }
-  }
+  const guard = await requireAuthenticatedUser()
+  if (!guard.ok) return guard
+  const { userId, supabase } = guard
   // RLS scopes this to the caller — a flow owned by another user
   // returns null (404 below).
   const { data: flow } = await supabase
@@ -44,7 +37,7 @@ async function requireOwnership(
   if (!flow) {
     return { ok: false, status: 404, body: { error: 'Not found' } }
   }
-  return { ok: true, userId: user.id, supabase }
+  return { ok: true, userId, supabase }
 }
 
 export async function GET(

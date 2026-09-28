@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import {
   registerPhoneNumber,
@@ -19,7 +20,7 @@ import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
  * should treat that the same as "not connected".
  */
 async function resolveAccountId(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseClient,
   userId: string,
 ): Promise<string | null> {
   const { data, error } = await supabase
@@ -72,18 +73,13 @@ function redactDisplayPhoneNumber(
  */
 export async function GET() {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
-    const accountId = await resolveAccountId(supabase, user.id)
+    const accountId = await resolveAccountId(supabase, userId)
     if (!accountId) {
       return NextResponse.json(
         {
@@ -178,18 +174,13 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
-    const accountId = await resolveAccountId(supabase, user.id)
+    const accountId = await resolveAccountId(supabase, userId)
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },
@@ -419,7 +410,7 @@ if (!existing && !app_secret) {
         .from('whatsapp_config')
         .insert({
           account_id: accountId,
-          user_id: user.id,
+          user_id: userId,
           ...baseRow,
         })
 
@@ -471,18 +462,13 @@ if (!existing && !app_secret) {
  */
 export async function DELETE() {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
-    const accountId = await resolveAccountId(supabase, user.id)
+    const accountId = await resolveAccountId(supabase, userId)
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },

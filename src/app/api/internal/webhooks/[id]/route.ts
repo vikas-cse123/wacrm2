@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { normalizeEvents } from '@/lib/webhooks/events'
 import {
   WEBHOOK_PUBLIC_COLUMNS,
@@ -7,14 +8,11 @@ import {
   normalizeWebhookUrl,
 } from '@/lib/webhooks/endpoints'
 
-async function getAccountId(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
+async function getAccountId(supabase: SupabaseClient, userId: string) {
   const { data } = await supabase
     .from('profiles')
     .select('account_id')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .maybeSingle()
 
   return data?.account_id ?? null
@@ -24,8 +22,12 @@ type RouteContext = { params: Promise<Record<string, string>> }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient()
-    const accountId = await getAccountId(supabase)
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
+    }
+    const { supabase, userId } = guard
+    const accountId = await getAccountId(supabase, userId)
     if (!accountId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await context.params
@@ -75,8 +77,12 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient()
-    const accountId = await getAccountId(supabase)
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
+    }
+    const { supabase, userId } = guard
+    const accountId = await getAccountId(supabase, userId)
     if (!accountId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await context.params

@@ -28,11 +28,12 @@
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { createClient } from "@/lib/supabase/server";
+import { createBufferedServerClient } from "@/lib/supabase/server";
 import {
   classifyAuthFailure,
   isConfirmedUnauthenticated,
   withAuthTimeout,
+  type AuthFailureKind,
 } from "./auth-errors";
 import { hasMinRole, isAccountRole, type AccountRole } from "./roles";
 
@@ -42,6 +43,44 @@ import { hasMinRole, isAccountRole, type AccountRole } from "./roles";
  * and a timeout is a TEMPORARY failure (503), never an auth rejection.
  */
 const API_AUTH_LOOKUP_TIMEOUT_MS = 10_000;
+
+// ------------------------------------------------------------
+// Shared auth-check resolution
+//
+// One buffered server client per check. @supabase/ssr writes clearing
+// cookies when a refresh fails with the access token already expired;
+// a transient failure (rotation race, timeout, network, 5xx, 429) must
+// NOT persist those clears — the caller commits them only for a real
+// user or a confirmed absence, and discards them on a transient failure
+// so a blip can't wipe the browser's valid session cookie.
+// ------------------------------------------------------------
+
+interface ResolvedAuthCheck {
+  supabase: SupabaseClient;
+  commit: () => void;
+  discard: () => void;
+  user: { id: string } | null;
+  kind: AuthFailureKind;
+}
+
+async function resolveAuthCheck(): Promise<ResolvedAuthCheck> {
+  const { client: supabase, commit, discard } = await createBufferedServerClient();
+
+  let user: { id: string } | null = null;
+  let userErr: unknown = null;
+  try {
+    const result = await withAuthTimeout(
+      supabase.auth.getUser(),
+      API_AUTH_LOOKUP_TIMEOUT_MS,
+    );
+    user = result.data.user ?? null;
+    userErr = result.error ?? null;
+  } catch (err) {
+    userErr = err;
+  }
+
+  return { supabase, commit, discard, user, kind: classifyAuthFailure(userErr) };
+}
 
 // ------------------------------------------------------------
 // Errors
@@ -139,38 +178,28 @@ export interface AccountContext {
  * minimum-role check — it's a thin wrapper over this.
  */
 export async function getCurrentAccount(): Promise<AccountContext> {
-  const supabase = await createClient();
-
-  let user: { id: string } | null = null;
-  let userErr: unknown = null;
-  try {
-    const result = await withAuthTimeout(
-      supabase.auth.getUser(),
-      API_AUTH_LOOKUP_TIMEOUT_MS,
-    );
-    user = result.data.user ?? null;
-    userErr = result.error ?? null;
-  } catch (err) {
-    userErr = err;
-  }
+  const { supabase, commit, discard, user, kind } = await resolveAuthCheck();
 
   if (!user) {
-    // A resolved `AuthSessionMissingError` (or a null error) means there is
+    // A resolved `AuthSessionMissingError` (or a clean null) means there is
     // no session at all — definitively unauthenticated. Everything else is
     // classified: a deterministic rejection (401/403) is dead → 401;
     // transient failures (timeout, network, 5xx, rate limit, rotation
     // race, unknown) must stay a temporary 503 so the caller is never
     // treated as logged out because the auth backend was briefly down.
-    const isSessionMissing =
-      userErr !== null &&
-      typeof userErr === "object" &&
-      (userErr as { name?: unknown }).name === "AuthSessionMissingError";
-    const kind = isSessionMissing ? "anonymous" : classifyAuthFailure(userErr);
     if (isConfirmedUnauthenticated(kind)) {
+      // Genuinely dead session — persist the SDK's cleanup cookie clears.
+      commit();
       throw new UnauthorizedError();
     }
+    // Transient — never persist the SDK's clearing cookies.
+    discard();
     throw new TemporaryAuthError();
   }
+
+  // The session is valid. Persist any rotated session cookies the
+  // refresh produced before we touch the database.
+  commit();
 
   const { data, error } = await supabase
     .from("profiles")
@@ -245,4 +274,43 @@ export async function requireRole(min: AccountRole): Promise<AccountContext> {
     );
   }
   return ctx;
+}
+
+/**
+ * Guard-style authenticated-user check for API routes that only need
+ * `userId` + an RLS-scoped client (no profile/account resolution).
+ *
+ * Replaces the common `getUser() → if (!user) 401` pattern that treated
+ * a transient auth failure (resolved `{ user: null, error }` from a lost
+ * refresh-token rotation race, timeout, network, 5xx, 429) as a confirmed
+ * logout. Returns a guard so callers keep their existing `if (!guard.ok)`
+ * shape:
+ *
+ *   ok:true  → userId + a buffered client whose rotated cookies were
+ *              already committed; use it for the route's queries.
+ *   ok:false  → 401 (confirmed unauthenticated) or 503 (transient), with
+ *              the buffered cookie clears discarded on the transient path.
+ */
+export async function requireAuthenticatedUser(): Promise<
+  | { ok: true; userId: string; supabase: SupabaseClient }
+  | { ok: false; status: 401 | 503; body: { error: string } }
+> {
+  const { supabase, commit, discard, user, kind } = await resolveAuthCheck();
+
+  if (user) {
+    commit();
+    return { ok: true, userId: user.id, supabase };
+  }
+
+  if (isConfirmedUnauthenticated(kind)) {
+    commit();
+    return { ok: false, status: 401, body: { error: "Unauthorized" } };
+  }
+
+  discard();
+  return {
+    ok: false,
+    status: 503,
+    body: { error: "Authentication service temporarily unavailable" },
+  };
 }

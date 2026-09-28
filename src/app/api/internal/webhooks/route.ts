@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { encrypt } from '@/lib/whatsapp/encryption'
 import { normalizeEvents } from '@/lib/webhooks/events'
 import {
@@ -9,16 +10,11 @@ import {
   normalizeWebhookUrl,
 } from '@/lib/webhooks/endpoints'
 
-
-
-async function getAccountId(supabase: Awaited<ReturnType<typeof createClient>>) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
+async function getAccountId(supabase: SupabaseClient, userId: string) {
   const { data } = await supabase
     .from('profiles')
     .select('account_id')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .maybeSingle()
 
   return data?.account_id ?? null
@@ -26,8 +22,12 @@ async function getAccountId(supabase: Awaited<ReturnType<typeof createClient>>) 
 
 export async function GET() {
   try {
-    const supabase = await createClient()
-    const accountId = await getAccountId(supabase)
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
+    }
+    const { supabase, userId } = guard
+    const accountId = await getAccountId(supabase, userId)
     if (!accountId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { data, error } = await supabase
@@ -48,12 +48,13 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-    const accountId = await getAccountId(supabase)
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
+    }
+    const { supabase, userId } = guard
+    const accountId = await getAccountId(supabase, userId)
     if (!accountId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json().catch(() => null)
     if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
       .from('webhook_endpoints')
       .insert({
         account_id: accountId,
-        created_by: user.id,
+        created_by: userId,
         url,
         secret: encrypt(secret),
         events,

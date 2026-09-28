@@ -26,7 +26,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
-import { createClient } from "@/lib/supabase/server";
+import { requireAuthenticatedUser } from "@/lib/auth/account";
 
 function getClientIp(request: Request): string {
   const xff = request.headers.get("x-forwarded-for");
@@ -69,17 +69,16 @@ export async function POST(
     );
   }
 
-  const supabase = await createClient();
-
   // The RPC checks `auth.uid()` itself, but failing fast here
   // gives a cleaner 401 without a Supabase round trip on the
-  // common "user clicked the link before logging in" path.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // common "user clicked the link before logging in" path. A
+  // transient auth failure (rotation race / auth backend blip)
+  // becomes a 503, never a forced logout.
+  const guard = await requireAuthenticatedUser();
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status });
   }
+  const { supabase } = guard;
 
   const { data: accountId, error } = await supabase.rpc("redeem_invitation", {
     p_token_hash: hashInviteToken(token),

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { submitMessageTemplate } from '@/lib/whatsapp/meta-api'
 import {
@@ -88,21 +88,18 @@ async function upsertTemplateRow(
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
     // Resolve the caller's account_id — whatsapp_config + the
     // message_templates row are account-scoped post-multi-user.
     const { data: profile } = await supabase
       .from('profiles')
       .select('account_id')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
     const accountId = profile?.account_id as string | undefined
     if (!accountId) {
@@ -203,7 +200,7 @@ export async function POST(request: Request) {
         // until they fix and re-submit.
         await upsertTemplateRow(
           supabase,
-          buildUpsertRow(accountId, user.id, payload, {
+          buildUpsertRow(accountId, userId, payload, {
             status: 'DRAFT',
             metaTemplateId: null,
             submissionError: message,
@@ -223,7 +220,7 @@ export async function POST(request: Request) {
 
     const { data: row, error: upsertErr } = await upsertTemplateRow(
       supabase,
-      buildUpsertRow(accountId, user.id, payload, {
+      buildUpsertRow(accountId, userId, payload, {
         status: normalizeStatus(metaStatus),
         metaTemplateId,
         submissionError: null,

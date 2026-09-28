@@ -67,6 +67,13 @@ export function classifyAuthFailure(err: unknown): AuthFailureKind {
   const { name, message, status, code } = asShape(err);
   const text = `${asText(name)} ${asText(message)} ${asText(code)}`;
 
+  // getUser() resolves AuthSessionMissingError when there is no session
+  // to work with at all (no tokens in storage/cookies). That is a
+  // confirmed absence — never a transient blip — so it must classify as
+  // 'anonymous' before the status/text heuristics below (which would
+  // otherwise map a real AuthSessionMissingError to 'unknown').
+  if (name === "AuthSessionMissingError") return "anonymous";
+
   if (
     /timed out|timeout|aborterror|etimedout|timedout/i.test(text) ||
     asText(code) === "ETIMEDOUT"

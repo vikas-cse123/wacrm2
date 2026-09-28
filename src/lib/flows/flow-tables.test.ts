@@ -6,6 +6,7 @@ import {
   findFlowNameAnswerKey,
   flowColumnRenderKey,
   flowDisplayName,
+  resolveAttachmentUrl,
   toFlowTableRow,
   type FlowTableRpcRow,
 } from "./flow-tables";
@@ -574,5 +575,64 @@ describe("flowColumnRenderKey", () => {
     expect(new Set(renderKeys).size).toBe(columns.length);
     expect(renderKeys).toContain("sys:name");
     expect(renderKeys).toContain("flow:name");
+  });
+});
+
+describe("resolveAttachmentUrl", () => {
+  const MEDIA = {
+    "conv-1": [
+      {
+        contentText: "Itinerary.pdf",
+        mediaUrl: "/api/whatsapp/media/m-2",
+        contentType: "application/pdf",
+      },
+      {
+        contentText: "Lord Shiva 4K Wallpaper.jpg",
+        mediaUrl: "/api/whatsapp/media/m-1",
+        contentType: "image/jpeg",
+      },
+      // A plain-text message never carries a file URL.
+      { contentText: "Thanks", mediaUrl: null, contentType: "text" },
+    ],
+  };
+
+  it("links a captured attachment filename to its stored media URL", () => {
+    expect(
+      resolveAttachmentUrl(MEDIA, "conv-1", "Itinerary.pdf"),
+    ).toBe("/api/whatsapp/media/m-2");
+    expect(
+      resolveAttachmentUrl(MEDIA, "conv-1", "Lord Shiva 4K Wallpaper.jpg"),
+    ).toBe("/api/whatsapp/media/m-1");
+  });
+
+  it("returns null for text values that match no media message", () => {
+    expect(resolveAttachmentUrl(MEDIA, "conv-1", "Thanks")).toBeNull();
+    expect(resolveAttachmentUrl(MEDIA, "conv-1", "Rahul")).toBeNull();
+  });
+
+  it("returns null for empty values and missing conversations", () => {
+    expect(resolveAttachmentUrl(MEDIA, "conv-1", "")).toBeNull();
+    expect(resolveAttachmentUrl(MEDIA, "conv-1", null)).toBeNull();
+    expect(resolveAttachmentUrl(MEDIA, null, "Itinerary.pdf")).toBeNull();
+    expect(resolveAttachmentUrl({}, "conv-1", "Itinerary.pdf")).toBeNull();
+  });
+
+  it("opens a value that is itself a URL directly (no media match)", () => {
+    expect(resolveAttachmentUrl({}, "conv-1", "https://x.app/file.pdf")).toBe(
+      "https://x.app/file.pdf",
+    );
+    expect(resolveAttachmentUrl({}, "conv-1", "http://x.app/a.png")).toBe(
+      "http://x.app/a.png",
+    );
+  });
+
+  it("prefers the stored media URL over a URL-shaped value", () => {
+    expect(
+      resolveAttachmentUrl(
+        { "conv-1": [{ contentText: "https://x.app/a", mediaUrl: "/api/whatsapp/media/m-9", contentType: "text" }] },
+        "conv-1",
+        "https://x.app/a",
+      ),
+    ).toBe("/api/whatsapp/media/m-9");
   });
 });

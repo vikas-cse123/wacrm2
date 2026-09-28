@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
   copyFlowAcrossAccounts,
@@ -32,13 +32,11 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function POST(request: Request) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAuthenticatedUser()
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status })
   }
+  const { supabase, userId } = guard
 
   const body = (await request.json().catch(() => null)) as {
     sourceFlowId?: unknown
@@ -58,7 +56,7 @@ export async function POST(request: Request) {
   const { data: profile } = await supabase
     .from('profiles')
     .select('account_id, account_role')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .maybeSingle()
   const callerAccountId =
     profile && typeof profile.account_id === 'string' ? profile.account_id : null
@@ -72,7 +70,7 @@ export async function POST(request: Request) {
     const result = await copyFlowAcrossAccounts(
       supabaseAdmin() as unknown as CopyDbClient,
       {
-        callerUserId: user.id,
+        callerUserId: userId,
         callerAccountId,
         callerRole,
         sourceFlowId,

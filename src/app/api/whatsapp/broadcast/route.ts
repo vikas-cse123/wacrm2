@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
@@ -65,21 +65,16 @@ interface NewRecipient {
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
     // Per-user broadcast budget. Note: this limits how often a user
     // can *start* a campaign, not how many messages go out inside
     // one — the fan-out loop below runs without additional gating.
-    const limit = checkRateLimit(`broadcast:${user.id}`, RATE_LIMITS.broadcast)
+    const limit = checkRateLimit(`broadcast:${userId}`, RATE_LIMITS.broadcast)
     if (!limit.success) {
       return rateLimitResponse(limit)
     }
@@ -91,7 +86,7 @@ export async function POST(request: Request) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('account_id')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
     const accountId = profile?.account_id as string | undefined
     if (!accountId) {
@@ -253,7 +248,7 @@ export async function POST(request: Request) {
             await persistBroadcastOutboundMessage(supabase, {
               accountId,
               contactId: existing.id,
-              auditUserId: user.id,
+              auditUserId: userId,
               templateName: template_name,
               renderedText: renderTemplateMessageText(
                 templateRow?.body_text ?? `[${template_name}]`,

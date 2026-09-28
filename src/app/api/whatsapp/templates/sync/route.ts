@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
@@ -124,23 +124,18 @@ function extractSampleValues(
 
 export async function POST() {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
     // Resolve the caller's account_id — both whatsapp_config and
     // the message_templates we sync into are account-scoped.
     const { data: profile } = await supabase
       .from('profiles')
       .select('account_id')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
     const accountId = profile?.account_id as string | undefined
     if (!accountId) {
@@ -237,7 +232,7 @@ export async function POST() {
         // route. account_id is NOT NULL on message_templates
         // post-017, so an INSERT without it errors.
         account_id: accountId,
-        user_id: user.id,
+        user_id: userId,
         name: t.name,
         category: normalizeCategory(t.category),
         language: t.language,

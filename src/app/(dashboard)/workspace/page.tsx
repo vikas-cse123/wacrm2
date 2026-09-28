@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
+import { useWorkspaceRealtime } from '@/hooks/use-workspace-realtime';
 import type { WorkspaceField } from '@/lib/flows/workspace-fields';
 import {
   isAssigneeField,
@@ -97,7 +98,12 @@ import type {
   FlowTableRow,
   FlowTableView,
 } from '@/lib/flows/flow-tables';
-import { flowColumnRenderKey, flowDisplayName, resolveFlowAnswers } from '@/lib/flows/flow-tables';
+import {
+  flowColumnRenderKey,
+  flowDisplayName,
+  resolveFlowAnswers,
+  resolveAttachmentUrl,
+} from '@/lib/flows/flow-tables';
 import { formatPhoneForDisplay } from '@/lib/whatsapp/phone-utils';
 import {
   applyVisibility,
@@ -503,6 +509,20 @@ export default function WorkspacePage() {
   const reloadTable = useCallback(() => {
     setRefreshSeq((n) => n + 1);
   }, []);
+
+  // Live sync: subscribe to flow_runs Realtime for the selected flow
+  // so new runs, edits, and deletions surface WITHOUT a manual refresh.
+  // The subscription only SCHEDULES the existing debounced reloadTable()
+  // (never splices rows client-side) — the `/api/flows/[id]/table` RPC
+  // remains the single source of truth for rows, filters, pagination,
+  // and authorization. flow_runs RLS already isolates accounts, and the
+  // channel is scoped to this account + flow. Cleanup (flow change /
+  // unmount) removes the channel and cancels any pending debounce.
+  useWorkspaceRealtime({
+    accountId,
+    flowId,
+    onChange: reloadTable,
+  });
 
   // Two-way Travel CRM sync: after a successful lead create whose
   // dialog edits landed in Workspace, refresh the table and patch
@@ -1016,6 +1036,20 @@ export default function WorkspacePage() {
                             Object.prototype.hasOwnProperty.call(rowOverrides, c.key)
                               ? (rowOverrides[c.key] ?? null)
                               : undefined;
+                          // Attachment cells: resolve the existing file
+                          // URL (media message match, else a URL value)
+                          // so FlowAnswerCell can render the filename as
+                          // a link opening the file in a new tab. Null →
+                          // ordinary text cell, unchanged.
+                          const rawCellValue =
+                            overrideFor !== undefined
+                              ? overrideFor
+                              : (row.answers[c.key] ?? '');
+                          const cellFileUrl = resolveAttachmentUrl(
+                            payload.mediaByConversation ?? {},
+                            row.conversationId,
+                            rawCellValue,
+                          );
                           return (
                             <TableCell
                               key={flowColumnRenderKey(c)}
@@ -1034,6 +1068,7 @@ export default function WorkspacePage() {
                                   options={c.options ?? null}
                                   original={row.answers[c.key] ?? null}
                                   override={overrideFor}
+                                  fileUrl={cellFileUrl}
                                   canEdit={canSendMessages}
                                   onChanged={reloadTable}
                                 />

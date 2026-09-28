@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
 import {
@@ -13,6 +13,7 @@ import {
   buildFlowTableColumns,
   toFlowTableRow,
   FLOW_TABLE_PAGE_SIZE,
+  type AttachmentMediaEntry,
   type FlowTableRpcRow,
   type FlowTableView,
 } from '@/lib/flows/flow-tables'
@@ -93,13 +94,11 @@ export async function GET(
     )
   }
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAuthenticatedUser()
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status })
   }
+  const { supabase } = guard
 
   const { data: flow, error: flowErr } = await supabase
     .from('flows')
@@ -179,10 +178,43 @@ export async function GET(
     r.sourceUrl = r.contactId ? (sourceByContact[r.contactId] ?? null) : null;
   }
 
+  // Media messages for this page's runs, one batched lookup keyed by
+  // conversation id (never N+1), additive to the response. Lets the
+  // Workspace turn a flow-answer filename captured from an inbound
+  // document/image into a clickable link that opens the ACTUAL stored
+  // media URL — the existing `/api/whatsapp/media/{mediaId}` proxy the
+  // inbox already uses (serves images/PDFs inline). Purely additive:
+  // filtering, pagination, and RLS scope are unchanged, and rows with
+  // no media simply have no entry here.
+  const conversationIds = [...new Set(rows.map((r) => r.conversationId).filter(Boolean))] as string[];
+  const mediaByConversation: Record<string, AttachmentMediaEntry[]> = {};
+  if (conversationIds.length > 0) {
+    const { data: mediaRows } = await supabase
+      .from("messages")
+      .select("conversation_id, content_text, media_url, content_type")
+      .in("conversation_id", conversationIds)
+      .not("media_url", "is", null)
+      .order("created_at", { ascending: true });
+    for (const m of (mediaRows ?? []) as Array<{
+      conversation_id: string;
+      content_text: string | null;
+      media_url: string | null;
+      content_type: string | null;
+    }>) {
+      // Defensive skip: only rows with a real file URL belong in the
+      // media map (the `.not` filter is the primary guard).
+      if (!m.media_url) continue;
+      (mediaByConversation[m.conversation_id] ??= []).push({
+        contentText: m.content_text,
+        mediaUrl: m.media_url,
+        contentType: m.content_type,
+      });
+    }
+  }
+
   // Workspace custom columns + this page's values (two queries, no
   // N+1). Additive to the response — existing shape untouched.
   // Google Sheets never reads these tables.
-  //
   // First-use safety net: flows predating default business columns
   // (or created outside the API) get their missing defaults here,
   // so Completed and Incomplete — views over the SAME flow fields
@@ -276,5 +308,6 @@ export async function GET(
     }),
     customValues,
     flowOverrides,
+    mediaByConversation,
   });
 }

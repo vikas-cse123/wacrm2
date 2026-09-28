@@ -171,3 +171,54 @@ describe("TextCellPopover restore props (shared surface)", () => {
     expect(html).toContain("5 Star Hotel");
   });
 });
+
+describe("attachment cells open the file in a new tab", () => {
+  it("renders the filename as a link to the existing media URL", () => {
+    const html = renderCell({
+      original: "Itinerary.pdf",
+      fileUrl: "/api/whatsapp/media/m-2",
+    });
+    expect(html).toContain('href="/api/whatsapp/media/m-2"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    // The SAME filename keeps displaying — never rewritten.
+    expect(html).toContain("Itinerary.pdf");
+    // Link markup replaces the popover trigger (no <button> cell).
+    expect(html).not.toContain("<button");
+  });
+
+  it("keeps truncation/ellipsis styling and a hover affordance", () => {
+    const html = renderCell({
+      original: "Lord Shiva 4K Wallpaper Ultra HD 3840x2160.jpg",
+      fileUrl: "/api/whatsapp/media/m-1",
+    });
+    expect(html).toContain("truncate");
+    expect(html).toContain("hover:underline");
+  });
+
+  it("leaves ordinary text cells untouched (no fileUrl → popover)", () => {
+    const html = renderCell({ original: "5 Star Hotel" });
+    expect(html).not.toContain('target="_blank"');
+    expect(html).toContain("<button");
+  });
+
+  it("renders nothing when the attachment cell is empty", () => {
+    const html = renderCell({
+      original: null,
+      override: null,
+      fileUrl: "/api/whatsapp/media/m-2",
+    });
+    // display is blank → no link (matches the blank-cell rule).
+    expect(html).not.toContain('target="_blank"');
+  });
+
+  it("shows the edited dot when a Workspace override exists", () => {
+    const html = renderCell({
+      original: "Old.pdf",
+      override: "New.pdf",
+      fileUrl: "/api/whatsapp/media/m-2",
+    });
+    expect(html).toContain('aria-label="Edited"');
+    expect(html).toContain("New.pdf");
+  });
+});

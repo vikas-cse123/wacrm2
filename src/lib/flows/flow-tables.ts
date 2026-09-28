@@ -120,9 +120,67 @@ export interface FlowTablePayload {
    * always treated as {}.
    */
   flowOverrides?: Record<string, Record<string, string | null>>;
+  /**
+   * Media messages per conversation for this page's runs, keyed by
+   * conversation id. Additive, read-only enrichment (same pattern as
+   * sourceUrl/customValues/flowOverrides): lets the Workspace render a
+   * flow-answer filename that came from an inbound document/image as a
+   * clickable link that opens the ACTUAL stored media URL (the existing
+   * `/api/whatsapp/media/{mediaId}` proxy — never a new file-serving
+   * system). Absent on older responses — always treated as {}.
+   */
+  mediaByConversation?: Record<string, AttachmentMediaEntry[]>;
 }
 
 export const FLOW_TABLE_PAGE_SIZE = 25;
+
+/**
+ * One media message in a conversation (the subset the Workspace
+ * needs to turn a captured attachment filename into a clickable
+ * link). `contentText` is exactly what the flow captured as the
+ * answer (`caption || filename` for documents, caption for images),
+ * so matching is an exact equality, never fuzzy.
+ */
+export interface AttachmentMediaEntry {
+  /** The flow-captured answer text (message content_text). */
+  contentText: string | null;
+  /** The existing file URL WACRM already uses for the attachment. */
+  mediaUrl: string | null;
+  /** Meta MIME type (image/pdf/document…) — display/decoration only. */
+  contentType: string | null;
+}
+
+/**
+ * Resolve the clickable file URL for a Workspace flow-answer cell.
+ *
+ * 1. When the cell value matches a media message in the run's
+ *    conversation (a filename/caption captured from an inbound
+ *    document/image), return the ACTUAL stored media URL — the
+ *    existing `/api/whatsapp/media/{mediaId}` proxy WACRM already
+ *    uses, which serves images/PDFs inline (never a download).
+ * 2. Otherwise, when the value is itself an http(s) URL (e.g. a
+ *    flow answer that stored the public link directly), return it
+ *    unchanged.
+ * 3. Otherwise null — the cell renders as plain text, exactly as
+ *    today.
+ *
+ * Pure + exported for unit testing; never reads storage.
+ */
+export function resolveAttachmentUrl(
+  mediaByConversation: Record<string, AttachmentMediaEntry[]>,
+  conversationId: string | null | undefined,
+  value: string | null | undefined,
+): string | null {
+  if (!value) return null;
+  if (conversationId) {
+    const entry = (mediaByConversation[conversationId] ?? []).find(
+      (m) => Boolean(m.mediaUrl) && m.contentText === value,
+    );
+    if (entry?.mediaUrl) return entry.mediaUrl;
+  }
+  if (/^https?:\/\//i.test(value)) return value;
+  return null;
+}
 
 /** Shape of one row as returned by get_flow_table_rows(). */
 export interface FlowTableRpcRow {

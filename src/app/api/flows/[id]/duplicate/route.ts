@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { uniqueCopyName } from '@/lib/flows/duplicate'
 import { ensureWorkspaceDefaultFields } from '@/lib/flows/workspace-defaults'
@@ -26,13 +26,11 @@ export async function POST(
 ) {
   const { id } = await context.params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAuthenticatedUser()
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status })
   }
+  const { supabase, userId } = guard
 
   // RLS scopes this to the caller's account — a flow owned by another
   // tenant/workspace returns null (404 below).
@@ -75,7 +73,7 @@ export async function POST(
     .from('flows')
     .insert({
       account_id: original.account_id,
-      user_id: user.id,
+      user_id: userId,
       name: copyName,
       description: original.description,
       status: 'draft',

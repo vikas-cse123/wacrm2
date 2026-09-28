@@ -21,6 +21,14 @@ describe("classifyAuthFailure", () => {
     expect(classifyAuthFailure(undefined)).toBe("anonymous");
   });
 
+  it("treats AuthSessionMissingError as confirmed anonymous (never transient)", () => {
+    const err = Object.assign(new Error("Auth session missing!"), {
+      name: "AuthSessionMissingError",
+    });
+    expect(classifyAuthFailure(err)).toBe("anonymous");
+    expect(isConfirmedUnauthenticated(classifyAuthFailure(err))).toBe(true);
+  });
+
   it("treats deterministic server rejections as confirmed", () => {
     expect(classifyAuthFailure(apiError("invalid JWT", 401))).toBe("rejected");
     expect(classifyAuthFailure(apiError("forbidden", 403))).toBe("rejected");

@@ -68,6 +68,14 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: async () => ({ data: { user: h.user } }) },
     from: vi.fn((table: string) => userBuilder(table)),
   })),
+  createBufferedServerClient: vi.fn(async () => ({
+    client: {
+      auth: { getUser: async () => ({ data: { user: h.user } }) },
+      from: vi.fn((table: string) => userBuilder(table)),
+    },
+    commit: vi.fn(),
+    discard: vi.fn(),
+  })),
 }));
 
 vi.mock("@/lib/flows/admin-client", () => ({

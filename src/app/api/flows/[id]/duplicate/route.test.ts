@@ -164,6 +164,11 @@ let callerMock: { auth: { getUser: ReturnType<typeof vi.fn> }; from: ReturnType<
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => callerMock),
+  createBufferedServerClient: vi.fn(async () => ({
+    client: callerMock,
+    commit: vi.fn(),
+    discard: vi.fn(),
+  })),
 }));
 
 vi.mock("@/lib/flows/admin-client", () => ({

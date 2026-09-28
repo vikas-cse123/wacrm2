@@ -19,8 +19,8 @@ const h = vi.hoisted(() => ({
   copyImpl: null as null | ((...args: unknown[]) => Promise<unknown>),
 }));
 
-vi.mock("@/lib/supabase/server", () => ({
-  createClient: () => ({
+vi.mock("@/lib/supabase/server", () => {
+  const client = {
     auth: {
       getUser: async () => ({ data: { user: h.user } }),
     },
@@ -31,8 +31,16 @@ vi.mock("@/lib/supabase/server", () => ({
         }),
       }),
     }),
-  }),
-}));
+  };
+  return {
+    createClient: () => client,
+    createBufferedServerClient: () => ({
+      client,
+      commit: vi.fn(),
+      discard: vi.fn(),
+    }),
+  };
+});
 
 vi.mock("@/lib/flows/admin-client", () => ({
   supabaseAdmin: () => ({ __admin: true }),

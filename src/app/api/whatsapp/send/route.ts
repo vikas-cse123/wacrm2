@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { requireAuthenticatedUser } from '@/lib/auth/account'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -23,23 +24,15 @@ import { getOrCreateConversation } from '@/lib/conversations/get-or-create'
 // dashboard's internal `{ error }` shape.
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    const guard = await requireAuthenticatedUser()
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status })
     }
+    const { supabase, userId } = guard
 
     // Per-user rate limit. Bucket key is scoped to this route so
     // `/broadcast` has an independent budget.
-    const limit = checkRateLimit(`send:${user.id}`, RATE_LIMITS.send)
+    const limit = checkRateLimit(`send:${userId}`, RATE_LIMITS.send)
     if (!limit.success) {
       return rateLimitResponse(limit)
     }
@@ -51,7 +44,7 @@ export async function POST(request: Request) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('account_id')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle()
     const accountId = profile?.account_id as string | undefined
     if (!accountId) {
@@ -147,7 +140,7 @@ export async function POST(request: Request) {
       const resolved = await findOrCreateConversation(
         supabase,
         accountId,
-        user.id,
+        userId,
         contact_id
       )
       if (!resolved) {
@@ -207,7 +200,7 @@ export async function POST(request: Request) {
   }
 }
 
-type SendSupabase = Awaited<ReturnType<typeof createClient>>
+type SendSupabase = SupabaseClient
 
 /**
  * Return the contact's conversation id in this account, creating one if

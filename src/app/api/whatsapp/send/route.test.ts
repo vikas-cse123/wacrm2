@@ -122,6 +122,11 @@ let supabaseMock = makeSupabaseMock()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => supabaseMock),
+  createBufferedServerClient: vi.fn(async () => ({
+    client: supabaseMock,
+    commit: vi.fn(),
+    discard: vi.fn(),
+  })),
 }))
 
 vi.mock('@/lib/flows/admin-client', () => ({

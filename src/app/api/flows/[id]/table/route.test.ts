@@ -74,6 +74,8 @@ const h = vi.hoisted(() => ({
   rpcArgs: null as Record<string, unknown> | null,
   // Agent flow-answer overrides (workspace_flow_overrides rows).
   overrides: [] as Array<Record<string, unknown>>,
+  // Media messages for the page's conversations (messages rows).
+  messages: [] as Array<Record<string, unknown>>,
   // Service-role provisioning capture (default business columns).
   adminFields: [] as Array<Record<string, unknown>>,
   adminInserts: [] as Array<Record<string, unknown>[]>,
@@ -123,8 +125,8 @@ vi.mock("@/lib/flows/admin-client", () => ({
   }),
 }));
 
-vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({
+vi.mock("@/lib/supabase/server", () => {
+  const client = {
     auth: { getUser: async () => ({ data: { user: h.user } }) },
     from: (table: string) => {
       if (table === "flows") return tableBuilder(h.flow);
@@ -170,6 +172,17 @@ vi.mock("@/lib/supabase/server", () => ({
           }),
         };
       }
+      if (table === "messages") {
+        return {
+          select: () => ({
+            in: () => ({
+              not: () => ({
+                order: async () => ({ data: h.messages, error: null }),
+              }),
+            }),
+          }),
+        };
+      }
       return {
         select: () => ({
           eq: () => ({
@@ -182,8 +195,16 @@ vi.mock("@/lib/supabase/server", () => ({
       h.rpcArgs = args;
       return { data: h.rpc, error: null };
     },
-  }),
-}));
+  };
+  return {
+    createClient: async () => client,
+    createBufferedServerClient: async () => ({
+      client,
+      commit: vi.fn(),
+      discard: vi.fn(),
+    }),
+  };
+});
 
 const { GET } = await import("./route");
 
@@ -198,6 +219,7 @@ beforeEach(() => {
   };
   h.rpcArgs = null;
   h.overrides = [];
+  h.messages = [];
   h.adminFields = [];
   h.adminInserts = [];
   h.adminScopes = [];
@@ -507,5 +529,74 @@ describe("GET table with Workspace flow overrides", () => {
       flowOverrides: Record<string, Record<string, string | null>>;
     };
     expect(json.flowOverrides).toEqual({});
+  });
+});
+
+describe("GET table with media attachment enrichment", () => {
+  it("attaches media per conversation so attachment cells can link", async () => {
+    h.messages = [
+      {
+        conversation_id: "conv-1",
+        content_text: "Lord Shiva 4K Wallpaper.jpg",
+        media_url: "/api/whatsapp/media/m-1",
+        content_type: "application/pdf",
+      },
+      {
+        conversation_id: "conv-1",
+        content_text: "Itinerary.pdf",
+        media_url: "/api/whatsapp/media/m-2",
+        content_type: "image/jpeg",
+      },
+      // No media_url (plain text) — must never appear.
+      {
+        conversation_id: "conv-1",
+        content_text: "Thanks",
+        media_url: null,
+        content_type: "text",
+      },
+    ];
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      mediaByConversation: Record<
+        string,
+        Array<{ contentText: string | null; mediaUrl: string | null }>
+      >;
+    };
+    // run-1's conversation (conv-1) carries the media; run-2 has none.
+    expect(json.mediaByConversation["conv-1"]).toEqual([
+      {
+        contentText: "Lord Shiva 4K Wallpaper.jpg",
+        mediaUrl: "/api/whatsapp/media/m-1",
+        contentType: "application/pdf",
+      },
+      {
+        contentText: "Itinerary.pdf",
+        mediaUrl: "/api/whatsapp/media/m-2",
+        contentType: "image/jpeg",
+      },
+    ]);
+    // Plain-text rows never leak into the media map.
+    expect(json.mediaByConversation["conv-1"]).not.toContainEqual({
+      contentText: "Thanks",
+      mediaUrl: null,
+      contentType: "text",
+    });
+    expect(json.mediaByConversation["conv-2"] ?? null).toBeNull();
+  });
+
+  it("returns an empty media map when no page row has a conversation", async () => {
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      mediaByConversation: Record<string, unknown>;
+    };
+    expect(json.mediaByConversation).toEqual({});
   });
 });

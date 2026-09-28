@@ -25,8 +25,8 @@ function chainable(result: unknown) {
   return chain;
 }
 
-vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({
+vi.mock("@/lib/supabase/server", () => {
+  const client = {
     auth: { getUser: async () => ({ data: { user: { id: "u-1" } } }) },
     from: () => ({
       select: () => ({
@@ -36,8 +36,16 @@ vi.mock("@/lib/supabase/server", () => ({
         }),
       }),
     }),
-  }),
-}));
+  };
+  return {
+    createClient: async () => client,
+    createBufferedServerClient: async () => ({
+      client,
+      commit: vi.fn(),
+      discard: vi.fn(),
+    }),
+  };
+});
 
 vi.mock("@/lib/flows/admin-client", () => ({
   supabaseAdmin: () => ({

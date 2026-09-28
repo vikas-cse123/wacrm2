@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { requireAuthenticatedUser } from '@/lib/auth/account';
 
 /**
  * POST /api/push/unsubscribe
@@ -12,16 +12,11 @@ import { createClient } from '@/lib/supabase/server';
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient();
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const guard = await requireAuthenticatedUser();
+    if (!guard.ok) {
+      return NextResponse.json(guard.body, { status: guard.status });
     }
+    const { supabase, userId } = guard;
 
     const body = await request.json().catch(() => null);
     const endpoint = body?.endpoint as string | undefined;
@@ -37,7 +32,7 @@ export async function POST(request: Request) {
       .from('push_subscriptions')
       .delete()
       .eq('endpoint', endpoint)
-      .eq('user_id', user.id);
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[push] unsubscribe failed:', error.message);

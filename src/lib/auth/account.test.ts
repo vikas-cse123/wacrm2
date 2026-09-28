@@ -62,11 +62,19 @@ function makeClient(opts: {
 }
 
 const createClient = vi.fn();
+// createBufferedServerClient wraps the same mocked client and exposes
+// commit/discard so tests can assert cookie-clear behavior.
+const createBufferedServerClient = vi.fn(async () => ({
+  client: createClient(),
+  commit: vi.fn(),
+  discard: vi.fn(),
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () => createClient(),
+  createBufferedServerClient: () => createBufferedServerClient(),
 }));
 
-const { getCurrentAccount, UnauthorizedError, ForbiddenError, TemporaryAuthError } =
+const { getCurrentAccount, requireAuthenticatedUser, UnauthorizedError, ForbiddenError, TemporaryAuthError } =
   await import("./account");
 
 afterEach(() => {
@@ -220,5 +228,93 @@ describe("getCurrentAccount", () => {
     await expect(getCurrentAccount()).rejects.toThrow(
       "Profile is not linked to an account",
     );
+  });
+});
+
+describe("requireAuthenticatedUser", () => {
+  // Each createBufferedServerClient() call returns fresh commit/discard
+  // fns; grab the resolved values to assert they were called correctly.
+  async function lastBuffered() {
+    const result = createBufferedServerClient.mock.results.at(-1)!;
+    return await result.value;
+  }
+
+  it("returns ok with the user's id and a committed client", async () => {
+    const { client } = makeClient({ user: { id: "user-1" }, byTable: {} });
+    createClient.mockReturnValue(client);
+
+    const guard = await requireAuthenticatedUser();
+
+    expect(guard).toMatchObject({ ok: true, userId: "user-1", supabase: client });
+    const buffered = await lastBuffered();
+    expect(buffered.commit).toHaveBeenCalled();
+    expect(buffered.discard).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 (not 503) for a confirmed missing session", async () => {
+    const err = Object.assign(new Error("Auth session missing!"), {
+      name: "AuthSessionMissingError",
+    });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+
+    const guard = await requireAuthenticatedUser();
+
+    expect(guard).toMatchObject({ ok: false, status: 401 });
+    const buffered = await lastBuffered();
+    expect(buffered.commit).toHaveBeenCalled();
+  });
+
+  it("returns 503 on a transient network failure — never a forced logout", async () => {
+    const err = Object.assign(new Error("fetch failed"), { name: "TypeError" });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+
+    const guard = await requireAuthenticatedUser();
+
+    expect(guard).toMatchObject({ ok: false, status: 503 });
+    // Transient — the SDK's clearing cookies must be discarded.
+    const buffered = await lastBuffered();
+    expect(buffered.discard).toHaveBeenCalled();
+    expect(buffered.commit).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 on a refresh-token rotation race (resolved invalid_grant)", async () => {
+    const err = Object.assign(
+      new Error("Invalid Refresh Token: Refresh Token Not Found"),
+      { name: "AuthApiError", status: 400, code: "invalid_grant" },
+    );
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+
+    const guard = await requireAuthenticatedUser();
+
+    expect(guard).toMatchObject({ ok: false, status: 503 });
+    const buffered = await lastBuffered();
+    expect(buffered.discard).toHaveBeenCalled();
+  });
+
+  it("returns 503 on a bounded timeout", async () => {
+    const err = new Error("auth lookup timed out after 10000ms");
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+
+    const guard = await requireAuthenticatedUser();
+
+    expect(guard).toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("returns 401 on a deterministic token rejection", async () => {
+    const err = Object.assign(new Error("invalid JWT"), {
+      name: "AuthApiError",
+      status: 401,
+      code: "invalid_jwt",
+    });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+
+    const guard = await requireAuthenticatedUser();
+
+    expect(guard).toMatchObject({ ok: false, status: 401 });
   });
 });

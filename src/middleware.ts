@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import type { CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import {
   authFailureCode,
@@ -45,6 +46,35 @@ export async function middleware(request: NextRequest) {
   const authController = new AbortController()
   const authTimer = setTimeout(() => authController.abort(), AUTH_LOOKUP_TIMEOUT_MS)
 
+  // Buffered auth-cookie writes. @supabase/ssr's server adapter writes
+  // CLEARING Set-Cookie headers when a background refresh fails while the
+  // access token is already expired — it treats the failure as SIGNED_OUT
+  // and removes the session (`_removeSession`). A request that merely LOSES
+  // a refresh-token rotation race (its refresh token was consumed by a
+  // concurrent winner) must not wipe the browser's valid session cookie.
+  // The writes are buffered here and forwarded to the browser only when
+  // the outcome is authenticated or confirmed unauthenticated; on a
+  // transient failure they are discarded so a race can't log the user out.
+  const pendingCookieMutations: Array<{
+    name: string
+    value: string
+    options: CookieOptions
+  }> = []
+
+  const commitPendingCookies = () => {
+    if (pendingCookieMutations.length === 0) return
+    const writes = pendingCookieMutations.splice(0)
+    supabaseResponse = NextResponse.next({ request })
+    writes.forEach(({ name, value, options }) => {
+      request.cookies.set(name, value)
+      supabaseResponse.cookies.set(name, value, options)
+    })
+  }
+
+  const discardPendingCookies = () => {
+    pendingCookieMutations.length = 0
+  }
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -64,26 +94,24 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
+          cookiesToSet.forEach(({ name, value, options }) => {
+            pendingCookieMutations.push({ name, value, options })
+          })
         },
       },
     }
   )
 
   // getUser() transparently refreshes an expired access token, which
-  // ROTATES the refresh token and writes the new cookies onto
-  // `supabaseResponse` via setAll() above. Any response we return in
-  // place of `supabaseResponse` (every redirect / JSON branch below)
-  // is a fresh object that does NOT carry those Set-Cookie headers, so
-  // the rotated token never reaches the browser. The next request then
-  // replays the old, now-consumed refresh token, the refresh fails, and
-  // the session wedges — the user gets a broken reload after idling and
-  // can only recover by manually clearing cookies (issue #288). Copy the
-  // refreshed cookies onto whatever response we hand back to fix that.
+  // ROTATES the refresh token and writes the new cookies via setAll()
+  // above. Any response we return in place of `supabaseResponse` (every
+  // redirect / JSON branch below) is a fresh object that does NOT carry
+  // those Set-Cookie headers, so the rotated token never reaches the
+  // browser. The next request then replays the old, now-consumed refresh
+  // token, the refresh fails, and the session wedges — the user gets a
+  // broken reload after idling and can only recover by manually clearing
+  // cookies (issue #288). Copy the committed cookies onto whatever
+  // response we hand back to fix that.
   const withRefreshedCookies = <T extends NextResponse>(response: T): T => {
     supabaseResponse.cookies.getAll().forEach((cookie) => {
       response.cookies.set(cookie)
@@ -97,20 +125,25 @@ export async function middleware(request: NextRequest) {
   // from cookies before any of them has written the new one back. The
   // first request to reach Supabase wins and gets a new token pair; the
   // others present an already-consumed refresh token and getUser()
-  // throws (AuthApiError: Invalid Refresh Token: Refresh Token Not
-  // Found). Rotation stays enabled (with its 10s server-side reuse
-  // interval); the app side handles the losers below instead of
-  // treating them as logged out.
+  // RESOLVES with `{ data: { user: null }, error: AuthApiError
+  // (Invalid Refresh Token: Refresh Token Not Found) }` — it does NOT
+  // throw for an AuthApiError. Discarding that resolved error (as the
+  // old code did) classified the race as 'anonymous' → a confirmed
+  // logout → redirect to /login. Rotation stays enabled (with its 10s
+  // server-side reuse interval); the app side handles the losers below
+  // instead of treating them as logged out.
   //
   // Failure handling distinguishes two cases (see
   // src/lib/auth/auth-errors.ts):
-  //   A. confirmed unauthenticated — getUser() resolved user:null, or
-  //      the server deterministically rejected the token (401/403).
-  //      These redirect to /login exactly as before.
-  //   B. temporary infrastructure failure — lookup timeout (now a real
-  //      abort, so the refresh can't linger and consume a token without
-  //      delivering cookies), network blip, rate limit, 5xx, or the
-  //      rotation race above. These PASS THROUGH untouched: the
+  //   A. confirmed unauthenticated — getUser() resolved user:null with
+  //      no error (or AuthSessionMissingError), or the server
+  //      deterministically rejected the token (401/403). These redirect
+  //      to /login exactly as before.
+  //   B. temporary infrastructure failure — refresh-token rotation race
+  //      (invalid_grant / refresh_token_not_found), lookup timeout (now
+  //      a real abort, so the refresh can't linger and consume a token
+  //      without delivering cookies), network blip, rate limit, or 5xx.
+  //      These PASS THROUGH untouched with NO auth-cookie clearing: the
   //      dashboard shell (client) holds a session of its own and
   //      re-verifies with a bounded check before ever redirecting — a
   //      single slow request must not decide the user's fate. This is
@@ -120,12 +153,26 @@ export async function middleware(request: NextRequest) {
   let user = null
   let failure: AuthFailureKind | null = null
   try {
-    const { data } = await supabase.auth.getUser()
+    // getUser() returns `{ data: { user }, error }` — the error is a
+    // TOP-LEVEL sibling of `data`, never `data.error`. getUser() RESOLVES
+    // `{ user: null, error }` for AuthApiError refresh failures instead of
+    // throwing — capturing the error is the only way to tell "genuinely no
+    // session" from "refresh failed transiently".
+    const { data, error } = await supabase.auth.getUser()
     const resolved = data.user
     if (resolved) {
       user = resolved
     } else {
-      failure = 'anonymous'
+      // classifyAuthFailure maps AuthSessionMissingError → 'anonymous'
+      // and invalid_grant / refresh_token_not_found / network / timeout /
+      // 5xx / 429 → transient kinds. Never discard the resolved error.
+      failure = classifyAuthFailure(error ?? null)
+      // Log codes only — never tokens, cookies, or error internals that
+      // could carry credential fragments.
+      console.warn('[auth] middleware auth failure', {
+        code: authFailureCode(failure),
+        path: request.nextUrl.pathname,
+      })
     }
   } catch (err) {
     failure = classifyAuthFailure(err)
@@ -137,6 +184,17 @@ export async function middleware(request: NextRequest) {
     })
   } finally {
     clearTimeout(authTimer)
+  }
+
+  // Commit buffered cookie writes only for real outcomes. A transient
+  // failure keeps them discarded so the clearing Set-Cookie headers from
+  // the failed refresh never reach the browser.
+  const transientFailure =
+    failure !== null && !isConfirmedUnauthenticated(failure)
+  if (!transientFailure) {
+    commitPendingCookies()
+  } else {
+    discardPendingCookies()
   }
 
   // Auth pages - redirect to dashboard if already logged in.
@@ -168,20 +226,27 @@ export async function middleware(request: NextRequest) {
 
   // Protected pages - redirect to login only when the session is
   // proven dead (case A above). On transient failures the request
-  // passes through so the client can recover in place.
+  // passes through untouched so the client can recover in place, and
+  // no clearing cookie is written.
   const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/followups', '/qr-codes', '/automations', '/settings']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
-    if (failure !== null && !isConfirmedUnauthenticated(failure)) {
-      return supabaseResponse
+    if (transientFailure) {
+      return NextResponse.next({ request })
     }
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // API routes that need auth (not webhooks)
+  // API routes that need auth (not webhooks). Confirmed unauthenticated
+  // keeps the 401; a transient failure passes through so the route
+  // handler's own (classified) auth check returns 503, never a forced
+  // logout.
   if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
       !request.nextUrl.pathname.includes('/webhook')) {
+    if (transientFailure) {
+      return NextResponse.next({ request })
+    }
     return withRefreshedCookies(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     )

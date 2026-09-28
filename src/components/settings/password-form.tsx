@@ -47,6 +47,20 @@ export function PasswordForm() {
     setSaving(true);
 
     try {
+      // Warn up front: GoTrue revokes every OTHER session when the
+      // password changes — anyone else logged into this account (other
+      // browsers/devices) will be signed out and must log in again.
+      // This device keeps its session. The user confirms before we touch
+      // anything, so an accidental save can't silently log out teammates.
+      const confirmed = window.confirm(
+        "Changing your password will sign out every other active session " +
+          "on this account (other browsers and devices). You will stay " +
+          "signed in on this device. Continue?",
+      );
+      if (!confirmed) {
+        setSaving(false);
+        return;
+      }
       // Supabase doesn't expose a "verify password without issuing a
       // session" API, so we re-authenticate with the provided current
       // password. If it matches, the session refreshes silently; if it
@@ -94,6 +108,10 @@ export function PasswordForm() {
       </CardHeader>
 
       <CardContent>
+        <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+          Changing your password will sign out every other active session on
+          this account (other browsers and devices).
+        </div>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="current-password" className="text-foreground">
