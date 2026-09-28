@@ -27,6 +27,26 @@ import { supabaseAdmin } from './admin-client'
  *     payload also carries a `sentAt` watermark the service worker logs
  *     as "server → device" latency.
  *
+ * Reliability hardening (see the investigation):
+ *   - Retry/backoff: 429/5xx/network failures get a small bounded
+ *     number of retries with exponential backoff + jitter. 404/410,
+ *     401/403, timeouts and other permanent/unknown errors are never
+ *     retried.
+ *   - Cleanup: 404/410 are pruned (the push service says the endpoint
+ *     is gone). 401/403 are pruned ONLY when another subscription in
+ *     the same fan-out delivered successfully (the odd one out → the
+ *     subscription is stale); when every subscription fails with
+ *     401/403 the likely cause is a server-wide VAPID/config problem,
+ *     so rows are kept and logged.
+ *   - Successful sends update `last_used_at` (batched) so the database
+ *     reflects real delivery attempts.
+ *   - Consecutive transient/timeout failures are tracked in-process for
+ *     diagnostics (a "suspected dead" warning), but are NEVER auto-
+ *     deleted: a transient error does not prove the subscription is
+ *     gone, and deleting during a push-service outage would drop healthy
+ *     devices. The push service's own 404/410 is the authoritative
+ *     "gone" signal and is pruned.
+ *
  * VAPID keys are read from the environment. If they're absent the whole
  * feature no-ops cleanly — the app still works, it just doesn't push.
  */
@@ -44,6 +64,14 @@ const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@example.com'
 const PUSH_REQUEST_TIMEOUT_MS = Number(
   process.env.PUSH_REQUEST_TIMEOUT_MS || '10000',
 )
+
+// Bounded retry budget for transient push-service failures.
+const PUSH_MAX_RETRIES = 2
+const PUSH_RETRY_BASE_MS = 250
+// Consecutive transient/timeout failures (in-process) after which we log
+// a "suspected dead" diagnostic. Rows are never auto-deleted on transient
+// errors (see file header).
+const PUSH_STALE_FAIL_THRESHOLD = 10
 
 let configured = false
 
@@ -97,17 +125,90 @@ export function shortDeviceId(id: string): string {
   return id.slice(0, 8)
 }
 
+// ---------------------------------------------------------------------------
+// Failure classification (pure, exported for tests).
+// ---------------------------------------------------------------------------
+
+export type SendErrorKind =
+  | 'ok'
+  | 'dead' // 404/410 — push service says the endpoint is gone
+  | 'invalid' // 401/403 — endpoint-specific auth/VAPID rejection
+  | 'transient' // 429/5xx/network — retryable
+  | 'timeout' // per-request timeout — kept, not retried (bounds webhook latency)
+  | 'error'; // anything else — kept
+
+export interface ClassifiedSendError {
+  kind: SendErrorKind
+  status?: number
+}
+
+/**
+ * Classify a web-push send error. web-push throws `WebPushError` (with a
+ * `statusCode`) for HTTP failures and a plain `Error` for network/timeout.
+ * Exported for unit tests.
+ */
+export function classifySendError(err: unknown): ClassifiedSendError {
+  const status =
+    typeof err === 'object' && err !== null && 'statusCode' in err
+      ? (err as { statusCode?: unknown }).statusCode
+      : undefined
+  const numericStatus = typeof status === 'number' ? status : undefined
+
+  if (numericStatus === 404 || numericStatus === 410) {
+    return { kind: 'dead', status: numericStatus }
+  }
+  if (numericStatus === 401 || numericStatus === 403) {
+    return { kind: 'invalid', status: numericStatus }
+  }
+  if (numericStatus === 429 || (numericStatus !== undefined && numericStatus >= 500)) {
+    return { kind: 'transient', status: numericStatus }
+  }
+
+  const text = err instanceof Error ? err.message : String(err)
+  if (/socket timeout|timed? ?out|abort|timeout/i.test(text)) {
+    return { kind: 'timeout' }
+  }
+  if (
+    /fetch failed|failed to fetch|network|econnreset|econnrefused|enotfound|eai_again|socket hang up|load failed/i.test(
+      text,
+    )
+  ) {
+    return { kind: 'transient' }
+  }
+  return { kind: 'error' }
+}
+
+/** Exponential backoff with jitter for a retry attempt (0-based). */
+export function retryDelayMs(attempt: number): number {
+  const exp = PUSH_RETRY_BASE_MS * 2 ** attempt
+  return Math.floor(exp + Math.random() * 100)
+}
+
 type SendOutcome =
   | { kind: 'ok' }
   | { kind: 'dead'; status: number }
-  | { kind: 'error'; detail: string }
+  | { kind: 'invalid'; status: number }
+  | { kind: 'kept'; reason: 'transient' | 'timeout' | 'error'; detail: string }
+
+// In-process consecutive-failure tracker (diagnostics only — never used to
+// auto-delete; see file header).
+const consecutiveFailures = new Map<string, number>()
+
+function bumpFailure(id: string): number {
+  const n = (consecutiveFailures.get(id) ?? 0) + 1
+  consecutiveFailures.set(id, n)
+  return n
+}
+
+function resetFailures(id: string): void {
+  consecutiveFailures.delete(id)
+}
 
 /**
- * Send to ONE subscription, bounded + timed. The `timeout` option makes
- * `webpush.sendNotification` destroy the request if the push service
- * doesn't answer in time, so a hung subscription fails fast instead of
- * holding the process for minutes. Pure fan-out helper — one sub's
- * outcome never affects the others.
+ * Send to ONE subscription, bounded + timed, with bounded retry/backoff for
+ * transient (429/5xx/network) failures. 404/410, 401/403, timeouts and
+ * other errors are never retried. Pure fan-out helper — one sub's outcome
+ * never affects the others.
  */
 async function sendToSubscription(
   row: SubscriptionRow,
@@ -117,40 +218,145 @@ async function sendToSubscription(
   const startedAt = Date.now()
   console.log(`[push] sub ${id} send start at ${new Date(startedAt).toISOString()}`)
 
-  try {
-    await webpush.sendNotification(
-      {
-        endpoint: row.endpoint,
-        keys: { p256dh: row.p256dh, auth: row.auth },
-      },
-      body,
-      // `urgency: 'high'` asks the push service to deliver promptly;
-      // `timeout` bounds the round trip (see file header).
-      { timeout: PUSH_REQUEST_TIMEOUT_MS, urgency: 'high' },
-    )
-    const ms = Date.now() - startedAt
-    console.log(`[push] sub ${id} send ok in ${ms}ms`)
-    return { kind: 'ok' }
-  } catch (err) {
-    const ms = Date.now() - startedAt
-    const statusCode =
-      typeof err === 'object' && err !== null && 'statusCode' in err
-        ? (err as { statusCode?: number }).statusCode
-        : undefined
-    if (statusCode === 404 || statusCode === 410) {
-      // Push service says this subscription no longer exists — prune it
-      // so it doesn't accumulate. A dead row never blocks live devices.
-      console.warn(`[push] sub ${id} dead (${statusCode}) in ${ms}ms — pruning`)
-      return { kind: 'dead', status: statusCode }
+  let attempt = 0
+  for (;;) {
+    const attemptStart = Date.now()
+    try {
+      await webpush.sendNotification(
+        {
+          endpoint: row.endpoint,
+          keys: { p256dh: row.p256dh, auth: row.auth },
+        },
+        body,
+        // `urgency: 'high'` asks the push service to deliver promptly;
+        // `timeout` bounds the round trip (see file header).
+        { timeout: PUSH_REQUEST_TIMEOUT_MS, urgency: 'high' },
+      )
+      const ms = Date.now() - attemptStart
+      console.log(`[push] sub ${id} send ok in ${ms}ms`)
+      resetFailures(id)
+      return { kind: 'ok' }
+    } catch (err) {
+      const { kind, status } = classifySendError(err)
+      const ms = Date.now() - attemptStart
+
+      if (kind === 'dead') {
+        console.warn(`[push] sub ${id} dead (${status}) in ${ms}ms — pruning`)
+        return { kind: 'dead', status: status ?? 0 }
+      }
+      if (kind === 'invalid') {
+        console.warn(`[push] sub ${id} invalid (${status}) in ${ms}ms`)
+        return { kind: 'invalid', status: status ?? 0 }
+      }
+      if (kind === 'timeout') {
+        const n = bumpFailure(id)
+        console.error(
+          `[push] sub ${id} timeout in ${ms}ms — kept (not retried to bound webhook latency)${n >= PUSH_STALE_FAIL_THRESHOLD ? ' — SUSPECTED DEAD (consecutive failures)' : ''}`,
+        )
+        return { kind: 'kept', reason: 'timeout', detail: `timeout (${ms}ms)` }
+      }
+      if (kind === 'transient' && attempt < PUSH_MAX_RETRIES) {
+        const delay = retryDelayMs(attempt)
+        attempt += 1
+        console.warn(
+          `[push] sub ${id} transient (${status ?? 'network'}) in ${ms}ms — retry ${attempt}/${PUSH_MAX_RETRIES} in ${delay}ms`,
+        )
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        continue
+      }
+
+      const n = bumpFailure(id)
+      const detail = status ? `status ${status}` : err instanceof Error ? err.message : String(err)
+      const reason = kind === 'transient' ? 'transient' : 'error'
+      console.error(
+        `[push] sub ${id} send failed in ${ms}ms: ${detail}${n >= PUSH_STALE_FAIL_THRESHOLD ? ' — SUSPECTED DEAD (consecutive failures)' : ''}`,
+      )
+      return { kind: 'kept', reason, detail }
     }
-    const detail = statusCode
-      ? `status ${statusCode}`
-      : err instanceof Error
-        ? err.message
-        : String(err)
-    console.error(`[push] sub ${id} send failed in ${ms}ms: ${detail}`)
-    return { kind: 'error', detail }
   }
+}
+
+/**
+ * Fan out a payload to a list of subscriptions: send all concurrently,
+ * prune definitively-dead rows (404/410), prune 401/403 rows only when the
+ * rest of the fan-out delivered (odd one out), and bump `last_used_at` for
+ * successful sends. Never throws.
+ */
+async function fanOutSubscriptions(subs: SubscriptionRow[], body: string): Promise<void> {
+  const outcomes = await Promise.allSettled(
+    subs.map(async (row) => ({ row, outcome: await sendToSubscription(row, body) })),
+  )
+
+  const deadIds: string[] = []
+  const invalidIds: string[] = []
+  const successIds: string[] = []
+  let sentCount = 0
+  let failedCount = 0
+
+  for (const settled of outcomes) {
+    if (settled.status !== 'fulfilled') {
+      failedCount += 1
+      continue
+    }
+    const { row, outcome } = settled.value
+    if (outcome.kind === 'ok') {
+      successIds.push(row.id)
+      sentCount += 1
+    } else if (outcome.kind === 'dead') {
+      deadIds.push(row.id)
+      failedCount += 1
+    } else if (outcome.kind === 'invalid') {
+      invalidIds.push(row.id)
+      failedCount += 1
+    } else {
+      failedCount += 1
+    }
+  }
+
+  const prune = async (ids: string[], reason: string) => {
+    const { error: delErr } = await supabaseAdmin()
+      .from('push_subscriptions')
+      .delete()
+      .in('id', ids)
+    if (delErr) {
+      console.error(`[push] failed to prune ${reason} subscriptions:`, delErr.message)
+    } else {
+      console.warn(`[push] pruned ${ids.length} ${reason} subscription(s)`)
+    }
+  }
+
+  if (deadIds.length > 0) {
+    await prune(deadIds, 'dead')
+  }
+
+  if (invalidIds.length > 0) {
+    if (sentCount > 0) {
+      // The odd one(s) out: at least one other device delivered, so a
+      // 401/403 here is endpoint-specific (stale subscription) — prune it.
+      await prune(invalidIds, 'invalid')
+    } else {
+      // No subscription delivered — a server-wide VAPID/config problem is
+      // the likely cause. Keep the rows and log loudly instead of deleting
+      // every device.
+      console.error(
+        `[push] ${invalidIds.length} subscription(s) failed with 401/403 and none delivered — possible server-wide VAPID/configuration problem; rows kept`,
+      )
+    }
+  }
+
+  if (successIds.length > 0) {
+    const { error: touchErr } = await supabaseAdmin()
+      .from('push_subscriptions')
+      .update({ last_used_at: new Date().toISOString() })
+      .in('id', successIds)
+    if (touchErr) {
+      console.error('[push] failed to touch last_used_at:', touchErr.message)
+    }
+  }
+
+  console.log(
+    `[push] fan-out done sent=${sentCount} failed=${failedCount} dead=${deadIds.length} invalid=${invalidIds.length} last_used=${successIds.length}`,
+  )
 }
 
 /**
@@ -162,8 +368,8 @@ async function sendToSubscription(
  * - All subscriptions are sent concurrently (`Promise.allSettled`); a
  *   slow, failed, or hanging subscription on one device cannot delay or
  *   block any other device.
- * - Dead subscriptions (404/410 from the push service) are pruned so
- *   they don't accumulate.
+ * - Dead subscriptions (404/410) are pruned; 401/403 subscriptions are
+ *   pruned only when the rest of the fan-out delivered.
  * - `excludeUserId` skips a member (e.g. don't notify the agent who is
  *   the actor of the event).
  */
@@ -236,46 +442,11 @@ export async function sendPushToAccount(
     // late" from "device displayed late").
     const body = JSON.stringify({ ...payload, sentAt: new Date().toISOString() })
 
-    const outcomes = await Promise.allSettled(
-      subs.map(async (row) => ({
-        row,
-        outcome: await sendToSubscription(row, body),
-      })),
-    )
+    await fanOutSubscriptions(subs, body)
 
-    const deadIds: string[] = []
-    let sentCount = 0
-    let failedCount = 0
-    for (const settled of outcomes) {
-      if (settled.status !== 'fulfilled') {
-        failedCount += 1
-        continue
-      }
-      const { row, outcome } = settled.value
-      if (outcome.kind === 'ok') {
-        sentCount += 1
-      } else if (outcome.kind === 'dead') {
-        deadIds.push(row.id)
-        failedCount += 1
-      } else {
-        failedCount += 1
-      }
-    }
-
-    const totalMs = Date.now() - dispatchStart
     console.log(
-      `[push] dispatch done account=${accountId} sent=${sentCount} failed=${failedCount} dead=${deadIds.length} in ${totalMs}ms at ${new Date().toISOString()}`,
+      `[push] dispatch done account=${accountId} in ${Date.now() - dispatchStart}ms at ${new Date().toISOString()}`,
     )
-
-    if (deadIds.length > 0) {
-      const { error: delErr } = await supabaseAdmin()
-        .from('push_subscriptions')
-        .delete()
-        .in('id', deadIds)
-      if (delErr) {
-        console.error('[push] failed to prune dead subscriptions:', delErr.message)
-      }
-    }
   } catch (err) {
     console.error('[push] unexpected error during fan-out:', err)
   }
@@ -321,46 +492,11 @@ export async function sendPushToUser(
 
     const body = JSON.stringify({ ...payload, sentAt: new Date().toISOString() })
 
-    const outcomes = await Promise.allSettled(
-      (data as SubscriptionRow[]).map(async (row) => ({
-        row,
-        outcome: await sendToSubscription(row, body),
-      })),
-    )
+    await fanOutSubscriptions(data as SubscriptionRow[], body)
 
-    const deadIds: string[] = []
-    let sentCount = 0
-    let failedCount = 0
-    for (const settled of outcomes) {
-      if (settled.status !== 'fulfilled') {
-        failedCount += 1
-        continue
-      }
-      const { row, outcome } = settled.value
-      if (outcome.kind === 'ok') {
-        sentCount += 1
-      } else if (outcome.kind === 'dead') {
-        deadIds.push(row.id)
-        failedCount += 1
-      } else {
-        failedCount += 1
-      }
-    }
-
-    const totalMs = Date.now() - dispatchStart
     console.log(
-      `[push] user dispatch done user=${userId} sent=${sentCount} failed=${failedCount} dead=${deadIds.length} in ${totalMs}ms at ${new Date().toISOString()}`,
+      `[push] user dispatch done user=${userId} in ${Date.now() - dispatchStart}ms at ${new Date().toISOString()}`,
     )
-
-    if (deadIds.length > 0) {
-      const { error: delErr } = await supabaseAdmin()
-        .from('push_subscriptions')
-        .delete()
-        .in('id', deadIds)
-      if (delErr) {
-        console.error('[push] failed to prune dead subscriptions:', delErr.message)
-      }
-    }
   } catch (err) {
     console.error('[push] unexpected error during user push:', err)
   }

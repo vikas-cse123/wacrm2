@@ -52,6 +52,8 @@ export interface DashboardAnalyticsResult {
    * solid bars driven by `monthly` (totals unaffected).
    */
   monthlyFlows: MonthlyFlowMonth[]
+  /** Pending reminders (status scheduled/processing), never sent/failed/cancelled. */
+  scheduledReminderCount: number
 }
 
 function isDelta(v: unknown): v is { current: number; previous: number } {
@@ -92,6 +94,7 @@ export async function loadDashboardAnalytics(
     dailyFlows?: unknown
     monthlyUniqueContacts?: unknown
     monthlyFlows?: unknown
+    scheduledReminderCount?: unknown
   }
 
   const kpisRaw = json.kpis ?? {}
@@ -184,6 +187,11 @@ export async function loadDashboardAnalytics(
     dailyFlows,
     monthly: monthly.slice(0, 12),
     monthlyFlows,
+    scheduledReminderCount:
+      typeof json.scheduledReminderCount === 'number' &&
+      Number.isFinite(json.scheduledReminderCount)
+        ? Math.max(0, Math.floor(json.scheduledReminderCount))
+        : 0,
   }
 }
 

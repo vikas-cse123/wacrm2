@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Users } from 'lucide-react'
+import { CalendarClock, Users } from 'lucide-react'
 import {
   getDashboardRange,
   getYearRange,
@@ -41,6 +41,7 @@ export default function DashboardPage() {
   )
 
   const [kpis, setKpis] = useState<DashboardKpis | null>(null)
+  const [scheduledReminders, setScheduledReminders] = useState(0)
   const [daily, setDaily] = useState<DailyContactsDay[] | null>(null)
   const [dailyFlows, setDailyFlows] = useState<DailyFlowDay[] | null>(null)
   const [monthly, setMonthly] = useState<number[] | null>(null)
@@ -70,6 +71,7 @@ export default function DashboardPage() {
     )
       .then((d) => {
         setKpis(d.kpis)
+        setScheduledReminders(d.scheduledReminderCount)
         setDaily(d.daily)
         setDailyFlows(d.dailyFlows)
         setMonthly(d.monthly)
@@ -114,13 +116,29 @@ export default function DashboardPage() {
       {/* KPI — unique contacts messaged in range */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {kpiLoading || !kpis ? (
-          <SkeletonCard key="kpi" />
+          <>
+            <SkeletonCard key="kpi" />
+            <SkeletonCard key="kpi-yesterday" />
+            <SkeletonCard key="kpi-reminders" />
+          </>
         ) : (
-          <KpiCard
-            title="Unique Contacts Messaged"
-            value={kpis.uniqueContacts.current}
-            icon={Users}
-          />
+          <>
+            <KpiCard
+              title="People Messaged Today"
+              value={kpis.uniqueContacts.current}
+              icon={Users}
+            />
+            <KpiCard
+              title="People Messaged Yesterday"
+              value={kpis.uniqueContacts.previous}
+              icon={Users}
+            />
+            <KpiCard
+              title="Scheduled Reminders"
+              value={scheduledReminders}
+              icon={CalendarClock}
+            />
+          </>
         )}
       </div>
 

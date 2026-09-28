@@ -29,7 +29,19 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  classifyAuthFailure,
+  isConfirmedUnauthenticated,
+  withAuthTimeout,
+} from "./auth-errors";
 import { hasMinRole, isAccountRole, type AccountRole } from "./roles";
+
+/**
+ * Bound on the Supabase auth round-trip in API routes. A slow/unreachable
+ * auth server must not hang the request past the reverse proxy's timeout,
+ * and a timeout is a TEMPORARY failure (503), never an auth rejection.
+ */
+const API_AUTH_LOOKUP_TIMEOUT_MS = 10_000;
 
 // ------------------------------------------------------------
 // Errors
@@ -55,6 +67,20 @@ export class ForbiddenError extends Error {
 }
 
 /**
+ * Temporary auth-infrastructure failure (timeout, network blip, 5xx,
+ * rate limit, refresh-rotation race). The session may still be valid —
+ * the auth backend just couldn't confirm it right now. Returns 503 so
+ * the client treats it as a transient server error, NEVER as a logout.
+ */
+export class TemporaryAuthError extends Error {
+  readonly status = 503 as const;
+  constructor(message = "Authentication service temporarily unavailable") {
+    super(message);
+    this.name = "TemporaryAuthError";
+  }
+}
+
+/**
  * Convert one of the typed errors above (or anything else) into a
  * `NextResponse`. Routes can do:
  *
@@ -67,7 +93,11 @@ export class ForbiddenError extends Error {
  * server internals out of the wire.
  */
 export function toErrorResponse(err: unknown): NextResponse {
-  if (err instanceof UnauthorizedError || err instanceof ForbiddenError) {
+  if (
+    err instanceof UnauthorizedError ||
+    err instanceof ForbiddenError ||
+    err instanceof TemporaryAuthError
+  ) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("[toErrorResponse] uncategorized error:", err);
@@ -94,7 +124,12 @@ export interface AccountContext {
 /**
  * Resolve the caller's user + account + role in one round trip.
  *
- * Throws `UnauthorizedError` if there's no Supabase session.
+ * Throws `UnauthorizedError` if there's no Supabase session or the token
+ * was deterministically rejected.
+ * Throws `TemporaryAuthError` (503) if the auth backend was unreachable,
+ * slow (bounded timeout), rate-limited, returned 5xx, or a refresh-token
+ * rotation race occurred — the caller's session may still be valid, so
+ * this must never be surfaced as a logout.
  * Throws `ForbiddenError` if the profile is missing account
  * fields (shouldn't happen post-017 migration; defensive guard
  * against profile rows that pre-date the backfill or were
@@ -106,12 +141,35 @@ export interface AccountContext {
 export async function getCurrentAccount(): Promise<AccountContext> {
   const supabase = await createClient();
 
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-  if (userErr || !user) {
-    throw new UnauthorizedError();
+  let user: { id: string } | null = null;
+  let userErr: unknown = null;
+  try {
+    const result = await withAuthTimeout(
+      supabase.auth.getUser(),
+      API_AUTH_LOOKUP_TIMEOUT_MS,
+    );
+    user = result.data.user ?? null;
+    userErr = result.error ?? null;
+  } catch (err) {
+    userErr = err;
+  }
+
+  if (!user) {
+    // A resolved `AuthSessionMissingError` (or a null error) means there is
+    // no session at all — definitively unauthenticated. Everything else is
+    // classified: a deterministic rejection (401/403) is dead → 401;
+    // transient failures (timeout, network, 5xx, rate limit, rotation
+    // race, unknown) must stay a temporary 503 so the caller is never
+    // treated as logged out because the auth backend was briefly down.
+    const isSessionMissing =
+      userErr !== null &&
+      typeof userErr === "object" &&
+      (userErr as { name?: unknown }).name === "AuthSessionMissingError";
+    const kind = isSessionMissing ? "anonymous" : classifyAuthFailure(userErr);
+    if (isConfirmedUnauthenticated(kind)) {
+      throw new UnauthorizedError();
+    }
+    throw new TemporaryAuthError();
   }
 
   const { data, error } = await supabase

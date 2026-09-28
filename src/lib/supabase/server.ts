@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { getAuthCookieOptions } from '@/lib/auth/cookie-options'
 
 export async function createClient() {
   const cookieStore = await cookies()
@@ -8,6 +9,9 @@ export async function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // Same cookie options as the browser client (domain sharing for
+      // apex/www) so server reads and writes stay consistent.
+      cookieOptions: getAuthCookieOptions(),
       cookies: {
         getAll() {
           return cookieStore.getAll()

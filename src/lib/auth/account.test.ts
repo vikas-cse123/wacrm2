@@ -66,9 +66,8 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: () => createClient(),
 }));
 
-const { getCurrentAccount, UnauthorizedError, ForbiddenError } = await import(
-  "./account"
-);
+const { getCurrentAccount, UnauthorizedError, ForbiddenError, TemporaryAuthError } =
+  await import("./account");
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -108,6 +107,55 @@ describe("getCurrentAccount", () => {
 
   it("throws UnauthorizedError when there is no session", async () => {
     const { client } = makeClient({ user: null, byTable: {} });
+    createClient.mockReturnValue(client);
+    await expect(getCurrentAccount()).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("throws TemporaryAuthError (503) on a transient network failure — never a logout", async () => {
+    const err = Object.assign(new Error("fetch failed"), { name: "TypeError" });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+    await expect(getCurrentAccount()).rejects.toBeInstanceOf(TemporaryAuthError);
+    await expect(getCurrentAccount()).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("throws TemporaryAuthError (503) on a bounded getUser() timeout", async () => {
+    const err = new Error("auth lookup timed out after 10000ms");
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+    await expect(getCurrentAccount()).rejects.toBeInstanceOf(TemporaryAuthError);
+  });
+
+  it("throws TemporaryAuthError (503) on a Supabase 5xx", async () => {
+    const err = Object.assign(new Error("Bad gateway"), {
+      name: "AuthApiError",
+      status: 502,
+      code: "bad_gateway",
+    });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+    await expect(getCurrentAccount()).rejects.toBeInstanceOf(TemporaryAuthError);
+  });
+
+  it("throws UnauthorizedError on a deterministic token rejection (401)", async () => {
+    const err = Object.assign(new Error("invalid JWT"), {
+      name: "AuthApiError",
+      status: 401,
+      code: "invalid_jwt",
+    });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
+    createClient.mockReturnValue(client);
+    await expect(getCurrentAccount()).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it("throws UnauthorizedError when getUser() reports a missing session", async () => {
+    // Real supabase-js resolves getUser() with `{ user: null, error:
+    // AuthSessionMissingError }` when there is no session at all — that is
+    // definitively unauthenticated (401), never a temporary 503.
+    const err = Object.assign(new Error("Auth session missing!"), {
+      name: "AuthSessionMissingError",
+    });
+    const { client } = makeClient({ user: null, userErr: err, byTable: {} });
     createClient.mockReturnValue(client);
     await expect(getCurrentAccount()).rejects.toBeInstanceOf(UnauthorizedError);
   });

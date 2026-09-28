@@ -208,12 +208,12 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <h2 className="text-[15px] font-semibold tracking-tight text-foreground">
-            Month Wise Unique Contacts Messaged
+            Month Wise People Messaged
           </h2>
           <p className="mt-0.5 text-[13px] text-muted-foreground">
             {loading || data == null
               ? `Unique contacts per month · ${year}`
-              : `${yearTotal.toLocaleString()} contact-months · ${year}`}
+              : `${yearTotal.toLocaleString()} people-months · ${year}`}
           </p>
         </div>
         <Select value={String(year)} onValueChange={(v) => v && onYearChange(Number(v))}>
@@ -336,7 +336,7 @@ export function MonthlyChart({ data, flows, year, years, onYearChange, loading }
                         <div ref={setTipRef} className="min-w-[220px] rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
                           <p className="font-medium text-foreground">{title}</p>
                           <p className="mb-1 text-muted-foreground tabular-nums">
-                            {total.toLocaleString()} unique contact{total === 1 ? '' : 's'}
+                            {total.toLocaleString()} people messaged
                           </p>
                           <div className="space-y-1 border-t border-border pt-1.5">
                             {rows.map((r) => {

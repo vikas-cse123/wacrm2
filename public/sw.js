@@ -51,8 +51,11 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'New message';
   const options = {
     body: payload.body || '',
-    icon: '/whatsappmax-logo.png',
-    badge: '/whatsappmax-logo.png',
+    // Valid production asset (the app's icon — see /logo.png in the web
+    // manifest). A 404 icon can make strict platforms fail to display the
+    // notification at all, so this must always resolve to a real file.
+    icon: '/logo.png',
+    badge: '/logo.png',
     // Same tag → a follow-up push for the same conversation replaces the
     // previous notification instead of stacking.
     tag: payload.tag || undefined,
@@ -60,7 +63,20 @@ self.addEventListener('push', (event) => {
     data: { url: payload.url || '/inbox' },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  // Always settle the push event. A rejected showNotification (missing
+  // icon, revoked OS permission, unsupported platform) must never become
+  // an unhandled rejection or leave the event dangling — the notification
+  // just won't display, and we log enough to diagnose it without exposing
+  // payload or credential material.
+  event.waitUntil(
+    self.registration.showNotification(title, options).catch((err) => {
+      const reason =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: unknown }).message)
+          : String(err);
+      console.error('[sw] showNotification failed:', reason);
+    }),
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {

@@ -20,6 +20,12 @@ let refreshedCookies: Array<{
   value: string;
   options: Record<string, unknown>;
 }> = [];
+// The `global.fetch` wrapper the middleware wires up (bound to its
+// AbortController). Captured so tests can prove the auth timeout is a
+// real abort, not an abandoned promise.
+let capturedGlobalFetch:
+  | ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)
+  | undefined;
 
 function authApiError(message: string, status: number, code: string) {
   const err = new Error(message) as Error & { status: number; code: string };
@@ -34,21 +40,40 @@ vi.mock("@supabase/ssr", () => ({
     _url: string,
     _key: string,
     opts: {
+      global?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
       cookies: { setAll: (c: typeof refreshedCookies) => void };
     },
-  ) => ({
-    auth: {
-      // Mirrors real auth-js: an expired access token is transparently
-      // refreshed inside getUser(), which rotates the refresh token and
-      // pushes the new cookies through setAll() before resolving.
-      getUser: async () => {
-        if (mockHangForever) await new Promise<never>(() => {});
-        if (mockFailure) throw mockFailure;
-        if (refreshedCookies.length) opts.cookies.setAll(refreshedCookies);
-        return { data: { user: mockUser } };
+  ) => {
+    capturedGlobalFetch = opts.global?.fetch;
+    return {
+      auth: {
+        // Mirrors real auth-js: an expired access token is transparently
+        // refreshed inside getUser(), which rotates the refresh token and
+        // pushes the new cookies through setAll() before resolving.
+        getUser: async () => {
+          if (mockHangForever) {
+            // Real auth-js rejects when the middleware aborts the
+            // underlying fetch at the deadline (AbortError). Mimic that
+            // so the middleware settles and classifies it as a timeout.
+            await new Promise((_, reject) =>
+              setTimeout(
+                () =>
+                  reject(
+                    Object.assign(new Error("This operation was aborted"), {
+                      name: "AbortError",
+                    }),
+                  ),
+                5_000,
+              ),
+            );
+          }
+          if (mockFailure) throw mockFailure;
+          if (refreshedCookies.length) opts.cookies.setAll(refreshedCookies);
+          return { data: { user: mockUser } };
+        },
       },
-    },
-  }),
+    };
+  },
 }));
 
 // Imported after the mock is registered.
@@ -61,6 +86,7 @@ beforeEach(() => {
   mockFailure = null;
   mockHangForever = false;
   refreshedCookies = [];
+  capturedGlobalFetch = undefined;
   vi.useRealTimers();
 });
 
@@ -143,6 +169,33 @@ describe("middleware — transient auth failures never redirect to /login", () =
       // The client shell re-verifies with its own session instead.
       expect(res.headers.get("location")).toBeNull();
       expect(res.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the auth timeout is a REAL fetch abort, not an abandoned promise", async () => {
+    // The middleware wires its AbortController into the client's global
+    // fetch. After the deadline the controller is aborted, so the same
+    // wrapper used for a pending refresh rejects instead of lingering —
+    // an orphaned refresh can no longer consume a token whose rotated
+    // cookies go nowhere.
+    vi.useFakeTimers();
+    mockHangForever = true;
+    try {
+      const pending = middleware(new NextRequest("https://app.test/inbox"));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const res = await pending;
+      expect(res.headers.get("location")).toBeNull();
+      expect(capturedGlobalFetch).toBeTypeOf("function");
+      if (capturedGlobalFetch) {
+        await expect(
+          capturedGlobalFetch("https://test.supabase.co/auth/v1/token", {
+            method: "POST",
+            body: "{}",
+          }),
+        ).rejects.toMatchObject({ name: "AbortError" });
+      }
     } finally {
       vi.useRealTimers();
     }

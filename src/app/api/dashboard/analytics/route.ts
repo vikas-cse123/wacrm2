@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
+import { FOLLOWUP_STATUSES } from "@/lib/followups/types";
 
 export const dynamic = "force-dynamic";
 
@@ -133,7 +134,32 @@ export async function GET(request: Request) {
       );
     }
 
-    const res = NextResponse.json(data);
+    // Scheduled-reminder count (dashboard "Scheduled Reminders" card).
+    // Statuses come from the shared reminder module's enum — the "pending"
+    // set is every status that is NOT a terminal/irrelevant outcome
+    // (scheduled + processing), so sent/failed/cancelled rows never count.
+    // Best-effort: a count failure must not take the whole dashboard down,
+    // so it degrades to 0 with a logged error (the reminder rows themselves
+    // are unaffected — this is read-only).
+    const pendingReminderStatuses = FOLLOWUP_STATUSES.filter(
+      (s) => s !== "sent" && s !== "failed" && s !== "cancelled",
+    );
+    const { count: scheduledCount, error: scheduledError } = await ctx.supabase
+      .from("whatsapp_followups")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", ctx.accountId)
+      .in("status", pendingReminderStatuses);
+    if (scheduledError) {
+      console.error(
+        "[dashboard/analytics] scheduled reminders count error:",
+        scheduledError,
+      );
+    }
+
+    const res = NextResponse.json({
+      ...(data as object),
+      scheduledReminderCount: scheduledError ? 0 : (scheduledCount ?? 0),
+    });
     // Never cache analytics: every dashboard load must show one
     // live request in the Network tab, not a cached response.
     res.headers.set("Cache-Control", "no-store");

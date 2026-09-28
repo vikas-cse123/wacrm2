@@ -253,15 +253,15 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
       : 8
 
   const subtitle = isCustom
-    ? `Unique contacts per day · ${formatDayRangeLabel(range.from, range.to)}`
-    : 'Unique contacts per day · trailing 30 days'
+    ? `People messaged per day · ${formatDayRangeLabel(range.from, range.to)}`
+    : 'People messaged per day · trailing 30 days'
 
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_2px_rgba(15,23,42,0.04)]" aria-label="Contacts Messaged Last 30 Days">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <h2 className="text-[15px] font-semibold tracking-tight text-foreground">
-            Contacts Messaged — Last 30 Days
+            People Messaged — Last 30 Days
           </h2>
           <p className="mt-0.5 text-[13px] text-muted-foreground">
             {subtitle}
@@ -285,6 +285,7 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
             hint="Each bar counts distinct contacts messaged that day."
           />
         ) : (
+          <>
           <div ref={setWrapRef} className="h-[240px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
@@ -353,7 +354,7 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
                         <div ref={setTipRef} className="rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
                           <p className="font-medium text-foreground">{longLabel(date)}</p>
                           <p className="text-muted-foreground tabular-nums">
-                            {value.toLocaleString()} unique contact{value === 1 ? '' : 's'}
+                            {value.toLocaleString()} people messaged
                           </p>
                         </div>
                       )
@@ -374,7 +375,7 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
                       <div ref={setTipRef} className="min-w-[220px] rounded-lg border border-border bg-popover px-3 py-2 text-sm shadow-md">
                         <p className="font-medium text-foreground">{longLabel(day.date)}</p>
                         <p className="mb-1 text-muted-foreground tabular-nums">
-                          {total.toLocaleString()} unique contact{total === 1 ? '' : 's'}
+                          {total.toLocaleString()} people messaged
                         </p>
                         <div className="space-y-1 border-t border-border pt-1.5">
                           {rows.map((r) => {
@@ -453,6 +454,23 @@ export function DailyChart({ data, flows, loading }: DailyChartProps) {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          {stacked && stacks && (
+            <div
+              className="mt-4 flex max-h-20 flex-wrap gap-x-4 gap-y-1.5 overflow-y-auto border-t border-border pt-3"
+              aria-label="Flows legend"
+            >
+              {stacks.keys.map((k) => (
+                <span key={k.key} className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                  <span
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: k.color }}
+                  />
+                  {k.name}
+                </span>
+              ))}
+            </div>
+          )}
+          </>
         )}
       </div>
     </section>

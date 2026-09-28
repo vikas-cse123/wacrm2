@@ -3,6 +3,53 @@ import { createClient } from '@/lib/supabase/server';
 import { supabaseAdmin } from '@/lib/push/admin-client';
 
 /**
+ * GET /api/push/subscribe
+ *
+ * Returns the current user's registered push-subscription endpoints so the
+ * client can verify that a browser PushSubscription actually has a matching
+ * server row (RLS-scoped read of the caller's OWN rows — no service-role
+ * key, no other users' data). Endpoints are opaque push-service URLs and
+ * are not secret, but they are not echoed back in full to logs.
+ *
+ * Used by the client to distinguish "browser thinks it's subscribed but the
+ * server row is missing/stale" from a genuinely working subscription.
+ */
+export async function GET() {
+  try {
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { data, error } = await supabase
+      .from('push_subscriptions')
+      .select('endpoint')
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('[push] list subscriptions failed:', error.message);
+      return NextResponse.json(
+        { error: 'Could not read subscriptions.' },
+        { status: 500 },
+      );
+    }
+
+    return NextResponse.json({
+      endpoints: (data ?? []).map((r: { endpoint: string }) => r.endpoint),
+    });
+  } catch (err) {
+    console.error('[push] list subscriptions error:', err);
+    return NextResponse.json({ error: 'Unexpected error' }, { status: 500 });
+  }
+}
+
+/**
  * POST /api/push/subscribe
  *
  * Body: a serialized PushSubscription:
@@ -42,10 +89,37 @@ export async function POST(request: Request) {
     const endpoint = body?.endpoint as string | undefined;
     const p256dh = body?.keys?.p256dh as string | undefined;
     const auth = body?.keys?.auth as string | undefined;
+    const vapidPublicKey = body?.vapidPublicKey as string | undefined;
 
     if (!endpoint || !p256dh || !auth) {
       return NextResponse.json(
         { error: 'A valid push subscription is required.' },
+        { status: 400 },
+      );
+    }
+
+    // VAPID parity guard: the client inlines NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    // at build time; the server signs with its runtime key pair. If the two
+    // diverge (env changed without a rebuild), every push this subscription
+    // would receive would be rejected by the push service — reject the
+    // subscription up front with an actionable message instead of saving a
+    // row that can never deliver. The public key is not secret, so sending
+    // it back for comparison is safe; the private key never leaves the
+    // server.
+    const serverVapidPublic =
+      process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim() || null;
+    if (
+      serverVapidPublic &&
+      typeof vapidPublicKey === 'string' &&
+      vapidPublicKey.trim() &&
+      vapidPublicKey.trim() !== serverVapidPublic
+    ) {
+      console.error('[push] VAPID public-key mismatch between client and server');
+      return NextResponse.json(
+        {
+          error:
+            'The app was built with a different VAPID key than the server is configured with. Rebuild/deploy the app so the client and server share the same VAPID keys.',
+        },
         { status: 400 },
       );
     }

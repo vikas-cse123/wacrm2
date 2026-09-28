@@ -6,6 +6,13 @@ import {
   isConfirmedUnauthenticated,
   type AuthFailureKind,
 } from '@/lib/auth/auth-errors'
+import { getAuthCookieOptions } from '@/lib/auth/cookie-options'
+
+// Bound on the auth round-trip in the middleware. Kept short so a slow
+// Supabase auth lookup never wedges a request past Nginx's
+// proxy_read_timeout. A timeout here is a TRANSIENT failure (see the
+// classification below) — it must never redirect to /login.
+const AUTH_LOOKUP_TIMEOUT_MS = 5000
 
 export async function middleware(request: NextRequest) {
   // Public pages - always accessible, signed in or not. This check MUST
@@ -22,16 +29,42 @@ export async function middleware(request: NextRequest) {
 
   let supabaseResponse = NextResponse.next({ request })
 
+  // AbortController-based auth timeout. The old implementation raced
+  // getUser() against a timer and ABANDONED the promise on timeout.
+  // getUser() transparently refreshes an expired access token, which
+  // ROTATES the refresh token server-side; an abandoned-but-still-running
+  // refresh could consume the old refresh token and write new cookies to
+  // an object no response carries, wedging the session (the browser is
+  // left holding an already-consumed refresh token with no replacement).
+  // Wired into the client's global fetch, aborting actually CANCELS the
+  // in-flight request: if it never reached Supabase, no rotation happens;
+  // if it did, Supabase's refresh-token reuse interval (10s) lets the next
+  // request succeed with the old token. getUser() settles (throws) at the
+  // deadline instead of lingering, so a slow-but-successful refresh can no
+  // longer deliver rotated cookies that go nowhere.
+  const authController = new AbortController()
+  const authTimer = setTimeout(() => authController.abort(), AUTH_LOOKUP_TIMEOUT_MS)
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // Same cookie options as the browser/server clients so apex and www
+      // share one session when NEXT_PUBLIC_SUPABASE_COOKIE_DOMAIN is set.
+      cookieOptions: getAuthCookieOptions(),
+      global: {
+        fetch: (input, init) =>
+          fetch(input, {
+            ...init,
+            signal: authController.signal,
+          }),
+      },
       cookies: {
         getAll() {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
           supabaseResponse = NextResponse.next({ request })
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
@@ -74,30 +107,21 @@ export async function middleware(request: NextRequest) {
   //   A. confirmed unauthenticated — getUser() resolved user:null, or
   //      the server deterministically rejected the token (401/403).
   //      These redirect to /login exactly as before.
-  //   B. temporary infrastructure failure — lookup timeout, network
-  //      blip, rate limit, 5xx, or the rotation race above. These PASS
-  //      THROUGH untouched: the dashboard shell (client) holds a
-  //      session of its own and re-verifies with a bounded check
-  //      before ever redirecting — a single slow request must not
-  //      decide the user's fate. This is safe: downstream server code
-  //      still enforces auth per-request (RLS everywhere), and a
-  //      truly dead session fails the client check within seconds.
+  //   B. temporary infrastructure failure — lookup timeout (now a real
+  //      abort, so the refresh can't linger and consume a token without
+  //      delivering cookies), network blip, rate limit, 5xx, or the
+  //      rotation race above. These PASS THROUGH untouched: the
+  //      dashboard shell (client) holds a session of its own and
+  //      re-verifies with a bounded check before ever redirecting — a
+  //      single slow request must not decide the user's fate. This is
+  //      safe: downstream server code still enforces auth per-request
+  //      (RLS everywhere), and a truly dead session fails the client
+  //      check within seconds.
   let user = null
   let failure: AuthFailureKind | null = null
   try {
-    // Bound the auth round-trip. When Supabase auth is slow or the
-    // VPS→Supabase path is degraded, `getUser()` can hang (the Edge
-    // sandbox's fetch has no built-in timeout) and wedge the request
-    // past Nginx's proxy_read_timeout → 504 on every page. The 5s
-    // bound stays (it no longer causes logouts — see case B above),
-    // and the hung promise is simply abandoned, never awaited twice.
-    const userOrTimeout = await Promise.race([
-      supabase.auth.getUser(),
-      new Promise<{ data: { user: null } }>((_, reject) =>
-        setTimeout(() => reject(new Error('auth lookup timed out')), 5_000)
-      ),
-    ])
-    const resolved = userOrTimeout.data.user
+    const { data } = await supabase.auth.getUser()
+    const resolved = data.user
     if (resolved) {
       user = resolved
     } else {
@@ -111,6 +135,8 @@ export async function middleware(request: NextRequest) {
       code: authFailureCode(failure),
       path: request.nextUrl.pathname,
     })
+  } finally {
+    clearTimeout(authTimer)
   }
 
   // Auth pages - redirect to dashboard if already logged in.

@@ -80,6 +80,30 @@ describe('loadDashboardAnalytics', () => {
     expect(url).not.toContain('messages?select')
   })
 
+  it('carries the scheduled-reminder count through to the result', async () => {
+    mockFetch({
+      kpis: { uniqueContacts: { current: 0, previous: 0 } },
+      flowBreakdown: { totalContacts: 0, rows: [] },
+      monthlyUniqueContacts: Array(12).fill(0),
+      scheduledReminderCount: 4,
+    })
+
+    const d = await loadDashboardAnalytics(params)
+    expect(d.scheduledReminderCount).toBe(4)
+  })
+
+  it('defaults the scheduled-reminder count to 0 when absent or malformed', async () => {
+    mockFetch({
+      kpis: { uniqueContacts: { current: 0, previous: 0 } },
+      flowBreakdown: { totalContacts: 0, rows: [] },
+      monthlyUniqueContacts: Array(12).fill(0),
+      scheduledReminderCount: -3,
+    })
+
+    const d = await loadDashboardAnalytics(params)
+    expect(d.scheduledReminderCount).toBe(0)
+  })
+
   it('pads short monthly arrays to 12 and drops malformed flow rows', async () => {
     mockFetch({
       kpis: {
