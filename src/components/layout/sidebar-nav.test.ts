@@ -27,6 +27,7 @@ describe('Features removal — sidebar', () => {
     expect(navItems.map((i) => i.href)).toEqual([
       '/dashboard',
       '/inbox',
+      '/recordings',
       '/flows',
       '/followups',
       '/workspace',
@@ -43,9 +44,9 @@ describe('Features removal — sidebar', () => {
     ]);
   });
 
-  it('places Workspace fifth with its Beta badge', () => {
-    expect(navItems[4]).toMatchObject({ href: '/workspace' });
-    expect(navItems[4].beta).toBe(true);
+  it('places Workspace sixth with its Beta badge', () => {
+    expect(navItems[5]).toMatchObject({ href: '/workspace' });
+    expect(navItems[5].beta).toBe(true);
   });
 
   it('places Chat Assignment after the Google Sheets children', () => {

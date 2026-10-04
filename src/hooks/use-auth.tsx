@@ -530,7 +530,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // races against a timeout so push cleanup can never block logout.
     if ("serviceWorker" in navigator && "PushManager" in window) {
       try {
-        const withTimeout = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+        const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
           Promise.race([
             promise.then(
               (value) => value,

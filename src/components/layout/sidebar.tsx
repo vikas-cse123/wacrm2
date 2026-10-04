@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   MessageSquareText,
+  Mic,
   ChevronDown,
   ChevronUp,
   ExternalLink,
@@ -54,6 +55,7 @@ interface NavItem {
 export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
+  { href: "/recordings", label: "Recordings", icon: Mic },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/followups", label: "Reminders", icon: CalendarClock },
   { href: "/workspace", label: "Workspace", icon: Table2, beta: true },
