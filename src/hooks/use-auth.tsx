@@ -520,18 +520,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
     // Unsubscribe Web Push before signing out so the server stops
     // sending push notifications to this device for this user.
+    // Best-effort with hard timeouts: `navigator.serviceWorker.ready`
+    // NEVER settles when no service worker is active (registration
+    // deferred to window load, failed/unsupported registration, etc),
+    // and a pending promise is not caught by try/catch — awaiting it
+    // here used to stall signOut() forever before supabase.auth.signOut()
+    // (no /auth/v1/logout, no redirect, no error). `getRegistration()`
+    // resolves immediately (undefined when none), and every step below
+    // races against a timeout so push cleanup can never block logout.
     if ("serviceWorker" in navigator && "PushManager" in window) {
       try {
-        const reg = await navigator.serviceWorker.ready;
-        const sub = await reg.pushManager.getSubscription();
+        const withTimeout = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+          Promise.race([
+            promise.then(
+              (value) => value,
+              () => fallback,
+            ),
+            new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+          ]);
+        const reg = await withTimeout(
+          navigator.serviceWorker.getRegistration(),
+          1500,
+          undefined,
+        );
+        const sub = await withTimeout(
+          reg?.pushManager.getSubscription() ?? Promise.resolve(null),
+          1500,
+          null,
+        );
         if (sub) {
           const endpoint = sub.endpoint;
-          await sub.unsubscribe().catch(() => {});
-          await fetch("/api/push/unsubscribe", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ endpoint }),
-          }).catch(() => {});
+          await withTimeout(sub.unsubscribe().catch(() => false), 1500, false);
+          await withTimeout(
+            fetch("/api/push/unsubscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ endpoint }),
+            }).catch(() => undefined),
+            2000,
+            undefined,
+          );
         }
       } catch {
         // Best-effort — don't block signout on push cleanup failure.
