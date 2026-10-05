@@ -188,6 +188,7 @@ describe("flow table columns", () => {
       "submission_time",
       "name",
       "phone",
+      "latest_recording",
       "Name",
       "TravelDate",
       "status",
@@ -199,6 +200,7 @@ describe("flow table columns", () => {
       "submission_time",
       "name",
       "phone",
+      "latest_recording",
       "status",
     ]);
   });
@@ -226,8 +228,7 @@ describe("flow table columns", () => {
 });
 
 describe("workspace column order invariant", () => {
-  it("submission Time is always index 0, then Name, Phone, answers, Status last", () => {
-    for (const keys of [[], [{ key: "A" }], [{ key: "A" }, { key: "B" }, { key: "C" }]]) {
+  it("submission Time is always index 0, then Name, Phone, answers, Status last", () => {    for (const keys of [[], [{ key: "A" }], [{ key: "A" }, { key: "B" }, { key: "C" }]]) {
       const { columns } = buildFlowTableColumns(nodesFor(keys), "start");
       const order = columns.map((c) => c.key);
       expect(order[0]).toBe("submission_time");
@@ -246,6 +247,17 @@ describe("workspace column order invariant", () => {
     const statusIdx = columns.findIndex((c) => c.key === "status");
     expect(answerIdx).toBeGreaterThan(2);
     expect(statusIdx).toBe(columns.length - 1);
+  });
+
+  it("Latest Recording is a system column immediately after Phone Number", () => {
+    for (const keys of [[], [{ key: "A" }]]) {
+      const { columns } = buildFlowTableColumns(nodesFor(keys), "start");
+      const order = columns.map((c) => c.key);
+      expect(order[3]).toBe("latest_recording");
+      const col = columns.find((c) => c.key === "latest_recording");
+      expect(col?.system).toBe(true);
+      expect(col?.label).toBe("Latest Recording");
+    }
   });
 });
 
@@ -347,19 +359,21 @@ describe("WhatsApp Name vs flow Name distinction (display-only)", () => {
       "full_name",
       "name",
       "phone",
+      "latest_recording",
       "status",
     ]);
     expect(columns.filter((c) => c.system).map((c) => c.key)).toEqual([
       "submission_time",
       "name",
       "phone",
+      "latest_recording",
       "status",
     ]);
   });
 
   it("8. nothing is removed or merged: every column survives the rename", () => {
     const plain = buildFlowTableColumns(nodesFor(nameQuestion), "start");
-    expect(plain.columns).toHaveLength(5);
+    expect(plain.columns).toHaveLength(6);
     // The flow question keeps its own identity and stays visible.
     expect(
       plain.columns.find((c) => !c.system && c.key === "full_name"),
@@ -387,6 +401,7 @@ describe("WhatsApp Name vs flow Name distinction (display-only)", () => {
       "Name",
       "WhatsApp Name",
       "Phone Number",
+      "Latest Recording",
       "Status",
     ]);
   });
@@ -401,6 +416,7 @@ describe("WhatsApp Name vs flow Name distinction (display-only)", () => {
       "Submission Time",
       "Name",
       "Phone Number",
+      "Latest Recording",
       "What is your TravelDate?",
       "What is your Hotel?",
       "Status",
@@ -445,6 +461,7 @@ describe("flow Name column position (immediately after Phone Number)", () => {
       "Name",
       "WhatsApp Name",
       "Phone Number",
+      "Latest Recording",
       "Travel date?",
       "Status",
     ]);
@@ -453,6 +470,7 @@ describe("flow Name column position (immediately after Phone Number)", () => {
       "full_name",
       "name",
       "phone",
+      "latest_recording",
       "TravelDate",
       "status",
     ]);

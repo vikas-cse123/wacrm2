@@ -14,9 +14,9 @@ import {
 } from "../_constants";
 
 export const metadata: Metadata = {
-  title: "Terms and Conditions | Interscale WhatsApp CRM",
+  title: "Terms and Conditions | WhatsApp Max",
   description:
-    "The terms governing use of Interscale WhatsApp CRM, including permitted use, integrations, data ownership, subscriptions and liability.",
+    "The terms governing use of WhatsApp Max, including permitted use, integrations, data ownership, subscriptions and liability.",
 };
 
 export default function TermsAndConditionsPage() {

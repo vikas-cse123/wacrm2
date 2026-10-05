@@ -29,7 +29,7 @@ function LegalHeader() {
         <Link href="/login" className="flex items-center gap-3">
           <Image
             src="/logo.png"
-            alt={COMPANY_NAME}
+            alt={PRODUCT_NAME}
             width={36}
             height={36}
             className="rounded-lg"

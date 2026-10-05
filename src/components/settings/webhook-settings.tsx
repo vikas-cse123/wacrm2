@@ -390,7 +390,7 @@ export function WebhookSettings() {
             Webhooks
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Interscale will POST a signed JSON payload to your URL for every subscribed event.
+            WhatsApp Max will POST a signed JSON payload to your URL for every subscribed event.
           </p>
         </div>
         {!showAdd && (

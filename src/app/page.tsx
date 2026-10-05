@@ -29,14 +29,15 @@ import {
 } from '@/lib/site';
 
 const TITLE =
-  'Interscale WhatsApp CRM | WhatsApp Conversations, Automation and Google Sheets Sync';
+  'WhatsApp Max | WhatsApp Conversations, Automation and Google Sheets Sync';
 const DESCRIPTION =
-  'Interscale WhatsApp CRM helps businesses manage WhatsApp conversations, contacts, pipelines, broadcasts and automation flows, with optional Google Sheets synchronisation.';
+  'WhatsApp Max helps businesses manage WhatsApp conversations, contacts, pipelines, broadcasts and automation flows, with optional Google Sheets synchronisation.';
 
 // The homepage must be publicly indexable — the root layout marks the
 // whole app `robots: index:false`, so we override that here (the same
 // way the legal pages do). `title.absolute` bypasses the root layout's
-// "%s — interscale" template so Google sees the exact required title.
+// `title.absolute` bypasses the root layout's title template so Google
+// sees the exact required title.
 export const metadata: Metadata = {
   metadataBase: new URL(WEBSITE_DOMAIN),
   title: { absolute: TITLE },
@@ -183,7 +184,7 @@ function Header() {
         <Link href="/" className="flex items-center gap-2.5">
           <Image
             src="/logo.png"
-            alt={COMPANY_NAME}
+            alt={PRODUCT_NAME}
             width={36}
             height={36}
             className="rounded-lg"
@@ -240,7 +241,7 @@ function Hero() {
           <div>
             <span className="border-border bg-card text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium">
               <Sparkles className="text-primary size-3.5" />
-              WhatsApp CRM &amp; automation platform
+              WhatsApp messaging &amp; automation platform
             </span>
             <h1 className="text-foreground mt-5 text-4xl font-bold tracking-tight sm:text-5xl">
               {PRODUCT_NAME}
@@ -629,7 +630,7 @@ function Pricing() {
             Included with Interscale Marketing
           </span>
           <h2 className="text-foreground mt-5 text-4xl font-bold tracking-tight sm:text-5xl">
-            Powerful WhatsApp CRM.
+            Powerful WhatsApp Max.
             <span className="text-primary block">Zero software bill.</span>
           </h2>
           <p className="text-muted-foreground mx-auto mt-5 max-w-2xl text-base leading-relaxed">
@@ -742,7 +743,7 @@ function Pricing() {
               </span>
               <div>
                 <p className="text-foreground text-sm font-semibold">
-                  With Interscale, your CRM cost stays at ₹0.
+                  With WhatsApp Max, your CRM cost stays at ₹0.
                 </p>
                 <p className="text-muted-foreground mt-0.5 text-xs">
                   No platform fee and no additional Meta messaging charge.
@@ -791,7 +792,7 @@ function Footer() {
             <div className="flex items-center gap-2.5">
               <Image
                 src="/logo.png"
-                alt={COMPANY_NAME}
+                alt={PRODUCT_NAME}
                 width={32}
                 height={32}
                 className="rounded-lg"
@@ -801,7 +802,7 @@ function Footer() {
               </span>
             </div>
             <p className="text-muted-foreground mt-4 text-sm leading-relaxed">
-              A WhatsApp CRM and automation platform by {COMPANY_NAME}.
+              A WhatsApp messaging and automation platform by {COMPANY_NAME}.
             </p>
           </div>
 

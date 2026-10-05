@@ -112,11 +112,12 @@ export default function RecordingsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Recording</TableHead>
-                  <TableHead>Recorded</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead className="w-[280px]">Play</TableHead>
+                    <TableHead>Recording</TableHead>
+                    <TableHead>Recorded</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Uploaded by</TableHead>
+                    <TableHead className="w-[280px]">Play</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -130,6 +131,9 @@ export default function RecordingsPage() {
                     </TableCell>
                     <TableCell>{formatDuration(recording.duration_seconds)}</TableCell>
                     <TableCell>{formatSize(recording.file_size)}</TableCell>
+                    <TableCell className="max-w-[140px] truncate">
+                      {recording.uploader_name ?? 'Unknown'}
+                    </TableCell>
                     <TableCell>
                       {/* preload="none": nothing is fetched until the
                           user presses play — the list stays light with

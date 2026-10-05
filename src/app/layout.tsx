@@ -84,8 +84,8 @@ const FONT_VARIABLE_CLASSES = [
 
 export const metadata: Metadata = {
   title: {
-    default: "Interscale Marketing",
-    template: "%s — interscale"
+    default: "WhatsApp Max",
+    template: "%s — WhatsApp Max"
     
   },
   icons: {
@@ -93,12 +93,12 @@ export const metadata: Metadata = {
     shortcut: "/logo.png",
     apple: "/logo.png",
   },
-  description: "Interscale Marketing WhatsApp CRM",
+  description: "WhatsApp Max by Interscale Marketing",
   // Lets iOS treat the installed shortcut as a standalone app (required
   // for Web Push on iOS 16.4+). Next links the manifest.ts automatically.
   appleWebApp: {
     capable: true,
-    title: "Interscale",
+    title: "WhatsApp Max",
     statusBarStyle: "black-translucent",
   },
   robots: {

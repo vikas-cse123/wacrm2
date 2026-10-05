@@ -15,9 +15,9 @@ import {
 } from "../_constants";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy | Interscale WhatsApp CRM",
+  title: "Privacy Policy | WhatsApp Max",
   description:
-    "How Interscale WhatsApp CRM collects, uses, protects and shares personal information, including data accessed through Google APIs.",
+    "How WhatsApp Max collects, uses, protects and shares personal information, including data accessed through Google APIs.",
 };
 
 export default function PrivacyPolicyPage() {

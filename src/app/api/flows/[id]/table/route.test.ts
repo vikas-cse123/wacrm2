@@ -76,6 +76,10 @@ const h = vi.hoisted(() => ({
   overrides: [] as Array<Record<string, unknown>>,
   // Media messages for the page's conversations (messages rows).
   messages: [] as Array<Record<string, unknown>>,
+  // Call recordings for the page's contacts (call_recordings rows).
+  recordings: [] as Array<Record<string, unknown>>,
+  // Uploader profiles (profiles rows).
+  profiles: [] as Array<Record<string, unknown>>,
   // Service-role provisioning capture (default business columns).
   adminFields: [] as Array<Record<string, unknown>>,
   adminInserts: [] as Array<Record<string, unknown>[]>,
@@ -183,6 +187,30 @@ vi.mock("@/lib/supabase/server", () => {
           }),
         };
       }
+      if (table === "call_recordings") {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: () => ({
+                order: () => ({
+                  order: () => ({
+                    order: () => ({
+                      order: async () => ({ data: h.recordings, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "profiles") {
+        return {
+          select: () => ({
+            in: async () => ({ data: h.profiles, error: null }),
+          }),
+        };
+      }
       return {
         select: () => ({
           eq: () => ({
@@ -220,6 +248,8 @@ beforeEach(() => {
   h.rpcArgs = null;
   h.overrides = [];
   h.messages = [];
+  h.recordings = [];
+  h.profiles = [];
   h.adminFields = [];
   h.adminInserts = [];
   h.adminScopes = [];
@@ -598,5 +628,88 @@ describe("GET table with media attachment enrichment", () => {
       mediaByConversation: Record<string, unknown>;
     };
     expect(json.mediaByConversation).toEqual({});
+  });
+});
+
+describe("GET table with latest-recording enrichment", () => {
+  it("attaches the latest recording per contact with the uploader name", async () => {
+    h.recordings = [
+      {
+        id: "r-old",
+        contact_id: "c-1",
+        duration_seconds: 14,
+        recorded_at: "2026-10-03T12:00:00.000Z",
+        created_at: "2026-10-03T12:00:00.000Z",
+        file_name: "old.ogg",
+        uploaded_by: "u-9",
+      },
+      {
+        id: "r-new",
+        contact_id: "c-1",
+        duration_seconds: 35,
+        recorded_at: "2026-10-04T12:00:00.000Z",
+        created_at: "2026-10-04T12:00:00.000Z",
+        file_name: "new.ogg",
+        uploaded_by: "u-9",
+      },
+    ];
+    h.profiles = [{ user_id: "u-9", full_name: "Akash", email: "a@x.com" }];
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      latestRecordingByContact: Record<
+        string,
+        { id: string; duration_seconds: number; uploader_name: string }
+      >;
+    };
+    // Latest wins; the uploader resolves from profiles.
+    expect(json.latestRecordingByContact["c-1"]).toMatchObject({
+      id: "r-new",
+      duration_seconds: 35,
+      uploader_name: "Akash",
+    });
+    // c-2 has no recording — no entry, never null-phantom.
+    expect(json.latestRecordingByContact["c-2"] ?? null).toBeNull();
+  });
+
+  it("returns an empty map when nobody on the page has a recording", async () => {
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      latestRecordingByContact: Record<string, unknown>;
+    };
+    expect(json.latestRecordingByContact).toEqual({});
+  });
+
+  it("falls back to Unknown when the uploader profile is gone", async () => {
+    h.recordings = [
+      {
+        id: "r-1",
+        contact_id: "c-1",
+        duration_seconds: 20,
+        recorded_at: null,
+        created_at: "2026-10-04T12:00:00.000Z",
+        file_name: "x.ogg",
+        uploaded_by: "u-gone",
+      },
+    ];
+    h.profiles = [];
+    const res = await GET(
+      new Request("https://app.test/api/flows/flow-1/table"),
+      { params: Promise.resolve({ id: "flow-1" }) },
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      latestRecordingByContact: Record<string, { uploader_name: string }>;
+    };
+    expect(json.latestRecordingByContact["c-1"].uploader_name).toBe(
+      "Unknown"
+    );
   });
 });

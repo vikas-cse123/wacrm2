@@ -58,6 +58,12 @@ export interface CallRecording {
   contact_id: string | null;
   conversation_id: string | null;
   uploaded_by: string | null;
+  /**
+   * Resolved display name of the uploader (`profiles.full_name`,
+   * else `profiles.email`, else `'Unknown'`). Joined server-side
+   * in one batch — never N+1. Absent on older responses.
+   */
+  uploader_name?: string | null;
   storage_bucket: string;
   storage_path: string;
   file_name: string | null;
@@ -68,13 +74,17 @@ export interface CallRecording {
   created_at: string;
 }
 
-export function toCallRecording(row: Record<string, unknown>): CallRecording {
+export function toCallRecording(
+  row: Record<string, unknown>,
+  uploaderName?: string | null,
+): CallRecording {
   return {
     id: row.id as string,
     account_id: row.account_id as string,
     contact_id: (row.contact_id as string | null) ?? null,
     conversation_id: (row.conversation_id as string | null) ?? null,
     uploaded_by: (row.uploaded_by as string | null) ?? null,
+    uploader_name: uploaderName ?? null,
     storage_bucket: row.storage_bucket as string,
     storage_path: row.storage_path as string,
     file_name: (row.file_name as string | null) ?? null,
@@ -84,6 +94,83 @@ export function toCallRecording(row: Record<string, unknown>): CallRecording {
     recorded_at: (row.recorded_at as string | null) ?? null,
     created_at: row.created_at as string,
   };
+}
+
+/**
+ * Display name for an uploader profile: `full_name`, else
+ * `email`, else `'Unknown'`. Pure so list routes, the Workspace
+ * enrichment, and tests share one rule.
+ */
+export function resolveUploaderName(profile: {
+  full_name?: unknown;
+  email?: unknown;
+} | null): string {
+  const fullName =
+    typeof profile?.full_name === 'string' ? profile.full_name.trim() : '';
+  if (fullName) return fullName;
+  const email =
+    typeof profile?.email === 'string' ? profile.email.trim() : '';
+  if (email) return email;
+  return 'Unknown';
+}
+
+/**
+ * Effective sort timestamp for a recording: `recorded_at` when
+ * present (the call's time), else `created_at` (the upload's
+ * time). `recorded_at` is nullable by design, so ordering must
+ * never rely on it alone.
+ */
+export function recordingSortTime(row: {
+  recorded_at?: string | null;
+  created_at?: string | null;
+}): number {
+  const recorded = typeof row.recorded_at === 'string' ? Date.parse(row.recorded_at) : NaN;
+  if (Number.isFinite(recorded)) return recorded;
+  const created = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN;
+  return Number.isFinite(created) ? created : 0;
+}
+
+/**
+ * Latest recording per contact from an already account-scoped
+ * row set. Deterministic: effective time DESC, then `created_at`
+ * DESC, then `id` DESC. Pure — the table route batches one
+ * query for the page's contacts and reduces client-side instead
+ * of N+1 requests (PostgREST has no per-group limit, and no new
+ * RPC/migration is wanted for Phase 2A).
+ */
+export function latestByContact<
+  T extends { id: string; recorded_at?: string | null; created_at?: string | null },
+>(rows: T[], contactIdOf: (row: T) => string | null): Map<string, T> {
+  const out = new Map<string, T>();
+  for (const row of rows) {
+    const contactId = contactIdOf(row);
+    if (!contactId) continue;
+    const prev = out.get(contactId);
+    if (!prev) {
+      out.set(contactId, row);
+      continue;
+    }
+    const time = recordingSortTime(row);
+    const prevTime = recordingSortTime(prev);
+    if (
+      time > prevTime ||
+      (time === prevTime &&
+        ((row.created_at ?? '') > (prev.created_at ?? '') ||
+          ((row.created_at ?? '') === (prev.created_at ?? '') && row.id > prev.id)))
+    ) {
+      out.set(contactId, row);
+    }
+  }
+  return out;
+}
+
+/** Compact `m:ss` duration for table cells. Null/unknown → em dash. */
+export function formatRecordingDuration(totalSeconds: number | null | undefined): string {
+  if (totalSeconds === null || totalSeconds === undefined || !Number.isFinite(totalSeconds)) {
+    return '—';
+  }
+  const total = Math.max(0, Math.floor(totalSeconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
 export function isRecordingMimeType(value: unknown): value is RecordingMimeType {
@@ -118,12 +205,16 @@ export function validateRecordingFile(file: {
 
 /**
  * Validate the optional metadata fields. `recorded_at` must be a
- * parseable timestamp; `duration_seconds` a non-negative integer.
+ * parseable timestamp; `duration_seconds` a non-negative integer;
+ * `direction` is 'in' | 'out' when present; `phone_number` is an
+ * optional short string (matching evidence, normalized server-side).
  * Returns the human-facing problem, or null when acceptable.
  */
 export function validateRecordingMetadata(input: {
   recordedAt: string | null;
   durationSeconds: unknown;
+  direction?: unknown;
+  phoneNumber?: unknown;
 }): string | null {
   if (input.recordedAt !== null && Number.isNaN(Date.parse(input.recordedAt))) {
     return "'recorded_at' must be an ISO 8601 timestamp.";
@@ -137,5 +228,25 @@ export function validateRecordingMetadata(input: {
       return "'duration_seconds' must be a non-negative integer.";
     }
   }
+  if (input.direction !== null && input.direction !== undefined) {
+    if (input.direction !== 'in' && input.direction !== 'out') {
+      return "'direction' must be 'in' or 'out'.";
+    }
+  }
+  if (input.phoneNumber !== null && input.phoneNumber !== undefined) {
+    if (typeof input.phoneNumber !== 'string') {
+      return "'phone_number' must be a string.";
+    }
+    if (input.phoneNumber.length > MAX_PHONE_NUMBER_LENGTH) {
+      return `'phone_number' must be at most ${MAX_PHONE_NUMBER_LENGTH} characters.`;
+    }
+  }
   return null;
 }
+
+/**
+ * Maximum accepted `phone_number` length. Matching needs ~15
+ * digits plus formatting; anything longer is abuse, not a phone
+ * number — rejected with 400 before any Storage write.
+ */
+export const MAX_PHONE_NUMBER_LENGTH = 64;

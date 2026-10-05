@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// Uses the WACRM product logo (public/logo.png — the same asset as
+// Uses the WhatsApp Max product logo (public/logo.png — the same asset as
 // the login page and sidebar) as the browser favicon. Next.js
 // renders this at build time and auto-injects <link rel="icon">
 // into <head>. The obsolete public/favicon.ico was removed so no

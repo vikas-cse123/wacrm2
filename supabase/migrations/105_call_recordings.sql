@@ -24,7 +24,9 @@
 -- but dashboard-side writes stay member-gated like contacts).
 --
 -- Idempotent — safe to re-run.
--- ============================================================
+-- -- ============================================================
+-- // This is used to indentify the unique surplus of the migration, 
+-- // it is used to avoid the dupicate migration when running the migrations multiple times.
 
 CREATE TABLE IF NOT EXISTS call_recordings (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

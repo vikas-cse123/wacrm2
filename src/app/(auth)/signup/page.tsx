@@ -131,7 +131,7 @@ function SignupPageInner() {
     ) : (
       <Image
         src="/logo.png"
-        alt="Interscale Marketing"
+        alt="WhatsApp Max"
         width={48}
         height={48}
         className="rounded-xl"
@@ -146,7 +146,7 @@ function SignupPageInner() {
   <CardDescription className="text-muted-foreground">
     {inviteToken
       ? "Verify your email, then accept the invitation to join your team."
-      : "Get started with Interscale Marketing"}
+      : "Get started with WhatsApp Max"}
   </CardDescription>
 </CardHeader>
           <CardContent>
@@ -180,7 +180,7 @@ function SignupPageInner() {
   ) : (
     <Image
       src="/logo.png"
-      alt="Interscale Marketing"
+      alt="WhatsApp Max"
       width={48}
       height={48}
       className="rounded-xl"
@@ -193,7 +193,7 @@ function SignupPageInner() {
           <CardDescription className="text-muted-foreground">
             {inviteToken
               ? "Verify your email, then accept the invitation to join your team."
-              : "Get started with Interscale Marketing"}
+              : "Get started with WhatsApp Max"}
           </CardDescription>
         </CardHeader>
         <CardContent>

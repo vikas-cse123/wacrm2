@@ -130,6 +130,32 @@ export interface FlowTablePayload {
    * system). Absent on older responses — always treated as {}.
    */
   mediaByConversation?: Record<string, AttachmentMediaEntry[]>;
+  /**
+   * Latest call recording per contact for this page's rows,
+   * keyed by contact id. Additive, read-only enrichment (same
+   * pattern as mediaByConversation): one batched query + one
+   * profiles join, never N+1. Contacts without a recording have
+   * no entry. Absent on older responses — always treated as {}.
+   */
+  latestRecordingByContact?: Record<string, LatestRecordingEntry>;
+}
+
+/**
+ * Latest call recording for one contact — the subset the
+ * Workspace needs for the "Latest Recording" column and the
+ * lead drawer. Metadata only: audio streams on demand through
+ * the existing `/api/recordings/[id]/audio` proxy, never here.
+ */
+export interface LatestRecordingEntry {
+  /** The `call_recordings` row id (playback URL key). */
+  id: string;
+  contact_id: string;
+  duration_seconds: number | null;
+  recorded_at: string | null;
+  created_at: string;
+  file_name: string | null;
+  /** Resolved uploader (`full_name` → `email` → `'Unknown'`). */
+  uploader_name: string | null;
 }
 
 export const FLOW_TABLE_PAGE_SIZE = 25;
@@ -282,6 +308,12 @@ export function buildFlowTableColumns(
     { key: "submission_time", label: "Submission Time", system: true },
     { key: "name", label: "Name", system: true },
     { key: "phone", label: "Phone Number", system: true },
+    // Latest call recording, right after the contact identity it
+    // belongs to. A system column (never a flow answer, never
+    // sent to Sheets — Sheets derives its own columns from nodes
+    // via deriveFlowColumns/orderNodesForSheets, not from here).
+    // Renders through a dedicated audio cell, not cellText.
+    { key: "latest_recording", label: "Latest Recording", system: true },
   ];
   if (derived.name) {
     answerKeys.push(derived.name.key);

@@ -135,7 +135,7 @@ export async function sendEmailViaResend(
     throw new Error("Resend API key not configured");
   }
   const from =
-    process.env.RESEND_FROM || "WACRM <onboarding@resend.dev>";
+    process.env.RESEND_FROM || "WhatsApp Max <onboarding@resend.dev>";
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RESEND_TIMEOUT_MS);

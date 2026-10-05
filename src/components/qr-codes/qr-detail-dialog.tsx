@@ -117,8 +117,8 @@ export function QrDetailDialog({
               <DialogTitle>{qr.name ?? "Imported from WhatsApp"}</DialogTitle>
               <DialogDescription>
                 {stored
-                  ? "Created by WhatsApp — WACRM keeps the name and link."
-                  : "This QR code exists in WhatsApp but has no WACRM name yet."}
+                  ? "Created by WhatsApp — WhatsApp Max keeps the name and link."
+                  : "This QR code exists in WhatsApp but has no WhatsApp Max name yet."}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-5 sm:grid-cols-[220px_minmax(0,1fr)]">
@@ -258,7 +258,7 @@ export function QrDetailDialog({
               ) : (
                 canEdit && (
                   <Button type="button" size="sm" onClick={onNameImported}>
-                    Assign a name in WACRM
+                    Assign a name in WhatsApp Max
                   </Button>
                 )
               )}

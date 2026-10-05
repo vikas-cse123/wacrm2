@@ -203,7 +203,7 @@ export function FollowupsPage() {
                 : `No ${tab} reminders`}
             </p>
             <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-              Choose a date and time, write the message — WACRM delivers it
+              Choose a date and time, write the message — WhatsApp Max delivers it
               to your WhatsApp number.
             </p>
           </Card>

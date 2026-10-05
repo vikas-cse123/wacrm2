@@ -17,7 +17,15 @@
 //                      (defaults to upload time).
 //   duration_seconds   optional non-negative int.
 //   contact_id         optional UUID — must belong to the account.
+//                      Explicit and authoritative: wins over phone
+//                      matching when present.
 //   conversation_id    optional UUID — must belong to the account.
+//   phone_number       optional string (≤64 chars) — the call's
+//                      phone number as seen by the device. Matching
+//                      EVIDENCE only: normalized server-side and
+//                      resolved to contact_id within the key's
+//                      account (Phase 2B).
+//   direction          optional 'in' | 'out' — anything else 400s.
 //
 // Validation runs BEFORE any Storage write so a bad payload 400s
 // without leaving an orphan object (same discipline as
@@ -39,6 +47,7 @@ import {
   validateRecordingFile,
   validateRecordingMetadata,
 } from '@/lib/recordings/recordings';
+import { matchContactByPhone } from '@/lib/recordings/contact-matching';
 
 async function accountOwns(
   supabase: SupabaseClient,
@@ -88,10 +97,28 @@ export async function POST(request: Request) {
     const metaProblem = validateRecordingMetadata({
       recordedAt: rawRecordedAt,
       durationSeconds,
+      direction:
+        typeof form.get('direction') === 'string'
+          ? (form.get('direction') as string).trim() || null
+          : null,
+      phoneNumber:
+        typeof form.get('phone_number') === 'string'
+          ? (form.get('phone_number') as string).trim() || null
+          : null,
     });
     if (metaProblem) {
       return fail('bad_request', metaProblem, 400);
     }
+    const rawDirection =
+      typeof form.get('direction') === 'string' &&
+      (form.get('direction') as string).trim() !== ''
+        ? (form.get('direction') as string).trim()
+        : null;
+    const rawPhoneNumber =
+      typeof form.get('phone_number') === 'string' &&
+      (form.get('phone_number') as string).trim() !== ''
+        ? (form.get('phone_number') as string).trim()
+        : null;
 
     const rawContactId =
       typeof form.get('contact_id') === 'string' &&
@@ -123,6 +150,27 @@ export async function POST(request: Request) {
       );
     }
 
+    // Contact association, in precedence order: explicit
+    // contact_id wins; else server-side phone matching within the
+    // key's account; else unlinked. Matching NEVER fails the
+    // upload — ambiguity or lookup trouble degrades to NULL.
+    let resolvedContactId = rawContactId;
+    let matched = rawContactId !== null;
+    if (!resolvedContactId && rawPhoneNumber) {
+      const outcome = await matchContactByPhone(
+        ctx.supabase,
+        ctx.accountId,
+        rawPhoneNumber
+      );
+      if (outcome.kind === 'unique') {
+        resolvedContactId = outcome.contactId;
+        matched = true;
+      } else {
+        // Safe diagnostics only — never phone numbers or candidates.
+        console.log(`[api/v1/recordings] contact match=${outcome.kind}`);
+      }
+    }
+
     // Account-scoped path — the same convention (and the same RLS
     // segment) every other media upload uses. `buildMediaPath`
     // sanitizes the CallVault filename (`20260501_120000_+1555….ogg`).
@@ -146,7 +194,7 @@ export async function POST(request: Request) {
       .from('call_recordings')
       .insert({
         account_id: ctx.accountId,
-        contact_id: rawContactId,
+        contact_id: resolvedContactId,
         conversation_id: rawConversationId,
         // Audit attribution to whoever minted the key (nullable —
         // mirrors the `api_keys.created_by` contract). Never used
@@ -159,6 +207,11 @@ export async function POST(request: Request) {
         file_size: file.size,
         duration_seconds: durationSeconds,
         recorded_at: rawRecordedAt,
+        // Raw trimmed device evidence (migration 106). Stored as
+        // received — normalization happens only for matching, never
+        // by overwriting this column.
+        phone_number: rawPhoneNumber,
+        direction: rawDirection,
       })
       .select('*')
       .single();
@@ -171,7 +224,10 @@ export async function POST(request: Request) {
       return fail('internal', 'Failed to save the recording', 500);
     }
 
-    return ok(toCallRecording(created as Record<string, unknown>), 201);
+    return ok(
+      { ...toCallRecording(created as Record<string, unknown>), matched },
+      201
+    );
   } catch (err) {
     return toApiErrorResponse(err);
   }

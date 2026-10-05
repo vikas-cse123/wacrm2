@@ -3,7 +3,7 @@ import { execSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 // ---------------------------------------------------------------------------
-// WACRM branding — public/logo.png is the single source of truth.
+// WhatsApp Max branding — public/logo.png is the single source of truth.
 // ---------------------------------------------------------------------------
 
 const root = process.cwd();
@@ -68,7 +68,7 @@ describe("7. favicon uses /logo.png with no conflicts", () => {
   });
 });
 
-describe("8. no stale WACRM logo reference remains", () => {
+describe("8. no stale logo reference remains", () => {
   it("whatsappmax-logo.png appears nowhere in src", () => {
     const out = execSync(
       "grep -rn 'whatsappmax-logo' src/ --exclude=branding.test.ts || true",

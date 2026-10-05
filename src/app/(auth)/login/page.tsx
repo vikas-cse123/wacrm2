@@ -78,7 +78,7 @@ function LoginPageInner() {
             ) : (
               <Image
                 src="/logo.png"
-                alt="Interscale Marketing"
+                alt="WhatsApp Max"
                 width={48}
                 height={48}
                 className="rounded-xl"

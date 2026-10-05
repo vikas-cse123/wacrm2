@@ -237,7 +237,7 @@ export function Sidebar({ open = false, onClose, collapsed = false, onToggleColl
           <Link href="/dashboard" className="flex items-center gap-2" aria-label="Dashboard">
   <Image
     src="/logo.png"
-    alt="Interscale Marketing"
+    alt="WhatsApp Max"
     width={32}
     height={32}
     className="h-8 w-8 rounded-lg"

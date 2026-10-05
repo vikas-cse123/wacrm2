@@ -97,6 +97,7 @@ import type {
   FlowTablePayload,
   FlowTableRow,
   FlowTableView,
+  LatestRecordingEntry,
 } from '@/lib/flows/flow-tables';
 import {
   flowColumnRenderKey,
@@ -105,6 +106,10 @@ import {
   resolveAttachmentUrl,
 } from '@/lib/flows/flow-tables';
 import { formatPhoneForDisplay } from '@/lib/whatsapp/phone-utils';
+import {
+  formatRecordingDuration,
+  type CallRecording,
+} from '@/lib/recordings/recordings';
 import {
   applyVisibility,
   useWorkspaceVisibility,
@@ -137,6 +142,102 @@ function formatDateTime(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/**
+ * Compact latest-recording cell: `▶ 00:35 · Akash`, playable
+ * in place. The player lazy-loads (`preload="none"` — no request
+ * until Play), and player clicks never bubble to the row (the
+ * row opens the lead drawer). No recording → "No recording".
+ */
+function LatestRecordingCell({ entry }: { entry: LatestRecordingEntry | null }) {
+  if (!entry) {
+    return <span className="text-muted-foreground text-sm">No recording</span>;
+  }
+  return (
+    <span
+      className="flex items-center gap-2"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <audio
+        src={`/api/recordings/${entry.id}/audio`}
+        controls
+        preload="none"
+        className="h-8 w-full max-w-[180px]"
+      />
+      <span className="text-sm whitespace-nowrap tabular-nums">
+        {formatRecordingDuration(entry.duration_seconds)}
+      </span>
+      <span className="text-muted-foreground max-w-[120px] truncate text-sm">
+        {entry.uploader_name ?? 'Unknown'}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Lead recordings section for the row drawer: every recording
+ * for `contactId`, newest first, each playable through the same
+ * authenticated audio proxy as the table cell. Fetches the
+ * contact-scoped list (`GET /api/recordings?contact_id=`) only
+ * when the drawer opens on a linked contact.
+ */
+function LeadRecordings({ contactId }: { contactId: string }) {
+  const [recordings, setRecordings] = useState<CallRecording[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/recordings?contact_id=${encodeURIComponent(contactId)}&limit=50`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => {
+        if (!cancelled) {
+          setRecordings((body?.recordings ?? []) as CallRecording[]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRecordings([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contactId]);
+
+  return (
+    <div>
+      <h3 className="text-foreground text-sm font-semibold">
+        Call Recordings
+      </h3>
+      {recordings === null ? (
+        <p className="text-muted-foreground mt-1 text-sm">Loading…</p>
+      ) : recordings.length === 0 ? (
+        <p className="text-muted-foreground mt-1 text-sm">
+          No recordings for this lead yet.
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-3">
+          {recordings.map((r) => (
+            <li key={r.id} className="space-y-1">
+              <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
+                <span className="tabular-nums">
+                  {formatDateTime(r.recorded_at ?? r.created_at)}
+                </span>
+                <span className="truncate">
+                  {formatRecordingDuration(r.duration_seconds)} ·{' '}
+                  {r.uploader_name ?? 'Unknown'}
+                </span>
+              </div>
+              <audio
+                src={`/api/recordings/${r.id}/audio`}
+                controls
+                preload="none"
+                className="h-8 w-full"
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function StatusBadge({ status }: { status: FlowTableRow['status'] }) {
@@ -189,6 +290,10 @@ export function cellText(row: FlowTableRow, column: FlowTableColumn): string {
         return formatDateTime(row.startedAt);
       case 'status':
         return row.status === 'completed' ? 'Completed' : 'Incomplete';
+      case 'latest_recording':
+        // Rendered by LatestRecordingCell (audio player), never as
+        // text — empty here so text fallbacks stay blank, not stale.
+        return '';
     }
   }
   return row.answers[column.key] ?? '';
@@ -1072,6 +1177,14 @@ export default function WorkspacePage() {
                                   canEdit={canSendMessages}
                                   onChanged={reloadTable}
                                 />
+                              ) : c.system && c.key === 'latest_recording' ? (
+                                <LatestRecordingCell
+                                  entry={
+                                    (payload.latestRecordingByContact?.[
+                                      row.contactId ?? ''
+                                    ] ?? null)
+                                  }
+                                />
                               ) : (
                                 cellText(row, c)
                               )}
@@ -1235,6 +1348,23 @@ export default function WorkspacePage() {
                     <Inbox className="mr-2 h-4 w-4" />
                     No conversation linked
                   </Button>
+                )}
+                {selected.contactId ? (
+                  // Keyed by contact: a fresh mount (fresh loading
+                  // state) per lead, no setState-in-effect needed.
+                  <LeadRecordings
+                    key={selected.contactId}
+                    contactId={selected.contactId}
+                  />
+                ) : (
+                  <div>
+                    <h3 className="text-foreground text-sm font-semibold">
+                      Call Recordings
+                    </h3>
+                    <p className="text-muted-foreground mt-1 text-sm">
+                      No contact linked to this run.
+                    </p>
+                  </div>
                 )}
                 {flowId !== null && (
                   <TravelCrmAction

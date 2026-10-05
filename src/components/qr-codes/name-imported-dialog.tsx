@@ -64,7 +64,7 @@ export function NameImportedDialog({
         error?: string;
       } | null;
       if (!res.ok) throw new Error(json?.error ?? "Could not save the name.");
-      toast.success("QR code added to WACRM.");
+      toast.success("QR code added to WhatsApp Max.");
       onOpenChange(false);
       onNamed();
     } catch (error) {
@@ -80,7 +80,7 @@ export function NameImportedDialog({
         <DialogHeader>
           <DialogTitle>Name this QR code</DialogTitle>
           <DialogDescription>
-            This code already exists in WhatsApp. Give it a WACRM display
+            This code already exists in WhatsApp. Give it a WhatsApp Max display
             name so your team can recognize it — nothing changes in
             WhatsApp.
           </DialogDescription>

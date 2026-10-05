@@ -50,7 +50,7 @@ export function ConnectedNumberPanel() {
     <section className="animate-in fade-in-50 duration-200">
       <SettingsPanelHead
         title="Connected WhatsApp number"
-        description="This number is currently connected to this WhatsApp CRM."
+        description="This number is currently connected to WhatsApp Max."
       />
 
       <Card>

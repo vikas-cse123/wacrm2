@@ -10,9 +10,9 @@ import type { MetadataRoute } from 'next';
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Interscale Marketing',
-    short_name: 'Interscale',
-    description: 'Interscale Marketing WhatsApp CRM',
+    name: 'WhatsApp Max',
+    short_name: 'WhatsApp Max',
+    description: 'WhatsApp Max by Interscale Marketing',
     start_url: '/inbox',
     scope: '/',
     display: 'standalone',

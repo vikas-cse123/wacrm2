@@ -81,7 +81,7 @@ export default function ForgotPasswordPage() {
    <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center">
   <Image
     src="/logo.png"
-    alt="Interscale Marketing"
+    alt="WhatsApp Max"
     width={48}
     height={48}
     className="rounded-xl"

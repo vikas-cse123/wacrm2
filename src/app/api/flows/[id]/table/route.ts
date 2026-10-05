@@ -16,7 +16,10 @@ import {
   type AttachmentMediaEntry,
   type FlowTableRpcRow,
   type FlowTableView,
+  type LatestRecordingEntry,
 } from '@/lib/flows/flow-tables'
+import { latestByContact } from '@/lib/recordings/recordings'
+import { uploaderNamesByUserId } from '@/lib/recordings/uploaders'
 
 /**
  * GET /api/flows/[id]/table?view=all|completed|incomplete&search=&page=&pageSize=&dateFrom=&dateTo=&assignee=
@@ -212,6 +215,62 @@ export async function GET(
     }
   }
 
+  // Latest call recording per contact for this page's rows: one
+  // batched call_recordings read for the page's contacts plus one
+  // batched profiles read for the uploaders (never N+1). Additive
+  // to the response — contacts without a recording simply have no
+  // entry. RLS scopes both reads like every other query here.
+  // No DISTINCT ON (PostgREST has no per-group limit and no new
+  // RPC/migration is wanted): the page holds ≤100 contacts, so
+  // reducing to latest-per-contact in JS is one small pass.
+  // Best-effort like the overrides read: a failure (e.g. the
+  // call_recordings table predates migration 105) degrades to no
+  // recording badges, never a broken table.
+  const latestRecordingByContact: Record<string, LatestRecordingEntry> = {};
+  if (contactIds.length > 0) {
+    try {
+      const { data: recordingRows, error: recordingsError } = await supabase
+        .from('call_recordings')
+        .select('id, contact_id, duration_seconds, recorded_at, created_at, file_name, uploaded_by')
+        .eq('account_id', (flow as { account_id: string }).account_id)
+        .in('contact_id', contactIds)
+        .order('contact_id', { ascending: true })
+        .order('recorded_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
+      if (recordingsError) throw recordingsError;
+      const latestById = latestByContact(
+        ((recordingRows ?? []) as Array<Record<string, unknown>>).map((r) => ({
+          id: r.id as string,
+          contact_id: (r.contact_id as string | null) ?? null,
+          duration_seconds: (r.duration_seconds as number | null) ?? null,
+          recorded_at: (r.recorded_at as string | null) ?? null,
+          created_at: r.created_at as string,
+          file_name: (r.file_name as string | null) ?? null,
+          uploaded_by: (r.uploaded_by as string | null) ?? null,
+        })),
+        (r) => r.contact_id
+      );
+      const winnerIds = [...latestById.values()].map((r) => r.uploaded_by).filter(Boolean) as string[];
+      const names = await uploaderNamesByUserId(supabase, winnerIds);
+      for (const [contactId, r] of latestById) {
+        latestRecordingByContact[contactId] = {
+          id: r.id,
+          contact_id: contactId,
+          duration_seconds: r.duration_seconds,
+          recorded_at: r.recorded_at,
+          created_at: r.created_at,
+          file_name: r.file_name,
+          uploader_name: r.uploaded_by
+            ? (names[r.uploaded_by] ?? 'Unknown')
+            : null,
+        };
+      }
+    } catch (err) {
+      console.error('workspace latest recordings read failed', err);
+    }
+  }
+
   // Workspace custom columns + this page's values (two queries, no
   // N+1). Additive to the response — existing shape untouched.
   // Google Sheets never reads these tables.
@@ -309,5 +368,6 @@ export async function GET(
     customValues,
     flowOverrides,
     mediaByConversation,
+    latestRecordingByContact,
   });
 }

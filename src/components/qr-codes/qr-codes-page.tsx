@@ -531,7 +531,7 @@ export function QrCodesPage() {
                   Found in WhatsApp ({imported.length})
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  These QR codes exist on your number but have no WACRM name
+                  These QR codes exist on your number but have no WhatsApp Max name
                   yet. Naming them changes nothing in WhatsApp.
                 </p>
                 <div className="mt-3 space-y-2">

@@ -107,7 +107,7 @@ export function EditQrDialog({
           <DialogTitle>Edit QR code</DialogTitle>
           <DialogDescription>
             Message and format changes update the actual QR code in
-            WhatsApp. The name stays local to WACRM.
+            WhatsApp. The name stays local to WhatsApp Max.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4">
