@@ -1,14 +1,12 @@
 'use client';
 
-import Link from 'next/link';
 import {
   Clock3,
-  Mic,
-  PhoneCall,
+  Phone,
   PhoneIncoming,
+  PhoneMissed,
+  PhoneOff,
   PhoneOutgoing,
-  Unlink,
-  Users,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -20,9 +18,8 @@ import { FilterBar, type MemberOption } from '@/components/calls/dashboard/filte
 import { KpiCard } from '@/components/calls/dashboard/kpi-card';
 import { DurationBars, TopClients } from '@/components/calls/dashboard/panels';
 import { RecentList } from '@/components/calls/dashboard/recent-list';
-import { percentChange } from '@/lib/calls/aggregate';
 import { loadCallsStats, type CallsStatsResult } from '@/lib/calls/client';
-import { formatAvgDuration, formatTalkTime } from '@/lib/calls/formatters';
+import { formatShortDuration } from '@/lib/calls/formatters';
 import { getCallsRange, type CallsRangeKey } from '@/lib/calls/ranges';
 
 interface MembersResponse {
@@ -114,26 +111,12 @@ export default function CallsPage() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
-  const prev = stats?.previous ?? null;
-  const deltas = useMemo(() => {
-    if (!stats || !prev) return null;
-    return {
-      count: percentChange(stats.recordingCount, prev.recordingCount),
-      inbound: percentChange(stats.incomingRecordings, prev.incomingRecordings),
-      outbound: percentChange(stats.outgoingRecordings, prev.outgoingRecordings),
-      duration: percentChange(stats.recordingDurationSecs, prev.recordingDurationSecs),
-      unique: percentChange(stats.uniqueClients, prev.uniqueClients),
-      avg: percentChange(stats.averageDurationSecs, prev.averageDurationSecs),
-      unlinked: percentChange(stats.unlinkedRecordings, prev.unlinkedRecordings),
-    };
-  }, [stats, prev]);
-
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4 p-4 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-600 text-white">
-            <PhoneCall className="h-5 w-5" />
+            <Phone className="h-5 w-5" />
           </div>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">Calls</h1>
@@ -164,8 +147,8 @@ export default function CallsPage() {
 
       {stats?.truncated && !loading ? (
         <p className="text-xs text-muted-foreground">
-          Very large result set — metrics computed over the most recent 5,000 recordings in this
-          range.
+          Very large result set — charts and lists show the most recent 5,000 recordings; the KPI
+          cards above are exact.
         </p>
       ) : null}
 
@@ -181,88 +164,74 @@ export default function CallsPage() {
         </p>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {loading || !stats ? (
-              Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[104px] w-full rounded-xl" />)
+              Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-[104px] w-full rounded-xl" />)
             ) : (
               <>
                 <KpiCard
-                  icon={Mic}
-                  label="Recorded Calls"
+                  icon={Phone}
+                  label="Total Calls"
                   value={stats.recordingCount.toLocaleString('en-US')}
-                  deltaPct={deltas?.count ?? null}
-                  prevLabel={range.prevLabel}
+                  deltaPct={null}
+                  prevLabel=""
+                  iconClassName="bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400"
+                />
+                <KpiCard
+                  icon={Clock3}
+                  label="Call Duration"
+                  value={formatShortDuration(stats.recordingDurationSecs)}
+                  deltaPct={null}
+                  prevLabel=""
                   iconClassName="bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400"
                 />
                 <KpiCard
                   icon={PhoneIncoming}
-                  label="Inbound Recordings"
+                  label="Incoming"
                   value={stats.incomingRecordings.toLocaleString('en-US')}
-                  deltaPct={deltas?.inbound ?? null}
-                  prevLabel={range.prevLabel}
+                  deltaPct={null}
+                  prevLabel=""
+                  iconClassName="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
+                />
+                <KpiCard
+                  icon={PhoneIncoming}
+                  label="Incoming Duration"
+                  value={formatShortDuration(stats.incomingDurationSecs)}
+                  deltaPct={null}
+                  prevLabel=""
                   iconClassName="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
                 />
                 <KpiCard
                   icon={PhoneOutgoing}
-                  label="Outbound Recordings"
+                  label="Outgoing"
                   value={stats.outgoingRecordings.toLocaleString('en-US')}
-                  deltaPct={deltas?.outbound ?? null}
-                  prevLabel={range.prevLabel}
+                  deltaPct={null}
+                  prevLabel=""
+                  iconClassName="bg-orange-50 text-orange-500 dark:bg-orange-500/10 dark:text-orange-400"
+                />
+                <KpiCard
+                  icon={PhoneOutgoing}
+                  label="Outgoing Duration"
+                  value={formatShortDuration(stats.outgoingDurationSecs)}
+                  deltaPct={null}
+                  prevLabel=""
+                  iconClassName="bg-orange-50 text-orange-500 dark:bg-orange-500/10 dark:text-orange-400"
+                />
+                <KpiCard
+                  icon={PhoneMissed}
+                  label="Missed"
+                  value={stats.missedRecordings.toLocaleString('en-US')}
+                  deltaPct={null}
+                  prevLabel=""
                   iconClassName="bg-rose-50 text-rose-500 dark:bg-rose-500/10 dark:text-rose-400"
                 />
                 <KpiCard
-                  icon={Clock3}
-                  label="Total Recording Time"
-                  value={formatTalkTime(stats.recordingDurationSecs)}
-                  deltaPct={deltas?.duration ?? null}
-                  prevLabel={range.prevLabel}
-                  iconClassName="bg-violet-50 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400"
-                />
-              </>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            {loading || !stats ? (
-              Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-[104px] w-full rounded-xl" />)
-            ) : (
-              <>
-                <KpiCard
-                  icon={Users}
-                  label="Unique Clients"
-                  value={stats.uniqueClients.toLocaleString('en-US')}
-                  deltaPct={deltas?.unique ?? null}
-                  prevLabel={range.prevLabel}
-                  iconClassName="bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400"
-                />
-                <KpiCard
-                  icon={Clock3}
-                  label="Average Recording Duration"
-                  value={formatAvgDuration(stats.averageDurationSecs)}
-                  deltaPct={deltas?.avg ?? null}
-                  prevLabel={range.prevLabel}
-                  iconClassName="bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400"
-                />
-                <KpiCard
-                  icon={Unlink}
-                  label="Unlinked Recordings"
-                  value={stats.unlinkedRecordings.toLocaleString('en-US')}
-                  deltaPct={deltas?.unlinked ?? null}
-                  prevLabel={range.prevLabel}
-                  invertDelta
-                  iconClassName="bg-rose-50 text-rose-500 dark:bg-rose-500/10 dark:text-rose-400"
-                  action={
-                    stats.unlinkedRecordings > 0 ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0 border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300"
-                        render={<Link href="/calls/unlinked" />}
-                      >
-                        View Unlinked Calls →
-                      </Button>
-                    ) : undefined
-                  }
+                  icon={PhoneOff}
+                  label="Rejected"
+                  value={stats.rejectedRecordings.toLocaleString('en-US')}
+                  deltaPct={null}
+                  prevLabel=""
+                  iconClassName="bg-orange-50 text-orange-500 dark:bg-orange-500/10 dark:text-orange-400"
                 />
               </>
             )}

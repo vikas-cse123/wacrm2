@@ -106,8 +106,7 @@ export function aggregateRecordingMetrics(rows: CallsRecordingRow[]): RecordingM
 // ============================================================
 
 /** Mean of finite non-null durations; null when nothing was measured. */
-export function averageDurationSecs(rows: CallsRecordingRow[]): number | null {
-  let sum = 0;
+export function averageDurationSecs(rows: CallsRecordingRow[]): number | null {  let sum = 0;
   let measured = 0;
   for (const row of rows) {
     if (typeof row.duration_seconds === 'number' && Number.isFinite(row.duration_seconds)) {
@@ -116,6 +115,38 @@ export function averageDurationSecs(rows: CallsRecordingRow[]): number | null {
     }
   }
   return measured > 0 ? sum / measured : null;
+}
+
+/**
+ * Per-direction duration sums for the KPI cards. NULL directions are
+ * excluded from both (never guessed); NULL durations are ignored.
+ * Each side is null when it measured nothing (UI renders "—").
+ */
+export function directionDurationSecs(rows: CallsRecordingRow[]): {
+  incomingDurationSecs: number | null;
+  outgoingDurationSecs: number | null;
+} {
+  let incoming = 0;
+  let incomingMeasured = 0;
+  let outgoing = 0;
+  let outgoingMeasured = 0;
+  for (const row of rows) {
+    if (typeof row.duration_seconds !== 'number' || !Number.isFinite(row.duration_seconds)) {
+      continue;
+    }
+    const dir = recordingDirection(row.direction);
+    if (dir === 'in') {
+      incoming += row.duration_seconds;
+      incomingMeasured += 1;
+    } else if (dir === 'out') {
+      outgoing += row.duration_seconds;
+      outgoingMeasured += 1;
+    }
+  }
+  return {
+    incomingDurationSecs: incomingMeasured > 0 ? incoming : null,
+    outgoingDurationSecs: outgoingMeasured > 0 ? outgoing : null,
+  };
 }
 
 /**

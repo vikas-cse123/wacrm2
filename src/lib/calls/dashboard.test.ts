@@ -8,6 +8,7 @@ import {
   averageDurationSecs,
   bucketDaily,
   bucketDurations,
+  directionDurationSecs,
   latestRecordings,
   percentChange,
   topClientsByRecordings,
@@ -41,6 +42,45 @@ describe('averageDurationSecs', () => {
     expect(averageDurationSecs([row({ duration_seconds: NaN }), row({ duration_seconds: 40 })])).toBe(
       40
     );
+  });
+});
+
+describe('directionDurationSecs', () => {
+  it('sums durations per direction, excluding NULL directions', () => {
+    expect(
+      directionDurationSecs([
+        row({ direction: 'in', duration_seconds: 60 }),
+        row({ direction: 'in', duration_seconds: 30 }),
+        row({ direction: 'out', duration_seconds: 120 }),
+        row({ direction: null, duration_seconds: 999 }),
+        row({ direction: 'in', duration_seconds: null }),
+      ])
+    ).toEqual({ incomingDurationSecs: 90, outgoingDurationSecs: 120 });
+  });
+
+  it('nulls each side independently when it measured nothing', () => {
+    expect(directionDurationSecs([])).toEqual({
+      incomingDurationSecs: null,
+      outgoingDurationSecs: null,
+    });
+    expect(directionDurationSecs([row({ direction: 'out', duration_seconds: 50 })])).toEqual({
+      incomingDurationSecs: null,
+      outgoingDurationSecs: 50,
+    });
+    // NULL direction counts toward Total Calls but neither side.
+    expect(directionDurationSecs([row({ direction: null, duration_seconds: 50 })])).toEqual({
+      incomingDurationSecs: null,
+      outgoingDurationSecs: null,
+    });
+  });
+
+  it('ignores non-finite durations', () => {
+    expect(
+      directionDurationSecs([
+        row({ direction: 'in', duration_seconds: NaN }),
+        row({ direction: 'out', duration_seconds: Infinity }),
+      ])
+    ).toEqual({ incomingDurationSecs: null, outgoingDurationSecs: null });
   });
 });
 
@@ -92,8 +132,7 @@ describe('bucketDaily', () => {
   });
 });
 
-describe('bucketDurations', () => {
-  it('histograms only measured durations', () => {
+describe('bucketDurations', () => {  it('histograms only measured durations', () => {
     expect(
       bucketDurations([
         row({ duration_seconds: 10 }),

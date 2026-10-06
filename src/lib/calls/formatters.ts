@@ -30,6 +30,19 @@ export function formatAvgDuration(avgSeconds: number | null | undefined): string
   return formatTalkTime(Math.round(avgSeconds));
 }
 
+/**
+ * KPI-card duration: "16s", "2m 18s", "1h 24m" — sub-minute values
+ * read as seconds rather than the m:ss recording convention.
+ */
+export function formatShortDuration(totalSeconds: number | null | undefined): string {
+  if (totalSeconds === null || totalSeconds === undefined || !Number.isFinite(totalSeconds)) {
+    return '—';
+  }
+  const total = Math.max(0, Math.floor(totalSeconds));
+  if (total < 60) return `${total}s`;
+  return formatTalkTime(total);
+}
+
 /** "8,298 seconds" subtitle style. */
 export function formatSecondsLong(totalSeconds: number): string {
   return `${Math.max(0, Math.floor(totalSeconds)).toLocaleString('en-US')} seconds`;

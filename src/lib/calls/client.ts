@@ -45,7 +45,17 @@ export interface PreviousPeriod {
 
 export interface CallsDashboard extends RecordingMetrics {
   averageDurationSecs: number | null;
+  /** SUM of non-null durations where direction = 'in'; null when none measured. */
+  incomingDurationSecs: number | null;
+  /** SUM of non-null durations where direction = 'out'; null when none measured. */
+  outgoingDurationSecs: number | null;
   unknownDirectionRecordings: number;
+  /**
+   * Phone call-event outcomes (migration 110) — exact RPC counts,
+   * no recording required. Recording metrics above are unchanged.
+   */
+  missedRecordings: number;
+  rejectedRecordings: number;
   previous: PreviousPeriod;
   daily: DayBucket[];
   durationBuckets: DurationBuckets;

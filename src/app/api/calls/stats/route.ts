@@ -5,10 +5,15 @@
 // series, direction distribution (NULL shown as Unknown),
 // duration buckets, top clients, and recent recordings.
 //
+// The six KPI cards are exact database-side aggregates
+// (migration 109, no row cap). The remaining list-derived
+// sections (daily series, buckets, top clients, recent) still
+// come from the bounded row fetch below — they are inherently
+// top-N/per-day views, and `truncated` reports when the bound
+// was hit.
+//
 // The model counts call_recordings rows exactly as stored —
-// recordings, never claimed call-log events. Aggregation happens
-// here in JS over a bounded row set — no RPC, no migration
-// beyond 107.
+// recordings, never claimed call-log events.
 //
 // Security: RLS-scoped SSR client (caller's JWT) + explicit
 // account_id filter; account comes from the session, never from
@@ -173,6 +178,36 @@ export async function GET(request: Request) {
       fetchWindow(client, accountId, prevFromISO, fromISO, user, directionRaw),
     ]);
 
+    // Exact KPI aggregates (migration 109): uncapped, so the cards
+    // stay correct past the row bound above. Same window and
+    // filters as the current-window fetch.
+    const { data: kpiData, error: kpiError } = await supabase.rpc('call_kpis_summary', {
+      p_account_id: accountId,
+      p_from: fromISO,
+      p_to: toISO,
+      p_uploaded_by: user,
+      p_direction: directionRaw,
+    });
+    if (kpiError) throw kpiError;
+    const kpi = toKpis(kpiData);
+
+    // Exact Missed / Rejected aggregates (migration 111): phone
+    // call-events need no recording, so they live outside the
+    // recording row set entirely. Same window and user/direction
+    // filters as the cards — phone-only by table design.
+    const { data: outcomesData, error: outcomesError } = await supabase.rpc(
+      'call_event_outcomes_summary',
+      {
+        p_account_id: accountId,
+        p_from: fromISO,
+        p_to: toISO,
+        p_user_id: user,
+        p_direction: directionRaw,
+      }
+    );
+    if (outcomesError) throw outcomesError;
+    const outcomes = toOutcomes(outcomesData);
+
     const metrics = aggregateRecordingMetrics(rows);
     const prevMetrics = aggregateRecordingMetrics(prev.rows);
     const avg = averageDurationSecs(rows);
@@ -212,9 +247,16 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       ...metrics,
+      recordingCount: kpi.total,
+      recordingDurationSecs: kpi.durationSecs,
+      incomingRecordings: kpi.incoming,
+      outgoingRecordings: kpi.outgoing,
       averageDurationSecs: avg,
-      unknownDirectionRecordings:
-        metrics.recordingCount - metrics.incomingRecordings - metrics.outgoingRecordings,
+      incomingDurationSecs: kpi.incomingDurationSecs,
+      outgoingDurationSecs: kpi.outgoingDurationSecs,
+      unknownDirectionRecordings: kpi.total - kpi.incoming - kpi.outgoing,
+      missedRecordings: outcomes.missed,
+      rejectedRecordings: outcomes.rejected,
       previous: {
         recordingCount: prevMetrics.recordingCount,
         recordingDurationSecs: prevMetrics.recordingDurationSecs,
@@ -233,4 +275,57 @@ export async function GET(request: Request) {
   } catch (err) {
     return toErrorResponse(err);
   }
+}
+
+/**
+ * Coerce the outcomes RPC's JSONB to card values. Counts are never
+ * null; missing members fall back to zero (transport-skew guard).
+ */
+function toOutcomes(data: unknown): { missed: number; rejected: number } {
+  if (!data || typeof data !== 'object') return { missed: 0, rejected: 0 };
+  const row = data as Record<string, unknown>;
+  const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return { missed: count(row.missed), rejected: count(row.rejected) };
+}
+
+/**
+ * Coerce the KPI RPC's JSONB to card values. Counts are always
+ * present (COUNT never yields NULL); duration members are NULL
+ * when their side measured nothing (UI renders "—"). Non-finite
+ * or missing members fall back safely — the function always
+ * returns all six keys, so this only guards transport skew.
+ */
+function toKpis(data: unknown): {
+  total: number;
+  durationSecs: number | null;
+  incoming: number;
+  incomingDurationSecs: number | null;
+  outgoing: number;
+  outgoingDurationSecs: number | null;
+} {
+  const none = {
+    total: 0,
+    durationSecs: null as number | null,
+    incoming: 0,
+    incomingDurationSecs: null as number | null,
+    outgoing: 0,
+    outgoingDurationSecs: null as number | null,
+  };
+  if (!data || typeof data !== 'object') return none;
+  const row = data as Record<string, unknown>;
+  const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const sum = (v: unknown) =>
+    v === null || v === undefined
+      ? null
+      : typeof v === 'number' && Number.isFinite(v)
+        ? v
+        : null;
+  return {
+    total: count(row.total),
+    durationSecs: sum(row.durationSecs),
+    incoming: count(row.incoming),
+    incomingDurationSecs: sum(row.incomingDurationSecs),
+    outgoing: count(row.outgoing),
+    outgoingDurationSecs: sum(row.outgoingDurationSecs),
+  };
 }
