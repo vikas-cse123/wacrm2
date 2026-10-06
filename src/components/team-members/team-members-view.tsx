@@ -1,20 +1,24 @@
 'use client';
 
 // ============================================================
-// MembersTab — Settings → Members
+// TeamMembersView — standalone /team-members page content.
 //
-// Two stacked sections:
+// Three stacked sections:
 //   1. Roster   — every member of the account. Admin+ can change a
 //                 teammate's role inline and remove them. Owner row
 //                 is non-editable everywhere (transfer is its own
 //                 separate flow, deferred to a later PR).
-//   2. Pending  — outstanding invite links. Admin+ can revoke. The
-//                 plaintext URL is gone after the create dialog
-//                 closes, so we surface a "revoke + new link" hint
-//                 rather than pretending we can resurface it.
+//   2. Pending  — outstanding invite links (legacy — creation is
+//                 retired, existing links stay redeemable/revocable).
+//                 Admin+ can revoke.
+// Owner direct creation lives in AddUserDialog ("+ Add user",
+// owner-only); invitation links are no longer minted.
+//
+// Extracted verbatim from the former Settings tab — behavior
+// unchanged, only the mount point moved to /team-members.
 //
 // Role-gating
-//   The tab itself is reachable by any member, but mutation buttons
+//   The page itself is reachable by any member, but mutation buttons
 //   are wrapped in `<RequireRole min="admin">` / `useCan` so an
 //   agent or viewer sees the roster read-only. The server-side
 //   RPCs (set_member_role, remove_account_member) double-check
@@ -71,9 +75,9 @@ import {
   PRESENCE_DOT_CLASS,
   PresenceDot,
 } from '@/components/presence/presence-dot';
-import { InviteMemberDialog } from './invite-member-dialog';
-import { SettingsPanelHead } from './settings-panel-head';
-import { ROLE_META } from './role-meta';
+import { AddUserDialog } from './add-user-dialog';
+import { SettingsPanelHead } from '@/components/settings/settings-panel-head';
+import { ROLE_META } from '@/components/settings/role-meta';
 
 interface Member {
   user_id: string;
@@ -124,7 +128,7 @@ function fmtExpiresIn(iso: string): string {
   return `expires in ${hours} hour${hours === 1 ? '' : 's'}`;
 }
 
-export function MembersTab() {
+export function TeamMembersView() {
   const { user, canManageMembers } = useAuth();
   const { getPresence, getRow, now } = usePresence();
 
@@ -132,7 +136,7 @@ export function MembersTab() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [inviteOpen, setInviteOpen] = useState(false);
+  const [addUserOpen, setAddUserOpen] = useState(false);
   const [removingMember, setRemovingMember] = useState<Member | null>(null);
   const [pendingMemberAction, setPendingMemberAction] = useState<string | null>(
     null,
@@ -281,13 +285,13 @@ export function MembersTab() {
   return (
     <section className="animate-in fade-in-50 space-y-6 duration-200">
       <SettingsPanelHead
-        title="Team members"
+        title="Team Members"
         description="People with access to this account. Roles control what each teammate can do."
         action={
-          <RequireRole min="admin">
-            <Button onClick={() => setInviteOpen(true)}>
+          <RequireRole min="owner">
+            <Button onClick={() => setAddUserOpen(true)}>
               <Plus className="size-4" />
-              Invite member
+              Add user
             </Button>
           </RequireRole>
         }
@@ -504,8 +508,8 @@ export function MembersTab() {
                   No pending invitations.
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Click <span className="text-muted-foreground">Invite member</span>{' '}
-                  above to generate a shareable link.
+                  Outstanding invitation links only — new users are added
+                  directly with the Add user button above.
                 </p>
               </CardContent>
             </Card>
@@ -561,9 +565,9 @@ export function MembersTab() {
         </div>
       </RequireRole>
 
-      <InviteMemberDialog
-        open={inviteOpen}
-        onOpenChange={setInviteOpen}
+      <AddUserDialog
+        open={addUserOpen}
+        onOpenChange={setAddUserOpen}
         onCreated={loadEverything}
       />
 

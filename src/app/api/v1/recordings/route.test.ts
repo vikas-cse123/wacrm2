@@ -7,6 +7,12 @@ const h = vi.hoisted(() => ({
   contacts: [] as Array<{ id: string; phone_normalized: string }>,
   lastInsert: null as Record<string, unknown> | null,
   uploadBucket: null as string | null,
+  // device-path control: null = requireDeviceUser throws 401.
+  deviceUser: null as null | {
+    userId: string;
+    accountId: string;
+    role: string;
+  },
 }));
 
 function chainableSelect() {
@@ -68,9 +74,36 @@ vi.mock("@/lib/auth/api-context", () => ({
   }),
 }));
 
+vi.mock("@/lib/auth/device", async (importOriginal) => {
+  await importOriginal<typeof import("@/lib/auth/device")>();
+  const { unauthorized } = await import("@/lib/api/v1/respond");
+  return {
+    bearerToken: (request: Request) => {
+      const header = request.headers.get("authorization");
+      if (!header) return null;
+      const value = header.startsWith("Bearer ")
+        ? header.slice("Bearer ".length).trim()
+        : header.trim();
+      return value.length > 0 ? value : null;
+    },
+    requireDeviceUser: async () => {
+      if (!h.deviceUser) throw unauthorized("Invalid or expired session");
+      return {
+        authType: "user",
+        supabase: fakeSupabase(),
+        service: fakeSupabase(),
+        userId: h.deviceUser.userId,
+        accountId: h.deviceUser.accountId,
+        role: h.deviceUser.role,
+        fullName: null,
+      };
+    },
+  };
+});
+
 const { POST } = await import("./route");
 
-function uploadRequest(fields: Record<string, string> = {}) {
+function uploadRequest(fields: Record<string, string> = {}, token?: string) {
   const form = new FormData();
   form.append(
     "audio",
@@ -81,6 +114,7 @@ function uploadRequest(fields: Record<string, string> = {}) {
   for (const [k, v] of Object.entries(fields)) form.append(k, v);
   return new Request("https://app.test/api/v1/recordings", {
     method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
   });
 }
@@ -91,6 +125,7 @@ beforeEach(() => {
   h.contacts = [];
   h.lastInsert = null;
   h.uploadBucket = null;
+  h.deviceUser = null;
 });
 
 describe("POST /api/v1/recordings contact association (Phase 2B)", () => {
@@ -233,5 +268,67 @@ describe("POST /api/v1/recordings contact association (Phase 2B)", () => {
     const res = await POST(uploadRequest({ phone_number: "+91911" }));
     expect(res.status).toBe(201);
     expect(h.uploadBucket).toBe("call-recordings");
+  });
+
+  it("device session uploads with uploaded_by = the authenticated user", async () => {
+    h.deviceUser = { userId: "user-sagar", accountId: "acct-A", role: "agent" };
+    h.contacts = [{ id: "c-raj", phone_normalized: "91916394642516" }];
+    const res = await POST(
+      uploadRequest(
+        { phone_number: "+91916394642516", direction: "out" },
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig"
+      )
+    );
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as {
+      data: { contact_id: string | null; matched?: boolean };
+    };
+    expect(json.data.contact_id).toBe("c-raj");
+    expect(json.data.matched).toBe(true);
+    expect(h.lastInsert?.account_id).toBe("acct-A");
+    expect(h.lastInsert?.uploaded_by).toBe("user-sagar");
+  });
+
+  it("device session ignores client-supplied account_id", async () => {
+    h.deviceUser = { userId: "user-sagar", accountId: "acct-A", role: "owner" };
+    const res = await POST(
+      uploadRequest({ account_id: "acct-B" }, "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig")
+    );
+    expect(res.status).toBe(201);
+    expect(h.lastInsert?.account_id).toBe("acct-A");
+    expect(h.lastInsert?.uploaded_by).toBe("user-sagar");
+  });
+
+  it("invalid device session is 401", async () => {
+    h.deviceUser = null;
+    const res = await POST(
+      uploadRequest({}, "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig")
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("call_type phone/whatsapp/whatsapp_business are accepted and stored", async () => {
+    for (const callType of ["phone", "whatsapp", "whatsapp_business"]) {
+      const res = await POST(uploadRequest({ call_type: callType }));
+      expect(res.status).toBe(201);
+      expect(h.lastInsert?.call_type).toBe(callType);
+      const json = (await res.json()) as {
+        data: { call_type?: string | null };
+      };
+      expect(json.data.call_type).toBe(callType);
+    }
+  });
+
+  it("invalid call_type is rejected with 400", async () => {
+    for (const callType of ["voip", "telegram", "unknown", "PHONE"]) {
+      const res = await POST(uploadRequest({ call_type: callType }));
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("absent call_type uploads unclassified (backward compatible)", async () => {
+    const res = await POST(uploadRequest({}));
+    expect(res.status).toBe(201);
+    expect(h.lastInsert?.call_type).toBeNull();
   });
 });

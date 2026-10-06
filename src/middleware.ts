@@ -228,7 +228,7 @@ export async function middleware(request: NextRequest) {
   // proven dead (case A above). On transient failures the request
   // passes through untouched so the client can recover in place, and
   // no clearing cookie is written.
-  const protectedPaths = ['/dashboard', '/inbox', '/recordings', '/contacts', '/pipelines', '/broadcasts', '/followups', '/qr-codes', '/automations', '/settings']
+  const protectedPaths = ['/dashboard', '/inbox', '/calls', '/recordings', '/contacts', '/pipelines', '/broadcasts', '/followups', '/qr-codes', '/automations', '/settings', '/team-members']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     if (transientFailure) {
       return NextResponse.next({ request })

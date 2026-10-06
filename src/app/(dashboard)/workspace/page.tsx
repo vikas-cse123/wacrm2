@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { DM_Sans } from 'next/font/google';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -102,6 +103,7 @@ import type {
 import {
   flowColumnRenderKey,
   flowDisplayName,
+  findWorkspaceRowForContact,
   resolveFlowAnswers,
   resolveAttachmentUrl,
 } from '@/lib/flows/flow-tables';
@@ -204,9 +206,17 @@ function LeadRecordings({ contactId }: { contactId: string }) {
 
   return (
     <div>
-      <h3 className="text-foreground text-sm font-semibold">
-        Call Recordings
-      </h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-foreground text-sm font-semibold">
+          Call Recordings
+        </h3>
+        <Link
+          href={`/recordings/contact/${encodeURIComponent(contactId)}`}
+          className="text-xs text-primary hover:text-primary/80"
+        >
+          View All Recordings
+        </Link>
+      </div>
       {recordings === null ? (
         <p className="text-muted-foreground mt-1 text-sm">Loading…</p>
       ) : recordings.length === 0 ? (
@@ -605,7 +615,22 @@ export default function WorkspacePage() {
     const total = payload?.meta.total ?? 0;
     return Math.max(1, Math.ceil(total / pageSize));
   }, [payload, pageSize]);
-  const activeFlowName = flows?.find((f) => f.id === flowId)?.name ?? null;
+  // Deep link (e.g. from Call Recordings): ?contact=<contacts.id>
+  // selects the first row for that lead — the exact same `selected`
+  // state a row click sets, so the same drawer opens. Runs once per
+  // param value: closing the drawer never reopens it, and an
+  // unknown id (or a lead with no flow rows) leaves the plain table.
+  // The rows are already account-scoped, so a foreign id can only
+  // ever match nothing.
+  const deepLinkContactId = useSearchParams().get('contact');
+  const appliedContactRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (appliedContactRef.current === deepLinkContactId) return;
+    appliedContactRef.current = deepLinkContactId;
+    if (!deepLinkContactId || !payload) return;
+    const row = findWorkspaceRowForContact(payload.rows, deepLinkContactId);
+    if (row) setSelected(row);
+  }, [deepLinkContactId, payload]);  const activeFlowName = flows?.find((f) => f.id === flowId)?.name ?? null;
 
   const customFields = useMemo(() => payload?.customFields ?? [], [payload]);
   const overridesForRequest =

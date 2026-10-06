@@ -491,3 +491,29 @@ export function toFlowTableRow(
     answers,
   };
 }
+
+/**
+ * Deep-link target for a lead: the Workspace table filtered to
+ * nothing, with `?contact=` carrying the canonical `contacts.id`.
+ * The Workspace page selects the first row for that contact (see
+ * `findWorkspaceRowForContact`), opening the same drawer a row
+ * click opens — no parallel lead UI, no new route.
+ */
+export function workspaceContactHref(contactId: string): string {
+  return `/workspace?contact=${encodeURIComponent(contactId)}`;
+}
+
+/**
+ * Which Workspace row a `?contact=` deep link opens: the first row
+ * whose `contactId` matches, in table order. Null for blank ids or
+ * no match — the table then simply shows with nothing selected
+ * (unknown/foreign ids and contacts without flow rows degrade to
+ * the plain table, never an error).
+ */
+export function findWorkspaceRowForContact(
+  rows: FlowTableRow[],
+  contactId: string | null | undefined
+): FlowTableRow | null {
+  if (!contactId) return null;
+  return rows.find((row) => row.contactId === contactId) ?? null;
+}

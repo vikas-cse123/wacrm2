@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useAuth } from '@/hooks/use-auth';
@@ -15,12 +15,13 @@ import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { NotificationsPanel } from '@/components/settings/notifications-panel';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
-import { ReminderNumberSettings } from '@/components/settings/reminder-number-panel';
+import { ReminderNumberSettings } from
+'@/components/settings/reminder-number-panel';
+import { CallRecordingPanel } from '@/components/settings/call-recording-panel';
 import { BusinessProfileSettings } from '@/components/settings/business-profile';
 import { TravelCrmSettings } from '@/components/settings/travel-crm-settings';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
-import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import { WebhookSettings } from '@/components/settings/webhook-settings';
 import {
@@ -54,11 +55,19 @@ export default function SettingsPage() {
     return set;
   }, [isAdmin, isOwner]);
 
+  // Legacy deep link: Team Members moved to /team-members.
+  // Redirect instead of rendering a duplicate page; every other
+  // tab resolves exactly as before.
+  const rawTab = searchParams.get('tab');
+  useEffect(() => {
+    if (rawTab === 'members') router.replace('/team-members');
+  }, [rawTab, router]);
+
   // The URL (`?tab=`) is the single source of truth for the active
   // section — deep-linkable, and it keeps the existing links in the
   // app sidebar/header working. Legacy tab values (tags, custom-fields)
   // resolve onto their new home; unknown/empty → the Overview landing.
-  const resolved = resolveSection(searchParams.get('tab'));
+  const resolved = resolveSection(rawTab);
   const section = visibleSections.has(resolved) ? resolved : 'overview';
 
   const go = (next: SettingsSection) => {
@@ -86,11 +95,11 @@ export default function SettingsPage() {
     notifications: <NotificationsPanel />,
     whatsapp: <WhatsAppConfig />,
     'reminder-number': <ReminderNumberSettings />,
+    'call-recording': <CallRecordingPanel />,
     'business-profile': <BusinessProfileSettings />,
     'travel-crm': <TravelCrmSettings />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
-    members: <MembersTab />,
     api: <ApiKeysSettings />,
      webhooks: <WebhookSettings />
   };

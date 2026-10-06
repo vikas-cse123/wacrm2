@@ -23,10 +23,15 @@ describe('Features removal — sidebar', () => {
     expect(navItems[1]).toMatchObject({ href: '/inbox' });
   });
 
+  it('places Calls immediately after Inbox', () => {
+    expect(navItems[2]).toMatchObject({ href: '/calls', label: 'Calls' });
+  });
+
   it('keeps every other entry in the required order', () => {
     expect(navItems.map((i) => i.href)).toEqual([
       '/dashboard',
       '/inbox',
+      '/calls',
       '/recordings',
       '/flows',
       '/followups',
@@ -44,9 +49,9 @@ describe('Features removal — sidebar', () => {
     ]);
   });
 
-  it('places Workspace sixth with its Beta badge', () => {
-    expect(navItems[5]).toMatchObject({ href: '/workspace' });
-    expect(navItems[5].beta).toBe(true);
+  it('places Workspace seventh with its Beta badge', () => {
+    expect(navItems[6]).toMatchObject({ href: '/workspace' });
+    expect(navItems[6].beta).toBe(true);
   });
 
   it('places Chat Assignment after the Google Sheets children', () => {

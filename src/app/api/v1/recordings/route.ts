@@ -6,9 +6,13 @@
 // Supabase Storage and catalogs the metadata in
 // `call_recordings` (migration 105).
 //
-// Auth: API key with the `recordings:write` scope. The phone
-// never sees cookies, RLS, or service secrets — the key lookup
-// fixes the account and every write is scoped by it.
+// Auth: either a legacy API key with the `recordings:write`
+// scope, or an authenticated WhatsApp Max user session (Supabase
+// access token) whose account grants upload permission. Either
+// way the phone never sees cookies, RLS, or service secrets —
+// the credential lookup fixes the account and every write is
+// scoped by it. For user sessions, uploaded_by is the actual
+// authenticated user; for keys it remains the key minter.
 //
 // Form fields:
 //   audio              File, required — the recording (Opus .ogg
@@ -26,6 +30,10 @@
 //                      resolved to contact_id within the key's
 //                      account (Phase 2B).
 //   direction          optional 'in' | 'out' — anything else 400s.
+//   call_type          optional 'phone' | 'whatsapp' |
+//                      'whatsapp_business' (migration 107) —
+//                      anything else 400s. Stored verbatim, never
+//                      inferred; absent for old clients.
 //
 // Validation runs BEFORE any Storage write so a bad payload 400s
 // without leaving an orphan object (same discipline as
@@ -39,6 +47,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { requireApiKey } from '@/lib/auth/api-context';
+import { bearerToken, requireDeviceUser } from '@/lib/auth/device';
+import { looksLikeApiKey } from '@/lib/api-keys/keys';
 import { fail, ok, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { buildMediaPath } from '@/lib/storage/upload-media';
 import {
@@ -66,7 +76,25 @@ async function accountOwns(
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireApiKey(request, 'recordings:write');
+    // Two credentials, one pipeline: a legacy `wacrm_live_` key
+    // (recordings:write scope) or a logged-in user's access token.
+    // Anything else falls through to the key path, which rejects
+    // it as unauthorized.
+    const presented = bearerToken(request);
+    let accountId: string;
+    let uploadedBy: string | null;
+    let db: SupabaseClient;
+    if (presented && !looksLikeApiKey(presented)) {
+      const dev = await requireDeviceUser(request);
+      accountId = dev.accountId;
+      uploadedBy = dev.userId;
+      db = dev.service;
+    } else {
+      const ctx = await requireApiKey(request, 'recordings:write');
+      accountId = ctx.accountId;
+      uploadedBy = ctx.createdBy;
+      db = ctx.supabase;
+    }
 
     let form: FormData;
     try {
@@ -105,6 +133,10 @@ export async function POST(request: Request) {
         typeof form.get('phone_number') === 'string'
           ? (form.get('phone_number') as string).trim() || null
           : null,
+      callType:
+        typeof form.get('call_type') === 'string'
+          ? (form.get('call_type') as string).trim() || null
+          : null,
     });
     if (metaProblem) {
       return fail('bad_request', metaProblem, 400);
@@ -119,6 +151,14 @@ export async function POST(request: Request) {
       (form.get('phone_number') as string).trim() !== ''
         ? (form.get('phone_number') as string).trim()
         : null;
+    // Call source as sent by the device (migration 107 vocabulary,
+    // enforced above). Stored verbatim — never inferred, and absent
+    // for old clients and unclassified calls alike.
+    const rawCallType =
+      typeof form.get('call_type') === 'string' &&
+      (form.get('call_type') as string).trim() !== ''
+        ? (form.get('call_type') as string).trim()
+        : null;
 
     const rawContactId =
       typeof form.get('contact_id') === 'string' &&
@@ -130,18 +170,18 @@ export async function POST(request: Request) {
       (form.get('conversation_id') as string).trim() !== ''
         ? (form.get('conversation_id') as string).trim()
         : null;
-    // Optional links must belong to the key's account — a device
-    // must not be able to attach a recording to another account's
-    // contact by guessing UUIDs.
+    // Optional links must belong to the credential's account — a
+    // device must not be able to attach a recording to another
+    // account's contact by guessing UUIDs.
     if (
       rawContactId &&
-      !(await accountOwns(ctx.supabase, 'contacts', rawContactId, ctx.accountId))
+      !(await accountOwns(db, 'contacts', rawContactId, accountId))
     ) {
       return fail('bad_request', "'contact_id' does not belong to this account", 400);
     }
     if (
       rawConversationId &&
-      !(await accountOwns(ctx.supabase, 'conversations', rawConversationId, ctx.accountId))
+      !(await accountOwns(db, 'conversations', rawConversationId, accountId))
     ) {
       return fail(
         'bad_request',
@@ -152,14 +192,14 @@ export async function POST(request: Request) {
 
     // Contact association, in precedence order: explicit
     // contact_id wins; else server-side phone matching within the
-    // key's account; else unlinked. Matching NEVER fails the
+    // credential's account; else unlinked. Matching NEVER fails the
     // upload — ambiguity or lookup trouble degrades to NULL.
     let resolvedContactId = rawContactId;
     let matched = rawContactId !== null;
     if (!resolvedContactId && rawPhoneNumber) {
       const outcome = await matchContactByPhone(
-        ctx.supabase,
-        ctx.accountId,
+        db,
+        accountId,
         rawPhoneNumber
       );
       if (outcome.kind === 'unique') {
@@ -175,10 +215,10 @@ export async function POST(request: Request) {
     // segment) every other media upload uses. `buildMediaPath`
     // sanitizes the CallVault filename (`20260501_120000_+1555….ogg`).
     const storagePath = buildMediaPath(
-      ctx.accountId,
+      accountId,
       file.name || 'recording.ogg'
     );
-    const { error: uploadError } = await ctx.supabase.storage
+    const { error: uploadError } = await db.storage
       .from(RECORDING_BUCKET)
       .upload(storagePath, file, {
         cacheControl: '3600',
@@ -190,16 +230,17 @@ export async function POST(request: Request) {
       return fail('internal', 'Failed to store the recording', 500);
     }
 
-    const { data: created, error: insertError } = await ctx.supabase
+    const { data: created, error: insertError } = await db
       .from('call_recordings')
       .insert({
-        account_id: ctx.accountId,
+        account_id: accountId,
         contact_id: resolvedContactId,
         conversation_id: rawConversationId,
-        // Audit attribution to whoever minted the key (nullable —
+        // Audit attribution: the actual authenticated user for
+        // session uploads, or whoever minted the key (nullable —
         // mirrors the `api_keys.created_by` contract). Never used
-        // for authorization; that is account_id + scopes.
-        uploaded_by: ctx.createdBy,
+        // for authorization; that is account_id + scopes/role.
+        uploaded_by: uploadedBy,
         storage_bucket: RECORDING_BUCKET,
         storage_path: storagePath,
         file_name: file.name || null,
@@ -212,6 +253,7 @@ export async function POST(request: Request) {
         // by overwriting this column.
         phone_number: rawPhoneNumber,
         direction: rawDirection,
+        call_type: rawCallType,
       })
       .select('*')
       .single();
@@ -220,7 +262,7 @@ export async function POST(request: Request) {
       // orphan so Storage can't accumulate unreachable objects
       // (same GC instinct as `deleteAccountMedia` on failed sends).
       console.error('[api/v1/recordings] catalog insert failed:', insertError?.message);
-      await ctx.supabase.storage.from(RECORDING_BUCKET).remove([storagePath]);
+      await db.storage.from(RECORDING_BUCKET).remove([storagePath]);
       return fail('internal', 'Failed to save the recording', 500);
     }
 

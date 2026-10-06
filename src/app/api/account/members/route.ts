@@ -14,8 +14,14 @@
 
 import { NextResponse } from "next/server";
 
-import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
-import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
+import { getCurrentAccount, requireRole, toErrorResponse } from "@/lib/auth/account";
+import { canManageMembers, isAccountRole, type AccountRole } from "@/lib/auth/roles";
+import { supabaseAdmin } from "@/lib/flows/admin-client";
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from "@/lib/rate-limit";
 import type { AccountMember } from "@/types";
 
 interface ProfileRow {
@@ -67,6 +73,204 @@ export async function GET() {
     });
 
     return NextResponse.json({ members });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+// ============================================================
+// POST /api/account/members — owner creates a user directly.
+//
+// Replaces invitation links for new users: the OWNER supplies
+// name + email + password + role, and the user exists (confirmed,
+// member of this account, profile full_name set) when the call
+// returns.
+//
+// Server-side, all derived from the session — never trusted
+// from the browser:
+//   1. requireRole("owner") — only the account owner.
+//   2. account = caller's account (ctx.accountId).
+//   3. email trimmed + lowercased; format-checked.
+//   4. password ≥ 6 chars (matches the signup-page policy).
+//   5. role ∈ admin/agent/viewer (existing vocabulary, never
+//      owner — ownership moves only via transfer).
+//   6. admin.createUser({ email_confirm: true }) — no verification
+//      mail, immediate login. Duplicate email → 409, existing
+//      user untouched.
+//   7. The signup trigger auto-creates a personal account +
+//      owner-profile for the new id; we MOVE that profile row
+//      into this account with the requested role and delete the
+//      orphan personal account (same shape as invite redemption).
+//      If the trigger row is missing, we insert the profile
+//      directly instead.
+//   8. If anything after Auth creation fails, ONLY the just-
+//      created Auth user is deleted (rollback). Never broad.
+// ============================================================
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LEN = 6;
+// Display-name ceiling — matches the existing name conventions
+// (account/API-key/invite-label names all cap at 80). Rejected,
+// never truncated: silently shortening someone's name would store
+// a value they didn't enter.
+const MAX_NAME_LEN = 80;
+// Creatable roles: the existing vocabulary minus owner.
+const CREATABLE_ROLES: AccountRole[] = ["admin", "agent", "viewer"];
+
+export async function POST(request: Request) {
+  try {
+    const ctx = await requireRole("owner");
+
+    const limit = checkRateLimit(
+      `owner:createUser:${ctx.userId}`,
+      RATE_LIMITS.adminAction
+    );
+    if (!limit.success) return rateLimitResponse(limit);
+
+    const body = (await request.json().catch(() => null)) as {
+      email?: unknown;
+      password?: unknown;
+      role?: unknown;
+      name?: unknown;
+    } | null;
+
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    if (!name) {
+      return NextResponse.json(
+        { error: "A name is required." },
+        { status: 400 }
+      );
+    }
+    if (name.length > MAX_NAME_LEN) {
+      return NextResponse.json(
+        { error: `Name must be ${MAX_NAME_LEN} characters or fewer.` },
+        { status: 400 }
+      );
+    }
+    const email =
+      typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+    if (!email || !EMAIL_RE.test(email)) {
+      return NextResponse.json(
+        { error: "A valid email address is required." },
+        { status: 400 }
+      );
+    }
+    if (typeof body?.password !== "string" || body.password.length < MIN_PASSWORD_LEN) {
+      return NextResponse.json(
+        { error: `Password must be at least ${MIN_PASSWORD_LEN} characters.` },
+        { status: 400 }
+      );
+    }
+    const role = body?.role;
+    if (!isAccountRole(role) || !(CREATABLE_ROLES as string[]).includes(role)) {
+      return NextResponse.json(
+        { error: "Role must be admin, agent, or viewer." },
+        { status: 400 }
+      );
+    }
+
+    const admin = supabaseAdmin();
+
+    // Supabase Auth is the uniqueness authority: a duplicate email
+    // fails here with the existing user completely untouched (no
+    // password/role/account changes, no new profile — we return
+    // before touching anything else).
+    const { data: created, error: createError } =
+      await admin.auth.admin.createUser({
+        email,
+        password: body.password as string,
+        email_confirm: true,
+        // The signup trigger reads raw_user_meta_data->>'full_name'
+        // into profiles.full_name — the name lands on the profile
+        // row through the existing trigger path, not a side write.
+        user_metadata: { full_name: name },
+      });
+    if (createError || !created?.user) {
+      const message = `${createError?.message ?? ""} ${createError?.code ?? ""}`;
+      if (/already (registered|exists)|duplicate|taken/i.test(message)) {
+        return NextResponse.json(
+          { error: "A user with this email already exists." },
+          { status: 409 }
+        );
+      }
+      console.error("[POST /api/account/members] auth create error:", createError?.message);
+      return NextResponse.json(
+        { error: "Failed to create user." },
+        { status: 500 }
+      );
+    }
+    const newUserId = created.user.id as string;
+
+    // Move the trigger-created profile (personal owner account)
+    // into this account with the requested role. Fall back to a
+    // direct insert if the trigger row is somehow missing.
+    try {
+      const { data: freshProfile, error: profileError } = await admin
+        .from("profiles")
+        .select("account_id")
+        .eq("user_id", newUserId)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      const orphanAccountId = (freshProfile as { account_id?: string } | null)?.account_id ?? null;
+
+      if (orphanAccountId) {
+        // full_name is set explicitly (not just trusted from the
+        // trigger) so the submitted name wins even if trigger
+        // metadata handling ever changes.
+        const { error: moveError } = await admin
+          .from("profiles")
+          .update({ account_id: ctx.accountId, account_role: role, full_name: name })
+          .eq("user_id", newUserId);
+        if (moveError) throw moveError;
+        // Delete the orphan personal account only when nothing
+        // else points at it (defensive — it should be empty now).
+        const { data: remaining, error: remainingError } = await admin
+          .from("profiles")
+          .select("user_id")
+          .eq("account_id", orphanAccountId)
+          .limit(1);
+        if (remainingError) throw remainingError;
+        if ((remaining ?? []).length === 0) {
+          const { error: deleteError } = await admin
+            .from("accounts")
+            .delete()
+            .eq("id", orphanAccountId);
+          if (deleteError) throw deleteError;
+        }
+      } else {
+        const { error: insertError } = await admin.from("profiles").insert({
+          user_id: newUserId,
+          full_name: name,
+          email,
+          account_id: ctx.accountId,
+          account_role: role,
+        });
+        if (insertError) throw insertError;
+      }
+    } catch (dbError) {
+      // Roll back ONLY the Auth user this call just created —
+      // never any pre-existing user.
+      await admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
+      console.error("[POST /api/account/members] membership setup failed, rolled back:", dbError);
+      return NextResponse.json(
+        { error: "Failed to create user." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        member: {
+          user_id: newUserId,
+          full_name: name,
+          email,
+          avatar_url: null,
+          role,
+          joined_at: new Date().toISOString(),
+        },
+      },
+      { status: 201 }
+    );
   } catch (err) {
     return toErrorResponse(err);
   }

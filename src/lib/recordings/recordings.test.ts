@@ -5,6 +5,7 @@ import {
   RECORDING_BUCKET,
   RECORDING_MAX_BYTES,
   formatRecordingDuration,
+  formatRecordedIndia,
   latestByContact,
   recordingSortTime,
   resolveUploaderName,
@@ -172,6 +173,8 @@ describe('toCallRecording', () => {
       conversation_id: null,
       uploaded_by: null,
       uploader_name: null,
+      contact_name: null,
+      contact_phone: null,
       storage_bucket: 'call-recordings',
       storage_path: 'account-a1/1-call.ogg',
       file_name: null,
@@ -180,6 +183,9 @@ describe('toCallRecording', () => {
       duration_seconds: null,
       recorded_at: null,
       created_at: '2026-10-04T12:00:00.000Z',
+      direction: null,
+      phone_number: null,
+      call_type: null,
     });
   });
 
@@ -187,6 +193,54 @@ describe('toCallRecording', () => {
     expect(
       toCallRecording({ id: 'r1' }, 'Akash').uploader_name
     ).toBe('Akash');
+  });
+
+  it('carries the joined lead name when provided, null otherwise', () => {
+    expect(toCallRecording({ id: 'r1' }, null, 'Sagar').contact_name).toBe(
+      'Sagar'
+    );
+    expect(toCallRecording({ id: 'r1' }).contact_name).toBeNull();
+  });
+});
+
+describe('formatRecordedIndia', () => {
+  // Constructed in local parts so the expectations hold in any zone —
+  // the formatter renders the viewer's local time by design.
+  it('renders day-first Indian format with 12-hour AM/PM', () => {
+    expect(
+      formatRecordedIndia(new Date(2026, 9, 6, 16, 7).toISOString(), '')
+    ).toBe('06 Oct 2026, 4:07 PM');
+    expect(
+      formatRecordedIndia(new Date(2026, 9, 5, 23, 43).toISOString(), '')
+    ).toBe('05 Oct 2026, 11:43 PM');
+  });
+
+  it('handles midnight, noon, and single-digit days', () => {
+    expect(formatRecordedIndia(new Date(2026, 9, 6, 0, 5).toISOString(), '')).toBe(
+      '06 Oct 2026, 12:05 AM'
+    );
+    expect(formatRecordedIndia(new Date(2026, 9, 6, 12, 0).toISOString(), '')).toBe(
+      '06 Oct 2026, 12:00 PM'
+    );
+    expect(formatRecordedIndia(new Date(2026, 4, 6, 9, 3).toISOString(), '')).toBe(
+      '06 May 2026, 9:03 AM'
+    );
+  });
+
+  it('falls back to created_at and never shifts zones', () => {
+    const created = new Date(2026, 9, 5, 23, 43);
+    expect(formatRecordedIndia(null, created.toISOString())).toBe(
+      '05 Oct 2026, 11:43 PM'
+    );
+    // A UTC instant renders in local parts — day-first regardless.
+    expect(formatRecordedIndia('2026-10-06T10:35:00.000Z', '')).toMatch(
+      /^\d{2} \w{3} 2026, \d{1,2}:\d{2} (AM|PM)$/
+    );
+  });
+
+  it('returns an em dash for unparseable input', () => {
+    expect(formatRecordedIndia('not-a-date', 'also-bad')).toBe('—');
+    expect(formatRecordedIndia(null, '')).toBe('—');
   });
 });
 

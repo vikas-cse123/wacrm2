@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState, Fragment, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import { getTravelCrmUrl } from "@/lib/travel-crm";
@@ -20,6 +20,7 @@ import {
   MessageSquare,
   MessageSquareText,
   Mic,
+  Phone,
   ChevronDown,
   ChevronUp,
   ExternalLink,
@@ -55,6 +56,7 @@ interface NavItem {
 export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
+  { href: "/calls", label: "Calls", icon: Phone },
   { href: "/recordings", label: "Recordings", icon: Mic },
   { href: "/flows", label: "Flows", icon: Workflow, beta: false },
   { href: "/followups", label: "Reminders", icon: CalendarClock },
@@ -132,12 +134,9 @@ function NavTip({
 
 export function Sidebar({ open = false, onClose, collapsed = false, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { profileLoading, account, accountRole, canEditSettings } = useAuth();
-  // Team Members lives at /settings?tab=members — same page as
-  // Settings, distinguished by the tab param for highlighting.
-  const isTeamMembersActive =
-    pathname.startsWith("/settings") && searchParams.get("tab") === "members";
+  // Team Members is a standalone page at /team-members.
+  const isTeamMembersActive = pathname.startsWith("/team-members");
   // Collapsible GOOGLE SHEETS group (Flow Sheets + All Sheets).
   // Default COLLAPSED on every sidebar mount — no persistence, so a
   // refresh/reload always starts closed. Forced open while a sheets
@@ -358,18 +357,17 @@ export function Sidebar({ open = false, onClose, collapsed = false, onToggleColl
             })}
           </ul>
 
-          {/* Bottom section: Team Members (admin+, same page as
-              Settings distinguished by ?tab=members) above Settings.
+          {/* Bottom section: Team Members standalone page above Settings.
               Identical row markup to the entries below. */}
           {/* Settings — visible to all roles. */}
           <div className="my-4 border-t border-border" />
 
               <ul className="flex flex-col gap-1">
                 {canEditSettings && (
-                  <li key="/settings?tab=members">
+                  <li key="/team-members">
                     <NavTip label="Team Members" collapsed={collapsed}>
                     <Link
-                      href="/settings?tab=members"
+                      href="/team-members"
                       aria-current={isTeamMembersActive ? "page" : undefined}
                       className={cn(
                         "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",

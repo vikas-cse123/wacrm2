@@ -4,6 +4,7 @@ import {
   Coins,
   KeyRound,
   LayoutGrid,
+  Mic,
   Palette,
   Phone,
   PlugZap,
@@ -12,8 +13,7 @@ import {
   Store,
   Tags,
   User,
-  UsersRound,
-   Webhook,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -36,9 +36,9 @@ export const SETTINGS_SECTIONS = [
   'travel-crm',
   'whatsapp',
   'reminder-number',
+  'call-recording',
   'fields',
   'deals',
-  'members',
   'api',
   'webhooks',
 ] as const;
@@ -55,8 +55,8 @@ export interface SectionMeta {
   group: 'top' | 'account' | 'integrations' | 'workspace';
   /**
    * When true the section stays reachable (deep-link + panel render)
-   * but is omitted from the rail — used for sections promoted to the
-   * main sidebar (Team members).
+   * but is omitted from the rail — used for navigation-only sections
+   * like Deals.
    */
   hideFromRail?: boolean;
 }
@@ -72,18 +72,17 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
     hideFromRail: true,
   },
   security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
-  appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
-  notifications: { id: 'notifications', label: 'Notifications', icon: Bell, group: 'account' },
+  appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },  notifications: { id: 'notifications', label: 'Notifications', icon: Bell, group: 'account' },
   'travel-crm': { id: 'travel-crm', label: 'Travel Agency CRM', icon: ArrowLeftRight, group: 'integrations' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   'reminder-number': { id: 'reminder-number', label: 'Reminder WhatsApp Number', icon: Smartphone, group: 'workspace' },
+  'call-recording': { id: 'call-recording', label: 'Call Recording', icon: Mic, group: 'account' },
   'business-profile': { id: 'business-profile', label: 'Business Profile', icon: Store, group: 'account' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   // Navigation-only: hidden from the left rail but still reachable
   // via deep-link/panel render — the underlying functionality,
   // routes, APIs, and components are untouched.
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace', hideFromRail: true },
-  members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace', hideFromRail: true },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace', hideFromRail: true },
    webhooks: { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'workspace' }
 };

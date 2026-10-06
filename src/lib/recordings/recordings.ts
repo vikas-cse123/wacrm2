@@ -64,6 +64,18 @@ export interface CallRecording {
    * in one batch — never N+1. Absent on older responses.
    */
   uploader_name?: string | null;
+  /**
+   * Linked lead's display name (`contacts.name`). Joined server-side
+   * in one batch — never N+1. Null when unlinked or the contact has
+   * no name; the UI then shows "Unlinked". Absent on older responses.
+   */
+  contact_name?: string | null;
+  /**
+   * Linked lead's phone (`contacts.phone`), same batched lookup as
+   * the name. Shown in the detail drawer when the recording itself
+   * carries no number.
+   */
+  contact_phone?: string | null;
   storage_bucket: string;
   storage_path: string;
   file_name: string | null;
@@ -72,11 +84,27 @@ export interface CallRecording {
   duration_seconds: number | null;
   recorded_at: string | null;
   created_at: string;
+  /**
+   * Phase 2B matching evidence (migration 106). Present on rows
+   * written after the migration; older rows carry nulls. Additive
+   * — readers treat absence as null.
+   */
+  direction?: string | null;
+  phone_number?: string | null;
+  /**
+   * Call source (migration 107): 'phone' | 'whatsapp' |
+   * 'whatsapp_business', or null when unclassified. Stored as
+   * sent — validated against the same vocabulary as the DB
+   * CHECK, never inferred.
+   */
+  call_type?: string | null;
 }
 
 export function toCallRecording(
   row: Record<string, unknown>,
   uploaderName?: string | null,
+  contactName?: string | null,
+  contactPhone?: string | null,
 ): CallRecording {
   return {
     id: row.id as string,
@@ -85,6 +113,8 @@ export function toCallRecording(
     conversation_id: (row.conversation_id as string | null) ?? null,
     uploaded_by: (row.uploaded_by as string | null) ?? null,
     uploader_name: uploaderName ?? null,
+    contact_name: contactName ?? null,
+    contact_phone: contactPhone ?? null,
     storage_bucket: row.storage_bucket as string,
     storage_path: row.storage_path as string,
     file_name: (row.file_name as string | null) ?? null,
@@ -93,6 +123,9 @@ export function toCallRecording(
     duration_seconds: (row.duration_seconds as number | null) ?? null,
     recorded_at: (row.recorded_at as string | null) ?? null,
     created_at: row.created_at as string,
+    direction: (row.direction as string | null) ?? null,
+    phone_number: (row.phone_number as string | null) ?? null,
+    call_type: (row.call_type as string | null) ?? null,
   };
 }
 
@@ -173,6 +206,34 @@ export function formatRecordingDuration(totalSeconds: number | null | undefined)
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
+const IN_MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/**
+ * Day-first Indian recorded-at for table cells: "06 Oct 2026, 4:07 PM".
+ * Built from date parts (not `toLocaleString()`) so the day-first
+ * order and 12-hour AM/PM never depend on the browser locale. Uses
+ * the viewer's local zone — the same zone the old `toLocaleString()`
+ * rendered in — so no UTC shift is introduced. Invalid → em dash.
+ */
+export function formatRecordedIndia(
+  value: string | null | undefined,
+  fallback: string
+): string {
+  const date = new Date(value ?? fallback);
+  if (Number.isNaN(date.getTime())) return '—';
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = IN_MONTHS[date.getMonth()] ?? '';
+  const year = date.getFullYear();
+  const h24 = date.getHours();
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const suffix = h24 < 12 ? 'AM' : 'PM';
+  return `${day} ${month} ${year}, ${h12}:${minutes} ${suffix}`;
+}
+
 export function isRecordingMimeType(value: unknown): value is RecordingMimeType {
   return (
     typeof value === 'string' &&
@@ -207,14 +268,16 @@ export function validateRecordingFile(file: {
  * Validate the optional metadata fields. `recorded_at` must be a
  * parseable timestamp; `duration_seconds` a non-negative integer;
  * `direction` is 'in' | 'out' when present; `phone_number` is an
- * optional short string (matching evidence, normalized server-side).
- * Returns the human-facing problem, or null when acceptable.
+ * optional short string (matching evidence, normalized server-side);
+ * `call_type` is 'phone' | 'whatsapp' | 'whatsapp_business' when
+ * present. Returns the human-facing problem, or null when acceptable.
  */
 export function validateRecordingMetadata(input: {
   recordedAt: string | null;
   durationSeconds: unknown;
   direction?: unknown;
   phoneNumber?: unknown;
+  callType?: unknown;
 }): string | null {
   if (input.recordedAt !== null && Number.isNaN(Date.parse(input.recordedAt))) {
     return "'recorded_at' must be an ISO 8601 timestamp.";
@@ -241,8 +304,30 @@ export function validateRecordingMetadata(input: {
       return `'phone_number' must be at most ${MAX_PHONE_NUMBER_LENGTH} characters.`;
     }
   }
+  if (input.callType !== null && input.callType !== undefined) {
+    if (
+      input.callType !== 'phone' &&
+      input.callType !== 'whatsapp' &&
+      input.callType !== 'whatsapp_business'
+    ) {
+      return "'call_type' must be 'phone', 'whatsapp', or 'whatsapp_business'.";
+    }
+  }
   return null;
 }
+
+/**
+ * Call types the upload endpoint accepts — exactly the
+ * migration 107 vocabulary. Single source for validation;
+ * CallVault's wire values must match these strings.
+ */
+export const RECORDING_CALL_TYPES = [
+  'phone',
+  'whatsapp',
+  'whatsapp_business',
+] as const;
+
+export type RecordingCallType = (typeof RECORDING_CALL_TYPES)[number];
 
 /**
  * Maximum accepted `phone_number` length. Matching needs ~15

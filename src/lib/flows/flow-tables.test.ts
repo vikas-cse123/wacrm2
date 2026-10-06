@@ -4,11 +4,14 @@ import {
   classifyFlowRun,
   completedAtFor,
   findFlowNameAnswerKey,
+  findWorkspaceRowForContact,
   flowColumnRenderKey,
   flowDisplayName,
   resolveAttachmentUrl,
   toFlowTableRow,
+  workspaceContactHref,
   type FlowTableRpcRow,
+  type FlowTableRow,
 } from "./flow-tables";
 import type { FlowNodeLite } from "./sheet-columns";
 
@@ -652,5 +655,56 @@ describe("resolveAttachmentUrl", () => {
         "https://x.app/a",
       ),
     ).toBe("/api/whatsapp/media/m-9");
+  });
+});
+
+function workspaceRow(over: Partial<FlowTableRow> = {}): FlowTableRow {
+  return {
+    runId: "run-1",
+    contactId: null,
+    conversationId: null,
+    name: null,
+    phone: null,
+    startedAt: "2026-10-01T10:00:00.000Z",
+    lastAdvancedAt: null,
+    completedAt: null,
+    status: "completed",
+    runStatus: "completed",
+    answers: {},
+    ...over,
+  };
+}
+
+describe("workspace lead deep link (?contact=)", () => {
+  it("builds the Workspace URL from the canonical contacts.id", () => {
+    expect(workspaceContactHref("c-1")).toBe("/workspace?contact=c-1");
+  });
+
+  it("never points at the per-lead recordings page", () => {
+    expect(workspaceContactHref("c-1")).not.toContain("/recordings/contact/");
+  });
+
+  it("encodes contact ids safely", () => {
+    expect(workspaceContactHref("c 1&2")).toBe("/workspace?contact=c%201%262");
+  });
+
+  it("selects the first row for the contact, in table order", () => {
+    const rows = [
+      workspaceRow({ runId: "r-other", contactId: "c-9" }),
+      workspaceRow({ runId: "r-first", contactId: "c-1" }),
+      workspaceRow({ runId: "r-second", contactId: "c-1" }),
+    ];
+    expect(findWorkspaceRowForContact(rows, "c-1")?.runId).toBe("r-first");
+  });
+
+  it("selects nothing for blank ids, unknown ids, or leads without rows", () => {
+    const rows = [workspaceRow({ runId: "r-1", contactId: "c-1" })];
+    expect(findWorkspaceRowForContact(rows, null)).toBeNull();
+    expect(findWorkspaceRowForContact(rows, "")).toBeNull();
+    expect(findWorkspaceRowForContact(rows, "c-evil")).toBeNull();
+    expect(findWorkspaceRowForContact([], "c-1")).toBeNull();
+    expect(
+      findWorkspaceRowForContact([workspaceRow({ runId: "r-1", contactId: null })], "c-1")
+    ).toBeNull();
   });
 });
