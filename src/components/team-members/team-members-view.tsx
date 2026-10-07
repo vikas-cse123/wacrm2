@@ -3,16 +3,16 @@
 // ============================================================
 // TeamMembersView — standalone /team-members page content.
 //
-// Three stacked sections:
-//   1. Roster   — every member of the account. Admin+ can change a
-//                 teammate's role inline and remove them. Owner row
-//                 is non-editable everywhere (transfer is its own
-//                 separate flow, deferred to a later PR).
-//   2. Pending  — outstanding invite links (legacy — creation is
-//                 retired, existing links stay redeemable/revocable).
-//                 Admin+ can revoke.
+// Member roster — every member of the account. Admin+ can change a
+// teammate's role inline and remove them. Owner row is
+// non-editable everywhere (transfer is its own separate flow,
+// deferred to a later PR).
 // Owner direct creation lives in AddUserDialog ("+ Add user",
-// owner-only); invitation links are no longer minted.
+// owner-only).
+//
+// NOTE: the "Pending invitations" section was intentionally removed
+// from this UI. The invitation backend (routes, RPCs, /join/[token])
+// is untouched — existing invite links stay redeemable.
 //
 // Extracted verbatim from the former Settings tab — behavior
 // unchanged, only the mount point moved to /team-members.
@@ -30,11 +30,8 @@ import { toast } from 'sonner';
 import {
   AlertTriangle,
   Loader2,
-  Mail,
-  MailX,
   Plus,
   Trash2,
-  UsersRound,
 } from 'lucide-react';
 
 import {
@@ -86,15 +83,16 @@ interface Member {
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+  whatsapp_recording_source: string;
 }
 
-interface Invitation {
-  id: string;
-  role: 'admin' | 'agent' | 'viewer';
-  label: string | null;
-  created_at: string;
-  expires_at: string;
-}
+// The single effective choice — mirrors the API vocabulary
+// (user_recording_settings.whatsapp_recording_source).
+const RECORDING_SOURCES = [
+  { value: 'none', label: 'None' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'whatsapp_business', label: 'WhatsApp Business' },
+] as const;
 
 // Editable roles in the inline dropdown. Owner is never an option —
 // promotions go through the (deferred) Transfer Ownership flow.
@@ -119,21 +117,11 @@ function fmtDate(iso: string): string {
   });
 }
 
-function fmtExpiresIn(iso: string): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (ms <= 0) return 'expired';
-  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
-  if (days >= 1) return `expires in ${days} day${days === 1 ? '' : 's'}`;
-  const hours = Math.max(1, Math.floor(ms / (60 * 60 * 1000)));
-  return `expires in ${hours} hour${hours === 1 ? '' : 's'}`;
-}
-
 export function TeamMembersView() {
-  const { user, canManageMembers } = useAuth();
+  const { user, canManageMembers, isOwner } = useAuth();
   const { getPresence, getRow, now } = usePresence();
 
   const [members, setMembers] = useState<Member[]>([]);
-  const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [addUserOpen, setAddUserOpen] = useState(false);
@@ -144,12 +132,7 @@ export function TeamMembersView() {
 
   const loadEverything = useCallback(async () => {
     try {
-      const [mres, ires] = await Promise.all([
-        fetch('/api/account/members', { cache: 'no-store' }),
-        canManageMembers
-          ? fetch('/api/account/invitations', { cache: 'no-store' })
-          : Promise.resolve(null),
-      ]);
+      const mres = await fetch('/api/account/members', { cache: 'no-store' });
 
       if (!mres.ok) {
         const payload = await mres.json().catch(() => ({}));
@@ -158,25 +141,13 @@ export function TeamMembersView() {
       }
       const mdata = (await mres.json()) as { members: Member[] };
       setMembers(mdata.members);
-
-      if (ires) {
-        if (!ires.ok) {
-          const payload = await ires.json().catch(() => ({}));
-          toast.error(payload.error || 'Failed to load invitations');
-          return;
-        }
-        const idata = (await ires.json()) as { invitations: Invitation[] };
-        setInvitations(idata.invitations);
-      } else {
-        setInvitations([]);
-      }
     } catch (err) {
       console.error('[MembersTab] load error:', err);
       toast.error('Could not reach the server');
     } finally {
       setLoading(false);
     }
-  }, [canManageMembers]);
+  }, []);
 
   useEffect(() => {
     void loadEverything();
@@ -230,8 +201,56 @@ export function TeamMembersView() {
     }
   }
 
-  async function handleRemove() {
-    if (!removingMember) return;
+  // Owner-only per-user recording source. Same optimistic-update +
+  // revert discipline as handleRoleChange: the dropdown must never
+  // lie about the persisted single effective value.
+  async function handleSourceChange(member: Member, nextSource: string) {
+    const current = member.whatsapp_recording_source || 'none';
+    if (current === nextSource) return;
+    setPendingMemberAction(member.user_id);
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.user_id === member.user_id
+          ? { ...m, whatsapp_recording_source: nextSource }
+          : m,
+      ),
+    );
+    try {
+      const res = await fetch(`/api/account/recording-settings/${member.user_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ whatsapp_recording_source: nextSource }),
+      });
+      if (!res.ok) {
+        setMembers((prev) =>
+          prev.map((m) =>
+            m.user_id === member.user_id
+              ? { ...m, whatsapp_recording_source: current }
+              : m,
+          ),
+        );
+        const payload = await res.json().catch(() => ({}));
+        toast.error(payload.error || 'Failed to update recording setting');
+        return;
+      }
+      toast.success(
+        `Recording source for ${member.full_name || 'member'} set to ${nextSource}`,
+      );
+    } catch {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.user_id === member.user_id
+            ? { ...m, whatsapp_recording_source: current }
+            : m,
+        ),
+      );
+      toast.error('Could not reach the server');
+    } finally {
+      setPendingMemberAction(null);
+    }
+  }
+
+  async function handleRemove() {    if (!removingMember) return;
     setPendingMemberAction(removingMember.user_id);
     try {
       const res = await fetch(
@@ -253,24 +272,6 @@ export function TeamMembersView() {
       toast.error('Could not reach the server');
     } finally {
       setPendingMemberAction(null);
-    }
-  }
-
-  async function handleRevoke(invite: Invitation) {
-    try {
-      const res = await fetch(`/api/account/invitations/${invite.id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || 'Failed to revoke invitation');
-        return;
-      }
-      toast.success('Invitation revoked');
-      setInvitations((prev) => prev.filter((i) => i.id !== invite.id));
-    } catch (err) {
-      console.error('[MembersTab] revoke error:', err);
-      toast.error('Could not reach the server');
     }
   }
 
@@ -449,6 +450,33 @@ export function TeamMembersView() {
                       </span>
                     )}
 
+                    {/* Recording source. Owner-only editor (including
+                        the owner's own row): exactly one WhatsApp app
+                        may be recorded per member. Other roles see no
+                        control here (their own effective value travels
+                        with their CallVault session). */}
+                    {isOwner ? (
+                      <Select
+                        value={member.whatsapp_recording_source || 'none'}
+                        onValueChange={(v) => v && handleSourceChange(member, v)}
+                      >
+                        <SelectTrigger
+                          className="w-36 bg-muted border-border text-foreground"
+                          disabled={isBusy}
+                          aria-label={`WhatsApp recording source for ${member.full_name || 'member'}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {RECORDING_SOURCES.map((s) => (
+                            <SelectItem key={s.value} value={s.value}>
+                              {s.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : null}
+
                     {/* Remove. Admin+ only; never on the owner row;
                         never on yourself. Pre-polish styling was
                         neutral-default + red-on-hover — the
@@ -474,96 +502,6 @@ export function TeamMembersView() {
           </ul>
         </CardContent>
       </Card>
-
-      {/* Pending invitations — admin+ only */}
-      <RequireRole min="admin">
-        <div>
-          <div className="mb-2 flex items-center gap-2">
-            <UsersRound className="size-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold text-foreground">
-              Pending invitations
-            </h3>
-            <Badge className="bg-muted text-muted-foreground border-border">
-              {invitations.length}
-            </Badge>
-          </div>
-          {/* P10 — make the no-resend design explicit. Admins were
-              confused why the pending list shows roles + expiry but
-              no "copy link again" button. Stating the constraint up
-              front (rather than letting the user discover it by
-              looking for a button) keeps it from feeling like a bug. */}
-          {invitations.length > 0 ? (
-            <p className="mb-3 text-xs text-muted-foreground">
-              The plaintext invite URL is only shown once at creation
-              for security — to re-share, revoke the invite below and
-              create a new one.
-            </p>
-          ) : null}
-
-          {invitations.length === 0 ? (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-8 text-center">
-                <Mail className="size-6 text-muted-foreground" />
-                <p className="mt-2 text-sm text-muted-foreground">
-                  No pending invitations.
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Outstanding invitation links only — new users are added
-                  directly with the Add user button above.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="p-0">
-                <ul className="divide-y divide-border">
-                  {invitations.map((inv) => {
-                    const inviteRoleMeta = ROLE_META[inv.role];
-                    const InviteRoleIcon = inviteRoleMeta.icon;
-                    return (
-                    <li
-                      key={inv.id}
-                      className="flex items-center gap-4 px-4 py-3"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-foreground">
-                            {inv.label || 'Untitled invite'}
-                          </span>
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${inviteRoleMeta.className}`}
-                          >
-                            <InviteRoleIcon className="size-3" />
-                            {inviteRoleMeta.label}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          Created {fmtDate(inv.created_at)} · {fmtExpiresIn(inv.expires_at)}
-                        </p>
-                      </div>
-
-                      {/* Revoke: red default state, mirrors the
-                          members-tab Remove button. Pre-polish version
-                          read as a neutral secondary button until
-                          hover. */}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleRevoke(inv)}
-                        className="border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:border-red-500/60 hover:text-red-200"
-                      >
-                        <MailX className="size-4" />
-                        Revoke
-                      </Button>
-                    </li>
-                    );
-                  })}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      </RequireRole>
 
       <AddUserDialog
         open={addUserOpen}

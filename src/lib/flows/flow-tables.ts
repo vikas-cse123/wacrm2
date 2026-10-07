@@ -517,3 +517,28 @@ export function findWorkspaceRowForContact(
   if (!contactId) return null;
   return rows.find((row) => row.contactId === contactId) ?? null;
 }
+
+/**
+ * Deep-link locate result (`GET /api/workspace/locate-contact`).
+ * Coordinates the client needs to bring a contact's row into the
+ * loaded window through the NORMAL table path (flow + view + page
+ * state) — the row itself is never fabricated, so the drawer keeps
+ * its full payload context (custom values, overrides, media).
+ */
+export type LocateContactView = Exclude<FlowTableView, 'all'>;
+
+export interface LocateContactHit {
+  found: true;
+  /** Flow holding the contact's most relevant run. */
+  flow_id: string;
+  /** Tab the run belongs to under Workspace classification. */
+  view: LocateContactView;
+  /** Zero-based page holding the run at the requested page size. */
+  page: number;
+  /** The located flow_run id (debug/verification only). */
+  run_id: string;
+}
+
+export type LocateContactResponse =
+  | LocateContactHit
+  | { found: false };

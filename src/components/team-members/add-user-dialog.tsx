@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -65,6 +65,7 @@ export function AddUserDialog({
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<CreatableRole>('agent');
   const [submitting, setSubmitting] = useState(false);
 
@@ -72,6 +73,7 @@ export function AddUserDialog({
     setName('');
     setEmail('');
     setPassword('');
+    setShowPassword(false);
     setRole('agent');
     setSubmitting(false);
   }
@@ -177,14 +179,29 @@ export function AddUserDialog({
             <Label htmlFor="add-user-password" className="text-muted-foreground">
               Password
             </Label>
-            <Input
-              id="add-user-password"
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={`At least ${MIN_PASSWORD_LEN} characters`}
-            />
+            <div className="relative">
+              <Input
+                id="add-user-password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={`At least ${MIN_PASSWORD_LEN} characters`}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showPassword ? (
+                  <Eye className="h-5 w-5" />
+                ) : (
+                  <EyeOff className="h-5 w-5" />
+                )}
+              </button>
+            </div>
           </div>
 
           <div className="space-y-1.5">

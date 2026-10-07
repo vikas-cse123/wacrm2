@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   deviceOk: true as boolean,
   account: { id: "acct-A", name: "Acme" } as Record<string, unknown> | null,
+  setting: null as { whatsapp_recording_source: string } | null,
 }));
 
 vi.mock("@/lib/auth/device", () => ({
@@ -15,10 +16,21 @@ vi.mock("@/lib/auth/device", () => ({
       authType: "user",
       supabase: {},
       service: {
-        from: () => ({
+        from: (table: string) => ({
           select: () => ({
             eq: () => ({
-              maybeSingle: async () => ({ data: h.account, error: null }),
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data:
+                    table === "user_recording_settings" ? h.setting : h.account,
+                  error: null,
+                }),
+              }),
+              maybeSingle: async () => ({
+                data:
+                  table === "user_recording_settings" ? h.setting : h.account,
+                error: null,
+              }),
             }),
           }),
         }),
@@ -50,6 +62,29 @@ describe("GET /api/auth/me", () => {
     expect(json.user).toEqual({ id: "user-sagar", email: "sagar@example.com", fullName: "Sagar" });
     expect(json.account).toEqual({ id: "acct-A", name: "Acme" });
     expect(json.role).toBe("agent");
+  });
+
+  it("defaults the recording source to none when unset", async () => {
+    h.setting = null;
+    const res = await GET(
+      new Request("https://app.test/api/auth/me", {
+        headers: { Authorization: "Bearer header.payload.sig" },
+      })
+    );
+    const json = (await res.json()) as { whatsappRecordingSource: string };
+    expect(json.whatsappRecordingSource).toBe("none");
+  });
+
+  it("returns the stored recording source", async () => {
+    h.setting = { whatsapp_recording_source: "whatsapp_business" };
+    const res = await GET(
+      new Request("https://app.test/api/auth/me", {
+        headers: { Authorization: "Bearer header.payload.sig" },
+      })
+    );
+    const json = (await res.json()) as { whatsappRecordingSource: string };
+    expect(json.whatsappRecordingSource).toBe("whatsapp_business");
+    h.setting = null;
   });
 
   it("rejects invalid sessions with 401", async () => {

@@ -68,6 +68,8 @@ export interface AccountMember {
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+  /** Effective WhatsApp recording source ('none' when unset). */
+  whatsapp_recording_source: string;
 }
 
 /**

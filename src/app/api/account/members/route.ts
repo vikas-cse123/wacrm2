@@ -55,11 +55,31 @@ export async function GET() {
 
     const canSeeEmails = canManageMembers(ctx.role);
 
+    // Effective recording sources in one batched lookup (absent
+    // row = 'none'). Same request, never N+1.
+    const { data: settings, error: settingsError } = await ctx.supabase
+      .from("user_recording_settings")
+      .select("user_id, whatsapp_recording_source")
+      .eq("account_id", ctx.accountId);
+    if (settingsError) {
+      console.error("[GET /api/account/members] settings fetch error:", settingsError);
+      return NextResponse.json(
+        { error: "Failed to load members" },
+        { status: 500 },
+      );
+    }
+    const sourceByUser = new Map(
+      ((settings ?? []) as Array<{ user_id: string; whatsapp_recording_source: string }>).map(
+        (s) => [s.user_id, s.whatsapp_recording_source] as const,
+      ),
+    );
+
     const members: AccountMember[] = (data as ProfileRow[]).flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
       // through, but if a migration ever broadens the enum without
       // updating TS, skip the row rather than crash the page.
       if (!isAccountRole(row.account_role)) return [];
+      const source = sourceByUser.get(row.user_id);
       return [
         {
           user_id: row.user_id,
@@ -68,6 +88,8 @@ export async function GET() {
           avatar_url: row.avatar_url,
           role: row.account_role,
           joined_at: row.created_at,
+          whatsapp_recording_source:
+            source === "whatsapp" || source === "whatsapp_business" ? source : "none",
         },
       ];
     });

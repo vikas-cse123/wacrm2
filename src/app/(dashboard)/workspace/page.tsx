@@ -106,6 +106,7 @@ import {
   findWorkspaceRowForContact,
   resolveFlowAnswers,
   resolveAttachmentUrl,
+  type LocateContactResponse,
 } from '@/lib/flows/flow-tables';
 import { formatPhoneForDisplay } from '@/lib/whatsapp/phone-utils';
 import {
@@ -622,15 +623,54 @@ export default function WorkspacePage() {
   // unknown id (or a lead with no flow rows) leaves the plain table.
   // The rows are already account-scoped, so a foreign id can only
   // ever match nothing.
+  //
+  // When the lead is not on the loaded page, a one-shot targeted
+  // lookup resolves its (flow, view, page) and navigates there
+  // through the normal table path — the row below then selects it,
+  // so the drawer keeps its full payload context. A manual
+  // selection always wins: we never yank the user away from a lead
+  // they opened themselves.
   const deepLinkContactId = useSearchParams().get('contact');
   const appliedContactRef = useRef<string | null | undefined>(undefined);
+  const locatedContactRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (appliedContactRef.current === deepLinkContactId) return;
-    appliedContactRef.current = deepLinkContactId;
+    // Fail-closed ordering: never mark the param as applied before
+    // the payload exists. On fresh navigation (e.g. from Call
+    // Recordings) payload is null on the first run — stamping the
+    // ref there suppressed the retry once the rows arrived, so the
+    // lead was never selected.
     if (!deepLinkContactId || !payload) return;
+    if (appliedContactRef.current === deepLinkContactId) return;
     const row = findWorkspaceRowForContact(payload.rows, deepLinkContactId);
-    if (row) setSelected(row);
-  }, [deepLinkContactId, payload]);  const activeFlowName = flows?.find((f) => f.id === flowId)?.name ?? null;
+    if (row) {
+      setSelected(row);
+      appliedContactRef.current = deepLinkContactId;
+      return;
+    }
+    if (selected || locatedContactRef.current === deepLinkContactId) return;
+    locatedContactRef.current = deepLinkContactId;
+    const ctrl = new AbortController();
+    fetch(
+      `/api/workspace/locate-contact?contact_id=${encodeURIComponent(deepLinkContactId)}&page_size=${pageSize}`,
+      { signal: ctrl.signal, cache: 'no-store' },
+    )
+      .then(async (res) => {
+        const body = (await res.json().catch(
+          () => null,
+        )) as LocateContactResponse | null;
+        if (!body || body.found !== true) return;
+        if (typeof body.flow_id !== 'string' || !body.flow_id) return;
+        if (body.view !== 'completed' && body.view !== 'incomplete') return;
+        if (!Number.isInteger(body.page) || body.page < 0) return;
+        // Route through normal flow/view/page state so the table
+        // refetches and the match above fires on the fresh payload.
+        setFlowId(body.flow_id);
+        setView(body.view);
+        setPage(body.page);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [deepLinkContactId, payload, pageSize, selected]);  const activeFlowName = flows?.find((f) => f.id === flowId)?.name ?? null;
 
   const customFields = useMemo(() => payload?.customFields ?? [], [payload]);
   const overridesForRequest =
