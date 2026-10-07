@@ -4,10 +4,10 @@
 // Authenticates a Supabase user access token (same mechanism as
 // device uploads) and returns the identity CallVault shows in
 // its "connected" state: the user, their account, their role,
-// and their effective WhatsApp recording source (the mutually
-// exclusive allowlist CallVault enforces — absent row means
-// 'none'). Account, role, and source come from server-side
-// lookups — never from client input.
+// and their effective recording policy (the mutually exclusive
+// phone + WhatsApp allowlists CallVault enforces — absent row
+// means none/none). Account, role, and policy come from
+// server-side lookups — never from client input.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -25,18 +25,24 @@ export async function GET(request: Request) {
       .maybeSingle();
     const { data: setting } = await dev.service
       .from('user_recording_settings')
-      .select('whatsapp_recording_source')
+      .select('whatsapp_recording_source, phone_recording_source')
       .eq('account_id', dev.accountId)
       .eq('user_id', dev.userId)
       .maybeSingle();
-    const source = (setting as { whatsapp_recording_source?: unknown } | null)
-      ?.whatsapp_recording_source;
+    const settingRow = setting as {
+      whatsapp_recording_source?: unknown;
+      phone_recording_source?: unknown;
+    } | null;
+    const whatsapp = settingRow?.whatsapp_recording_source;
+    const phone = settingRow?.phone_recording_source;
     return NextResponse.json({
       user: { id: dev.userId, email: dev.email, fullName: dev.fullName },
       account: account ?? { id: dev.accountId, name: null },
       role: dev.role,
       whatsappRecordingSource:
-        source === 'whatsapp' || source === 'whatsapp_business' ? source : 'none',
+        whatsapp === 'whatsapp' || whatsapp === 'whatsapp_business' ? whatsapp : 'none',
+      phoneRecordingSource:
+        phone === 'sim1' || phone === 'sim2' ? phone : 'none',
     });
   } catch (err) {
     return toApiErrorResponse(err);

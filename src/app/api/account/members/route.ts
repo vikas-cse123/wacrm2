@@ -59,7 +59,7 @@ export async function GET() {
     // row = 'none'). Same request, never N+1.
     const { data: settings, error: settingsError } = await ctx.supabase
       .from("user_recording_settings")
-      .select("user_id, whatsapp_recording_source")
+      .select("user_id, whatsapp_recording_source, phone_recording_source")
       .eq("account_id", ctx.accountId);
     if (settingsError) {
       console.error("[GET /api/account/members] settings fetch error:", settingsError);
@@ -69,9 +69,11 @@ export async function GET() {
       );
     }
     const sourceByUser = new Map(
-      ((settings ?? []) as Array<{ user_id: string; whatsapp_recording_source: string }>).map(
-        (s) => [s.user_id, s.whatsapp_recording_source] as const,
-      ),
+      ((settings ?? []) as Array<{
+        user_id: string;
+        whatsapp_recording_source: string;
+        phone_recording_source: string;
+      }>).map((s) => [s.user_id, s] as const),
     );
 
     const members: AccountMember[] = (data as ProfileRow[]).flatMap((row) => {
@@ -79,7 +81,9 @@ export async function GET() {
       // through, but if a migration ever broadens the enum without
       // updating TS, skip the row rather than crash the page.
       if (!isAccountRole(row.account_role)) return [];
-      const source = sourceByUser.get(row.user_id);
+      const setting = sourceByUser.get(row.user_id);
+      const whatsapp = setting?.whatsapp_recording_source;
+      const phone = setting?.phone_recording_source;
       return [
         {
           user_id: row.user_id,
@@ -89,7 +93,9 @@ export async function GET() {
           role: row.account_role,
           joined_at: row.created_at,
           whatsapp_recording_source:
-            source === "whatsapp" || source === "whatsapp_business" ? source : "none",
+            whatsapp === "whatsapp" || whatsapp === "whatsapp_business" ? whatsapp : "none",
+          phone_recording_source:
+            phone === "sim1" || phone === "sim2" ? phone : "none",
         },
       ];
     });

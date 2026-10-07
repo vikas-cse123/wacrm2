@@ -84,14 +84,23 @@ interface Member {
   role: AccountRole;
   joined_at: string;
   whatsapp_recording_source: string;
+  phone_recording_source: string;
 }
 
-// The single effective choice — mirrors the API vocabulary
+// The single effective WhatsApp choice — mirrors the API vocabulary
 // (user_recording_settings.whatsapp_recording_source).
 const RECORDING_SOURCES = [
   { value: 'none', label: 'None' },
   { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'whatsapp_business', label: 'WhatsApp Business' },
+] as const;
+
+// The single effective phone choice — mirrors the API vocabulary
+// (user_recording_settings.phone_recording_source).
+const PHONE_SOURCES = [
+  { value: 'none', label: 'None' },
+  { value: 'sim1', label: 'SIM 1' },
+  { value: 'sim2', label: 'SIM 2' },
 ] as const;
 
 // Editable roles in the inline dropdown. Owner is never an option —
@@ -201,32 +210,34 @@ export function TeamMembersView() {
     }
   }
 
-  // Owner-only per-user recording source. Same optimistic-update +
-  // revert discipline as handleRoleChange: the dropdown must never
-  // lie about the persisted single effective value.
-  async function handleSourceChange(member: Member, nextSource: string) {
-    const current = member.whatsapp_recording_source || 'none';
+  // Owner-only per-user recording policy (phone + WhatsApp). Same
+  // optimistic-update + revert discipline as handleRoleChange: the
+  // dropdowns must never lie about the persisted single effective
+  // values. Each policy updates independently (partial PUT).
+  async function handleSourceChange(
+    member: Member,
+    field: 'whatsapp_recording_source' | 'phone_recording_source',
+    label: string,
+    nextSource: string,
+  ) {
+    const current = (member[field] || 'none') as string;
     if (current === nextSource) return;
     setPendingMemberAction(member.user_id);
     setMembers((prev) =>
       prev.map((m) =>
-        m.user_id === member.user_id
-          ? { ...m, whatsapp_recording_source: nextSource }
-          : m,
+        m.user_id === member.user_id ? { ...m, [field]: nextSource } : m,
       ),
     );
     try {
       const res = await fetch(`/api/account/recording-settings/${member.user_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ whatsapp_recording_source: nextSource }),
+        body: JSON.stringify({ [field]: nextSource }),
       });
       if (!res.ok) {
         setMembers((prev) =>
           prev.map((m) =>
-            m.user_id === member.user_id
-              ? { ...m, whatsapp_recording_source: current }
-              : m,
+            m.user_id === member.user_id ? { ...m, [field]: current } : m,
           ),
         );
         const payload = await res.json().catch(() => ({}));
@@ -234,14 +245,12 @@ export function TeamMembersView() {
         return;
       }
       toast.success(
-        `Recording source for ${member.full_name || 'member'} set to ${nextSource}`,
+        `${label} for ${member.full_name || 'member'} set to ${nextSource}`,
       );
     } catch {
       setMembers((prev) =>
         prev.map((m) =>
-          m.user_id === member.user_id
-            ? { ...m, whatsapp_recording_source: current }
-            : m,
+          m.user_id === member.user_id ? { ...m, [field]: current } : m,
         ),
       );
       toast.error('Could not reach the server');
@@ -297,6 +306,17 @@ export function TeamMembersView() {
           </RequireRole>
         }
       />
+
+      {/* Owner-managed recording policy. These dropdowns choose which
+          calls each member's CallVault device is allowed to record —
+          recording configuration is controlled by the WhatsApp Max
+          owner, never by the member's own device. */}
+      {isOwner ? (
+        <p className="text-xs text-muted-foreground">
+          Phone and WhatsApp dropdowns control which calls each
+          member&apos;s CallVault device is allowed to record.
+        </p>
+      ) : null}
 
       {/* Live presence summary across the roster. Updates without a
           full refresh as heartbeats and the local re-derive tick land. */}
@@ -450,31 +470,68 @@ export function TeamMembersView() {
                       </span>
                     )}
 
-                    {/* Recording source. Owner-only editor (including
-                        the owner's own row): exactly one WhatsApp app
-                        may be recorded per member. Other roles see no
-                        control here (their own effective value travels
-                        with their CallVault session). */}
+                    {/* Recording policy. Owner-only editors (including
+                        the owner's own row): exactly one phone SIM and
+                        exactly one WhatsApp app per member. Other roles
+                        see no controls here (their own effective values
+                        travel with their CallVault session). */}
                     {isOwner ? (
-                      <Select
-                        value={member.whatsapp_recording_source || 'none'}
-                        onValueChange={(v) => v && handleSourceChange(member, v)}
-                      >
-                        <SelectTrigger
-                          className="w-36 bg-muted border-border text-foreground"
-                          disabled={isBusy}
-                          aria-label={`WhatsApp recording source for ${member.full_name || 'member'}`}
+                      <>
+                        <Select
+                          value={member.phone_recording_source || 'none'}
+                          onValueChange={(v) =>
+                            v &&
+                            handleSourceChange(
+                              member,
+                              'phone_recording_source',
+                              'Phone recording',
+                              v,
+                            )
+                          }
                         >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {RECORDING_SOURCES.map((s) => (
-                            <SelectItem key={s.value} value={s.value}>
-                              {s.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                          <SelectTrigger
+                            className="w-28 bg-muted border-border text-foreground"
+                            disabled={isBusy}
+                            aria-label={`Phone recording source for ${member.full_name || 'member'}`}
+                          >
+                            <SelectValue placeholder="Phone" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PHONE_SOURCES.map((s) => (
+                              <SelectItem key={s.value} value={s.value}>
+                                {s.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={member.whatsapp_recording_source || 'none'}
+                          onValueChange={(v) =>
+                            v &&
+                            handleSourceChange(
+                              member,
+                              'whatsapp_recording_source',
+                              'WhatsApp recording',
+                              v,
+                            )
+                          }
+                        >
+                          <SelectTrigger
+                            className="w-36 bg-muted border-border text-foreground"
+                            disabled={isBusy}
+                            aria-label={`WhatsApp recording source for ${member.full_name || 'member'}`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {RECORDING_SOURCES.map((s) => (
+                              <SelectItem key={s.value} value={s.value}>
+                                {s.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </>
                     ) : null}
 
                     {/* Remove. Admin+ only; never on the owner row;

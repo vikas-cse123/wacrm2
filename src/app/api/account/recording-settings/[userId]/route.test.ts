@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
     user_id: string;
     account_id: string;
     whatsapp_recording_source: string;
+    phone_recording_source: string;
     updated_at: string;
   }>,
   writes: [] as Array<Record<string, unknown>>,
@@ -60,7 +61,8 @@ function fakeSupabase() {
                 single: async () => ({
                   data: {
                     user_id: row.user_id,
-                    whatsapp_recording_source: row.whatsapp_recording_source,
+                    whatsapp_recording_source: row.whatsapp_recording_source ?? null,
+                    phone_recording_source: row.phone_recording_source ?? null,
                     updated_at: "2026-10-07T00:00:00.000Z",
                   },
                   error: null,
@@ -169,11 +171,80 @@ describe("recording-settings [userId]", () => {
     expect(json.setting.whatsapp_recording_source).toBe("whatsapp_business");
   });
 
+  it("owner can set phone = none", async () => {
+    const res = await put("agent-1", { phone_recording_source: "none" });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      setting: { phone_recording_source: string };
+    };
+    expect(json.setting.phone_recording_source).toBe("none");
+    expect(h.writes[0]).toMatchObject({
+      account_id: "acct-1",
+      user_id: "agent-1",
+      phone_recording_source: "none",
+      updated_by: "owner-1",
+    });
+  });
+
+  it("owner can set phone = sim1", async () => {
+    const res = await put("agent-1", { phone_recording_source: "sim1" });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      setting: { phone_recording_source: string };
+    };
+    expect(json.setting.phone_recording_source).toBe("sim1");
+  });
+
+  it("owner can set phone = sim2", async () => {
+    const res = await put("agent-1", { phone_recording_source: "sim2" });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      setting: { phone_recording_source: string };
+    };
+    expect(json.setting.phone_recording_source).toBe("sim2");
+  });
+
+  it("owner can set both policies in one call", async () => {
+    const res = await put("agent-1", {
+      phone_recording_source: "sim2",
+      whatsapp_recording_source: "whatsapp_business",
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      setting: { phone_recording_source: string; whatsapp_recording_source: string };
+    };
+    expect(json.setting.phone_recording_source).toBe("sim2");
+    expect(json.setting.whatsapp_recording_source).toBe("whatsapp_business");
+  });
+
+  it("setting one policy preserves the other", async () => {
+    h.settings = [
+      {
+        user_id: "agent-1",
+        account_id: "acct-1",
+        whatsapp_recording_source: "whatsapp",
+        phone_recording_source: "sim1",
+        updated_at: "2026-10-06T00:00:00.000Z",
+      },
+    ];
+    const res = await put("agent-1", { phone_recording_source: "sim2" });
+    expect(res.status).toBe(200);
+    // Only the phone column is written; whatsapp rides along untouched.
+    expect(h.writes[0]).not.toHaveProperty("whatsapp_recording_source");
+    expect(h.writes[0]).toMatchObject({ phone_recording_source: "sim2" });
+  });
+
   it("rejects arbitrary values", async () => {
     for (const bad of ["both", "WHATSAPP", "", null, 42, ["whatsapp"]]) {
       const res = await put("agent-1", { whatsapp_recording_source: bad });
       expect(res.status).toBe(400);
     }
+    for (const bad of ["sim3", "SIM1", "slot1", "", null, 1, ["sim1"]]) {
+      const res = await put("agent-1", { phone_recording_source: bad });
+      expect(res.status).toBe(400);
+    }
+    const res = await put("agent-1", {});
+    expect(res.status).toBe(400);
     expect(h.writes).toEqual([]);
   });
 
@@ -181,6 +252,14 @@ describe("recording-settings [userId]", () => {
     h.role = "agent";
     h.userId = "agent-1";
     const res = await put("owner-1", { whatsapp_recording_source: "whatsapp" });
+    expect(res.status).toBe(403);
+    expect(h.writes).toEqual([]);
+  });
+
+  it("viewer cannot modify another member", async () => {
+    h.role = "viewer";
+    h.userId = "agent-1";
+    const res = await put("owner-1", { phone_recording_source: "sim1" });
     expect(res.status).toBe(403);
     expect(h.writes).toEqual([]);
   });
@@ -199,17 +278,23 @@ describe("recording-settings [userId]", () => {
     expect(h.writes).toEqual([]);
   });
 
-  it("user receives their own setting; absent row means none", async () => {
+  it("user receives their own setting; absent row means none/none", async () => {
     h.role = "agent";
     h.userId = "agent-1";
     const res = await get("agent-1");
     expect(res.status).toBe(200);
     const json = (await res.json()) as {
-      setting: { user_id: string; whatsapp_recording_source: string; updated_at: null };
+      setting: {
+        user_id: string;
+        whatsapp_recording_source: string;
+        phone_recording_source: string;
+        updated_at: null;
+      };
     };
     expect(json.setting).toEqual({
       user_id: "agent-1",
       whatsapp_recording_source: "none",
+      phone_recording_source: "none",
       updated_at: null,
     });
   });
@@ -220,14 +305,16 @@ describe("recording-settings [userId]", () => {
         user_id: "agent-1",
         account_id: "acct-1",
         whatsapp_recording_source: "whatsapp_business",
+        phone_recording_source: "sim2",
         updated_at: "2026-10-06T00:00:00.000Z",
       },
     ];
     const res = await get("agent-1");
     const json = (await res.json()) as {
-      setting: { whatsapp_recording_source: string };
+      setting: { whatsapp_recording_source: string; phone_recording_source: string };
     };
     expect(json.setting.whatsapp_recording_source).toBe("whatsapp_business");
+    expect(json.setting.phone_recording_source).toBe("sim2");
   });
 
   it("non-owner cannot read another member", async () => {

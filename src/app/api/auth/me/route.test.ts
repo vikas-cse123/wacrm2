@@ -64,26 +64,34 @@ describe("GET /api/auth/me", () => {
     expect(json.role).toBe("agent");
   });
 
-  it("defaults the recording source to none when unset", async () => {
+  it("defaults both recording sources to none when unset", async () => {
     h.setting = null;
     const res = await GET(
       new Request("https://app.test/api/auth/me", {
         headers: { Authorization: "Bearer header.payload.sig" },
       })
     );
-    const json = (await res.json()) as { whatsappRecordingSource: string };
+    const json = (await res.json()) as {
+      whatsappRecordingSource: string;
+      phoneRecordingSource: string;
+    };
     expect(json.whatsappRecordingSource).toBe("none");
+    expect(json.phoneRecordingSource).toBe("none");
   });
 
-  it("returns the stored recording source", async () => {
+  it("returns the stored recording sources", async () => {
     h.setting = { whatsapp_recording_source: "whatsapp_business" };
     const res = await GET(
       new Request("https://app.test/api/auth/me", {
         headers: { Authorization: "Bearer header.payload.sig" },
       })
     );
-    const json = (await res.json()) as { whatsappRecordingSource: string };
+    const json = (await res.json()) as {
+      whatsappRecordingSource: string;
+      phoneRecordingSource: string;
+    };
     expect(json.whatsappRecordingSource).toBe("whatsapp_business");
+    expect(json.phoneRecordingSource).toBe("none");
     h.setting = null;
   });
 
