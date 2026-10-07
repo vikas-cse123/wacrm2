@@ -59,7 +59,7 @@ export async function GET() {
     // row = 'none'). Same request, never N+1.
     const { data: settings, error: settingsError } = await ctx.supabase
       .from("user_recording_settings")
-      .select("user_id, whatsapp_recording_source, phone_recording_source")
+      .select("user_id, whatsapp_recording_source, phone_recording_source, phone_recording_number")
       .eq("account_id", ctx.accountId);
     if (settingsError) {
       console.error("[GET /api/account/members] settings fetch error:", settingsError);
@@ -73,6 +73,7 @@ export async function GET() {
         user_id: string;
         whatsapp_recording_source: string;
         phone_recording_source: string;
+        phone_recording_number: string | null;
       }>).map((s) => [s.user_id, s] as const),
     );
 
@@ -84,6 +85,11 @@ export async function GET() {
       const setting = sourceByUser.get(row.user_id);
       const whatsapp = setting?.whatsapp_recording_source;
       const phone = setting?.phone_recording_source;
+      const phoneNumber =
+        typeof setting?.phone_recording_number === "string" &&
+        setting.phone_recording_number.length > 0
+          ? setting.phone_recording_number
+          : null;
       return [
         {
           user_id: row.user_id,
@@ -96,6 +102,7 @@ export async function GET() {
             whatsapp === "whatsapp" || whatsapp === "whatsapp_business" ? whatsapp : "none",
           phone_recording_source:
             phone === "sim1" || phone === "sim2" ? phone : "none",
+          phone_recording_number: phoneNumber,
         },
       ];
     });

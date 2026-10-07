@@ -89,9 +89,26 @@ describe("GET /api/auth/me", () => {
     const json = (await res.json()) as {
       whatsappRecordingSource: string;
       phoneRecordingSource: string;
+      phoneRecordingNumber: string | null;
     };
     expect(json.whatsappRecordingSource).toBe("whatsapp_business");
     expect(json.phoneRecordingSource).toBe("none");
+    expect(json.phoneRecordingNumber).toBeNull();
+    h.setting = null;
+  });
+
+  it("returns the stored phone recording number", async () => {
+    h.setting = {
+      whatsapp_recording_source: "none",
+      phone_recording_number: "918953065369",
+    } as unknown as { whatsapp_recording_source: string };
+    const res = await GET(
+      new Request("https://app.test/api/auth/me", {
+        headers: { Authorization: "Bearer header.payload.sig" },
+      })
+    );
+    const json = (await res.json()) as { phoneRecordingNumber: string | null };
+    expect(json.phoneRecordingNumber).toBe("918953065369");
     h.setting = null;
   });
 

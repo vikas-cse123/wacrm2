@@ -1,0 +1,31 @@
+-- ============================================================
+-- 114_user_recording_phone_number.sql — owner-configured phone
+-- (SIM) number for call recording, replacing the logical slot
+-- values from 113.
+--
+-- Adds `phone_recording_number` to `user_recording_settings`:
+-- normalized digits (E.164 without the '+' prefix, e.g.
+-- '918953065369'), NULL = no phone recording allowed.
+--
+-- The server stores ONLY the number. It never stores an Android
+-- subscription id, slot index, SIM id, IMEI, or serial — CallVault
+-- resolves the configured number to the device's CURRENT active
+-- subscription at call time, so a SIM moved to another slot keeps
+-- working with no reconfiguration.
+--
+-- Safe migration of the 113 values ('none' | 'sim1' | 'sim2'):
+-- they are deliberately NOT converted. The server cannot know
+-- which number lives in the owner's device, so inventing one
+-- would misconfigure recording. Existing rows keep their
+-- `phone_recording_source` value untouched (audit/rollback +
+-- older CallVault clients) and get phone_recording_number = NULL
+-- (fail closed — the owner re-enters the number in Team Members).
+--
+-- No RLS change: the 112 policies already gate reads to members
+-- and writes to owners, and they apply to the whole row.
+--
+-- Idempotent — safe to run multiple times.
+-- ============================================================
+
+ALTER TABLE user_recording_settings
+  ADD COLUMN IF NOT EXISTS phone_recording_number text NULL;

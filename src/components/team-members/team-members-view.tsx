@@ -48,6 +48,7 @@ import {
 } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -67,6 +68,10 @@ import { RequireRole } from '@/components/auth/require-role';
 import { useAuth } from '@/hooks/use-auth';
 import { usePresence } from '@/hooks/use-presence';
 import type { AccountRole } from '@/lib/auth/roles';
+import {
+  formatPhoneForDisplay,
+  isIndianCountryCodeNumber,
+} from '@/lib/whatsapp/phone-utils';
 import { presenceLabel, summarize } from '@/lib/presence';
 import {
   PRESENCE_DOT_CLASS,
@@ -85,6 +90,18 @@ interface Member {
   joined_at: string;
   whatsapp_recording_source: string;
   phone_recording_source: string;
+  phone_recording_number: string | null;
+}
+
+// Readable display for the stored normalized digits. Indian
+// numbers render as "+91 89530 65369"-style via the shared
+// display helper; anything else renders with a '+' prefix.
+// Display only — storage/matching always use raw digits.
+
+export function displayRecordingNumber(digits: string | null): string {
+  if (!digits) return 'None';
+  if (isIndianCountryCodeNumber(digits)) return `+91 ${formatPhoneForDisplay(digits)}`;
+  return `+${digits}`;
 }
 
 // The single effective WhatsApp choice — mirrors the API vocabulary
@@ -93,14 +110,6 @@ const RECORDING_SOURCES = [
   { value: 'none', label: 'None' },
   { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'whatsapp_business', label: 'WhatsApp Business' },
-] as const;
-
-// The single effective phone choice — mirrors the API vocabulary
-// (user_recording_settings.phone_recording_source).
-const PHONE_SOURCES = [
-  { value: 'none', label: 'None' },
-  { value: 'sim1', label: 'SIM 1' },
-  { value: 'sim2', label: 'SIM 2' },
 ] as const;
 
 // Editable roles in the inline dropdown. Owner is never an option —
@@ -124,6 +133,121 @@ function fmtDate(iso: string): string {
     month: 'short',
     day: 'numeric',
   });
+}
+
+// Owner-only phone-number editor. The owner types the salesperson's
+// actual SIM number (or clears it for None); the server normalizes,
+// validates, and stores digits. CallVault maps the number to the
+// device's CURRENT subscription — no slot/subscription ids here.
+function PhoneNumberCell({
+  member,
+  disabled,
+  onSaved,
+}: {
+  member: Member;
+  disabled: boolean;
+  onSaved: (userId: string, next: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function save(next: string | null) {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/account/recording-settings/${member.user_id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone_recording_number: next }),
+        },
+      );
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(payload.error || 'Failed to update phone recording');
+        return;
+      }
+      const saved = (payload.setting?.phone_recording_number ?? null) as
+        | string
+        | null;
+      onSaved(member.user_id, saved);
+      setEditing(false);
+      toast.success(
+        saved
+          ? `Phone recording for ${member.full_name || 'member'} set to ${displayRecordingNumber(saved)}`
+          : `Phone recording for ${member.full_name || 'member'} set to None`,
+      );
+    } catch {
+      toast.error('Could not reach the server');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span
+          className="inline-flex items-center rounded-md border border-border bg-muted px-2.5 py-1 text-xs font-medium text-foreground"
+          aria-label={`Phone recording number for ${member.full_name || 'member'}`}
+        >
+          {displayRecordingNumber(member.phone_recording_number)}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled || saving}
+          onClick={() => {
+            setDraft(member.phone_recording_number ?? '');
+            setEditing(true);
+          }}
+          aria-label={`Edit phone recording number for ${member.full_name || 'member'}`}
+        >
+          Edit
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <Input
+        value={draft}
+        disabled={disabled || saving}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="+91 __________"
+        inputMode="tel"
+        className="w-36 bg-muted border-border text-foreground text-xs"
+        aria-label={`Phone number to record for ${member.full_name || 'member'}`}
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={disabled || saving}
+        onClick={() => void save(draft)}
+      >
+        {saving ? 'Saving...' : 'Save'}
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={disabled || saving}
+        onClick={() => void save(null)}
+        aria-label={`Set phone recording to none for ${member.full_name || 'member'}`}
+      >
+        None
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={disabled || saving}
+        onClick={() => setEditing(false)}
+      >
+        Cancel
+      </Button>
+    </div>
+  );
 }
 
 export function TeamMembersView() {
@@ -212,11 +336,11 @@ export function TeamMembersView() {
 
   // Owner-only per-user recording policy (phone + WhatsApp). Same
   // optimistic-update + revert discipline as handleRoleChange: the
-  // dropdowns must never lie about the persisted single effective
-  // values. Each policy updates independently (partial PUT).
+  // controls must never lie about the persisted effective values.
+  // Each policy updates independently (partial PUT).
   async function handleSourceChange(
     member: Member,
-    field: 'whatsapp_recording_source' | 'phone_recording_source',
+    field: 'whatsapp_recording_source',
     label: string,
     nextSource: string,
   ) {
@@ -257,6 +381,14 @@ export function TeamMembersView() {
     } finally {
       setPendingMemberAction(null);
     }
+  }
+
+  async function handlePhoneNumberSaved(userId: string, next: string | null) {
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.user_id === userId ? { ...m, phone_recording_number: next } : m,
+      ),
+    );
   }
 
   async function handleRemove() {    if (!removingMember) return;
@@ -471,39 +603,17 @@ export function TeamMembersView() {
                     )}
 
                     {/* Recording policy. Owner-only editors (including
-                        the owner's own row): exactly one phone SIM and
+                        the owner's own row): one phone NUMBER and
                         exactly one WhatsApp app per member. Other roles
                         see no controls here (their own effective values
                         travel with their CallVault session). */}
                     {isOwner ? (
                       <>
-                        <Select
-                          value={member.phone_recording_source || 'none'}
-                          onValueChange={(v) =>
-                            v &&
-                            handleSourceChange(
-                              member,
-                              'phone_recording_source',
-                              'Phone recording',
-                              v,
-                            )
-                          }
-                        >
-                          <SelectTrigger
-                            className="w-28 bg-muted border-border text-foreground"
-                            disabled={isBusy}
-                            aria-label={`Phone recording source for ${member.full_name || 'member'}`}
-                          >
-                            <SelectValue placeholder="Phone" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PHONE_SOURCES.map((s) => (
-                              <SelectItem key={s.value} value={s.value}>
-                                {s.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <PhoneNumberCell
+                          member={member}
+                          disabled={isBusy}
+                          onSaved={handlePhoneNumberSaved}
+                        />
                         <Select
                           value={member.whatsapp_recording_source || 'none'}
                           onValueChange={(v) =>

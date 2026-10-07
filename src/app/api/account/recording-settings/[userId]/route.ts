@@ -2,10 +2,16 @@
 // /api/account/recording-settings/[userId]
 //
 //   GET — read one member's recording policy (phone + WhatsApp).
-//   PUT — set one member's recording policy (either or both).
+//   PUT — set one member's recording policy (any of the three).
 //
-// Two independent, mutually exclusive policies per user:
-//   phone:    exactly one of 'none' | 'sim1' | 'sim2'
+// Two independent policies per user:
+//   phone:    owner-configured normalized number
+//             (`phone_recording_number`, digits, NULL = none).
+//             CallVault maps the number to the device's CURRENT
+//             active subscription at call time. The legacy logical
+//             slot column (`phone_recording_source`, 'none' |
+//             'sim1' | 'sim2') is still accepted/stored for older
+//             CallVault clients but is no longer authoritative.
 //   whatsapp: exactly one of 'none' | 'whatsapp' | 'whatsapp_business'
 // Absence of a row means none/none (safe defaults — recording a
 // SIM or app nobody chose is opt-in, never inherited).
@@ -24,6 +30,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
 import { hasMinRole } from "@/lib/auth/roles";
+import { isValidE164, normalizePhone } from "@/lib/whatsapp/phone-utils";
 
 export const VALID_WHATSAPP_SOURCES = ["none", "whatsapp", "whatsapp_business"] as const;
 export type RecordingSource = (typeof VALID_WHATSAPP_SOURCES)[number];
@@ -45,10 +52,33 @@ export function isPhoneRecordingSource(value: unknown): value is PhoneRecordingS
   );
 }
 
+// Owner-configured phone number for call recording. Stored as
+// normalized digits (no '+', no spaces — e.g. '918953065369').
+// null/empty means "None" (no phone recording allowed). Rejects
+// anything that is not a plausible E.164 number.
+export function normalizeRecordingPhoneNumber(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return null;
+  // Strip formatting first ("+91 89530 65369" → "918953065369"),
+  // then require a plausible E.164 digit string.
+  const digits = normalizePhone(value.trim());
+  if (!digits) return null;
+  if (!isValidE164(digits)) return null;
+  return digits;
+}
+
+export function isRecordingPhoneNumber(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "string") return false;
+  if (value.trim() === "") return true;
+  return normalizeRecordingPhoneNumber(value) !== null;
+}
+
 interface SettingRow {
   user_id: string;
   whatsapp_recording_source: string;
   phone_recording_source: string;
+  phone_recording_number: string | null;
   updated_at: string;
 }
 
@@ -57,6 +87,7 @@ function toSetting(userId: string, row: SettingRow | null) {
     user_id: userId,
     whatsapp_recording_source: row?.whatsapp_recording_source ?? "none",
     phone_recording_source: row?.phone_recording_source ?? "none",
+    phone_recording_number: row?.phone_recording_number ?? null,
     updated_at: row?.updated_at ?? null,
   };
 }
@@ -92,7 +123,9 @@ export async function GET(
 
     const { data: row, error } = await ctx.supabase
       .from("user_recording_settings")
-      .select("user_id, whatsapp_recording_source, phone_recording_source, updated_at")
+      .select(
+        "user_id, whatsapp_recording_source, phone_recording_source, phone_recording_number, updated_at",
+      )
       .eq("account_id", ctx.accountId)
       .eq("user_id", userId)
       .maybeSingle();
@@ -125,12 +158,17 @@ export async function PUT(
     const body = (await request.json().catch(() => null)) as {
       whatsapp_recording_source?: unknown;
       phone_recording_source?: unknown;
+      phone_recording_number?: unknown;
     } | null;
     const hasWhatsapp = body !== null && "whatsapp_recording_source" in body;
     const hasPhone = body !== null && "phone_recording_source" in body;
-    if (!hasWhatsapp && !hasPhone) {
+    const hasPhoneNumber = body !== null && "phone_recording_number" in body;
+    if (!hasWhatsapp && !hasPhone && !hasPhoneNumber) {
       return NextResponse.json(
-        { error: "Provide 'whatsapp_recording_source' and/or 'phone_recording_source'." },
+        {
+          error:
+            "Provide 'whatsapp_recording_source', 'phone_recording_source' and/or 'phone_recording_number'.",
+        },
         { status: 400 },
       );
     }
@@ -143,6 +181,15 @@ export async function PUT(
     if (hasPhone && !isPhoneRecordingSource(body?.phone_recording_source)) {
       return NextResponse.json(
         { error: "'phone_recording_source' must be one of none, sim1, sim2" },
+        { status: 400 },
+      );
+    }
+    if (hasPhoneNumber && !isRecordingPhoneNumber(body?.phone_recording_number)) {
+      return NextResponse.json(
+        {
+          error:
+            "'phone_recording_number' must be a valid phone number (e.g. +91 8953065369) or null for none",
+        },
         { status: 400 },
       );
     }
@@ -168,11 +215,17 @@ export async function PUT(
     };
     if (hasWhatsapp) patch.whatsapp_recording_source = body?.whatsapp_recording_source;
     if (hasPhone) patch.phone_recording_source = body?.phone_recording_source;
+    if (hasPhoneNumber)
+      patch.phone_recording_number = normalizeRecordingPhoneNumber(
+        body?.phone_recording_number,
+      );
 
     const { data: row, error } = await ctx.supabase
       .from("user_recording_settings")
       .upsert(patch, { onConflict: "account_id,user_id" })
-      .select("user_id, whatsapp_recording_source, phone_recording_source, updated_at")
+      .select(
+        "user_id, whatsapp_recording_source, phone_recording_source, phone_recording_number, updated_at",
+      )
       .single();
     if (error) throw error;
 

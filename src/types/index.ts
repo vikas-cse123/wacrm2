@@ -70,8 +70,10 @@ export interface AccountMember {
   joined_at: string;
   /** Effective WhatsApp recording source ('none' when unset). */
   whatsapp_recording_source: string;
-  /** Effective phone recording source ('none' when unset). */
+  /** Effective phone recording source ('none' when unset). Legacy slot value. */
   phone_recording_source: string;
+  /** Owner-configured phone number, normalized digits (null = none). */
+  phone_recording_number: string | null;
 }
 
 /**

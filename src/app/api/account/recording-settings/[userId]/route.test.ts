@@ -288,6 +288,7 @@ describe("recording-settings [userId]", () => {
         user_id: string;
         whatsapp_recording_source: string;
         phone_recording_source: string;
+        phone_recording_number: string | null;
         updated_at: null;
       };
     };
@@ -295,6 +296,7 @@ describe("recording-settings [userId]", () => {
       user_id: "agent-1",
       whatsapp_recording_source: "none",
       phone_recording_source: "none",
+      phone_recording_number: null,
       updated_at: null,
     });
   });

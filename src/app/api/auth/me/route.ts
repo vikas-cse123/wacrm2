@@ -25,16 +25,22 @@ export async function GET(request: Request) {
       .maybeSingle();
     const { data: setting } = await dev.service
       .from('user_recording_settings')
-      .select('whatsapp_recording_source, phone_recording_source')
+      .select('whatsapp_recording_source, phone_recording_source, phone_recording_number')
       .eq('account_id', dev.accountId)
       .eq('user_id', dev.userId)
       .maybeSingle();
     const settingRow = setting as {
       whatsapp_recording_source?: unknown;
       phone_recording_source?: unknown;
+      phone_recording_number?: unknown;
     } | null;
     const whatsapp = settingRow?.whatsapp_recording_source;
     const phone = settingRow?.phone_recording_source;
+    const phoneNumber =
+      typeof settingRow?.phone_recording_number === 'string' &&
+      settingRow.phone_recording_number.length > 0
+        ? settingRow.phone_recording_number
+        : null;
     return NextResponse.json({
       user: { id: dev.userId, email: dev.email, fullName: dev.fullName },
       account: account ?? { id: dev.accountId, name: null },
@@ -43,6 +49,7 @@ export async function GET(request: Request) {
         whatsapp === 'whatsapp' || whatsapp === 'whatsapp_business' ? whatsapp : 'none',
       phoneRecordingSource:
         phone === 'sim1' || phone === 'sim2' ? phone : 'none',
+      phoneRecordingNumber: phoneNumber,
     });
   } catch (err) {
     return toApiErrorResponse(err);
